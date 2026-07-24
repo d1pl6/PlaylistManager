@@ -1,0 +1,137 @@
+import logging
+from pathlib import Path
+from types import MethodType
+from typing import Optional
+from ytmusicapi import YTMusic
+from ytmusicapi.continuations import get_continuations
+from ytmusicapi.parsers.browsing import GRID, parse_content_list, parse_playlist
+from ytmusicapi.parsers.library import get_library_contents
+import os
+from platformdirs import user_config_dir
+
+logger = logging.getLogger(__name__)
+
+AUTH_FOLDER = Path(user_config_dir("playlistmanager")) / "auth"
+AUTH_FOLDER.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+BROWSER_FILE = AUTH_FOLDER / "browser.json"
+# Additional lookup locations for browser.json
+BROWSER_FILE_FALLBACKS = [
+    Path(__file__).parent.parent.parent / "browser.json",
+    Path(__file__).parent / "browser.json",
+]
+
+YOUTUBE_CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID")
+YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET")
+
+
+def _patched_get_library_playlists(self, limit: int | None = 25):
+    """Fallback playlist fetch for broken ytmusicapi get_library_playlists."""
+    self._check_auth()
+    browse_ids = ["FEmusic_library_playlists", "FEmusic_liked_playlists"]
+    last_exception = None
+
+    for browse_id in browse_ids:
+        try:
+            body = {"browseId": browse_id}
+            endpoint = "browse"
+            response = self._send_request(endpoint, body)
+            results = get_library_contents(response, GRID)
+            if results is None:
+                return []
+
+            playlists = parse_content_list(results["items"][1:], parse_playlist)
+            if "continuations" in results:
+                remaining_limit = None if limit is None else (limit - len(playlists))
+                request_func = lambda additionalParams: self._send_request(
+                    endpoint, body, additionalParams
+                )
+                playlists.extend(
+                    get_continuations(
+                        results,
+                        "gridContinuation",
+                        remaining_limit,
+                        request_func,
+                        lambda contents: parse_content_list(contents, parse_playlist),
+                    )
+                )
+            return playlists
+        except Exception as exc:
+            last_exception = exc
+            logger.debug(
+                f"get_library_playlists fallback failed for {browse_id}: {exc}"
+            )
+
+    if last_exception:
+        raise last_exception
+    return []
+
+
+def _patch_yt_music_library_playlists(yt=None):
+    try:
+        if yt is None:
+            YTMusic.get_library_playlists = _patched_get_library_playlists
+        else:
+            yt.get_library_playlists = MethodType(_patched_get_library_playlists, yt)
+        logger.debug(
+            "Patched YTMusic.get_library_playlists with fallback implementation"
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to patch YTMusic.get_library_playlists: {exc}")
+
+
+# Patch the class method globally so any YTMusic instance uses the fallback.
+_patch_yt_music_library_playlists()
+
+
+class YouTubeAuthManager:
+
+    def __init__(self):
+        AUTH_FOLDER.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.yt_music: Optional[YTMusic] = None
+
+    def _find_browser_file(self) -> Optional[Path]:
+        candidates = [BROWSER_FILE, *BROWSER_FILE_FALLBACKS]
+        for path in candidates:
+            if path.exists():
+                return path
+        return None
+
+    def _setup_browser_auth(self, browser_file: Path) -> bool:
+        try:
+            self.yt_music = YTMusic(str(browser_file))
+            _patch_yt_music_library_playlists(self.yt_music)
+            logger.info("YouTube Music authenticated (browser auth)")
+            return True
+        except Exception as e:
+            logger.error(f"Browser auth failed: {e}")
+            return False
+
+    def setup_auth(self) -> bool:
+        """Authenticate using browser.json (preferred)"""
+        try:
+            browser_file = self._find_browser_file()
+            if browser_file is not None:
+                logger.info(f"Found browser auth file: {browser_file}")
+                return self._setup_browser_auth(browser_file)
+            return False
+
+        except Exception as e:
+            logger.error(f"Authentication failed: {e}")
+            return False
+
+    def is_authenticated(self) -> bool:
+        return self.yt_music is not None
+
+    def get_yt_music(self) -> YTMusic:
+        if not self.is_authenticated():
+            raise RuntimeError(
+                "Not authenticated. Call setup_auth() first. "
+                "If this is your first time, run the CLI command shown in the logs."
+            )
+        if self.yt_music is None:
+            raise RuntimeError("YouTube Music client not initialised")
+        return self.yt_music
+
+
+youtube_auth = YouTubeAuthManager()
