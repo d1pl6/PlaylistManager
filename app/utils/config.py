@@ -6,6 +6,7 @@ SETTINGS_PATH = Path(__file__).resolve().parents[2] / "cfg" / "settings.ini"
 DEFAULT_SETTINGS = {
     "update_check": {"is_true": "yes"},
     "center_windows": {"is_true": "yes"},
+    "auto_resize": {"is_true": "no"},
     "global_listener": {"is_true": "yes"},
 }
 

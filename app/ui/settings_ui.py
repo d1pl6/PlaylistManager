@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 from utils import center_window
+from utils import resize_window
 
 
 def _toggle_setting(section, var):
@@ -42,16 +43,20 @@ def show_settings_dialog(parent, keybind_controller=None):
         update_var_value = 1 if update_val == "yes" else 0
         center_val = cfg.get("center_windows", "is_true", fallback="yes").lower()
         center_var_value = 1 if center_val == "yes" else 0
+        resize_val = cfg.get("auto_resize", "is_true", fallback="yes").lower()
+        resize_var_value = 1 if resize_val == "yes" else 0
         global_val = cfg.get("global_listener", "is_true", fallback="yes").lower()
         global_var_value = 1 if global_val == "yes" else 0
     except Exception as e:
         logger.error("Error loading config, defaulting to yes: %s", e)
         update_var_value = 1
         center_var_value = 1
+        resize_var_value = 1
         global_var_value = 1
 
     update_var = tk.IntVar(value=update_var_value)
     center_var = tk.IntVar(value=center_var_value)
+    resize_var = tk.IntVar(value=resize_var_value)
     global_var = tk.IntVar(value=global_var_value)
 
     tk.Checkbutton(
@@ -81,6 +86,19 @@ def show_settings_dialog(parent, keybind_controller=None):
             center_var.get() and center_window(win),
         ),
         variable=center_var,
+    ).pack(fill="both")
+
+    tk.Checkbutton(
+        win,
+        text="Auto-resize main window?",
+        background="#292929",
+        foreground="#CBCBCB",
+        selectcolor="#000000",
+        activebackground="#5C5C5C",
+        activeforeground="#E4E4E4",
+        font=("Noto", 10),
+        command=lambda: (_toggle_setting("auto_resize", resize_var), resize_var.get() and resize_window(parent)),
+        variable=resize_var,
     ).pack(fill="both")
 
     def _on_global_toggle():

@@ -1,8 +1,8 @@
-[ ] Auto resize window setting
+[-] Auto resize window setting
 
 [ ] Theme settings
 
-[ ] Show last N added songs in playlist:
+[ ] Show last N added songs in playlist and option in settings:
 
 album img	| name		| add to playlist img
 

@@ -14,29 +14,47 @@ class DatabaseManager:
         self.db_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
-    def _get_db_directory() -> Path:
-        """Get the database directory path."""
-        return Path(__file__).resolve().parents[2] / "db" / "platform"
+    def _get_db_directory(platform: str = "platform") -> Path:
+        """Get the database directory path for a given platform."""
+        return Path(__file__).resolve().parents[2] / "db" / platform
 
     @staticmethod
-    def get_playlist_db_path_static(playlist_name: str) -> Path:
-        db_dir = DatabaseManager._get_db_directory()
+    def get_playlist_db_path_static(playlist_name: str, platform: str = "platform") -> Path:
+        db_dir = DatabaseManager._get_db_directory(platform)
         safe_name = "".join(
             c if c.isalnum() or c in ("-", "_") else "_" for c in playlist_name
         )
         return db_dir / f"{safe_name}.db"
 
-    def get_playlist_db_path(self, playlist_name: str) -> Path:
-        """Get the database file path for a playlist."""
+    def get_playlist_db_path(self, playlist_name: str, platform: str | None = None) -> Path:
+        """Get the database file path for a playlist. If `platform` is None,
+        the method will attempt to use a generic 'platform' directory. The
+        directory is created if it does not exist.
+        """
         # Sanitize playlist name for filesystem
         safe_name = "".join(
             c if c.isalnum() or c in ("-", "_") else "_" for c in playlist_name
         )
-        return self.db_dir / f"{safe_name}.db"
+        plat = platform
+        if plat is None:
+            try:
+                # Avoid top-level import to prevent circular imports
+                from services.playlist_store import PlaylistStore
 
-    def get_db_connection(self, playlist_name: str) -> sqlite3.Connection:
+                p = PlaylistStore.find_playlist(playlist_name)
+                if p and p.get("platform"):
+                    plat = p.get("platform")
+                else:
+                    plat = "youtube_music"
+            except Exception:
+                plat = "youtube_music"
+        db_dir = DatabaseManager._get_db_directory(plat)
+        db_dir.mkdir(parents=True, exist_ok=True)
+        return db_dir / f"{safe_name}.db"
+
+    def get_db_connection(self, playlist_name: str, platform: str | None = None) -> sqlite3.Connection:
         """Get a connection to the playlist's database, creating it if needed."""
-        db_path = self.get_playlist_db_path(playlist_name)
+        db_path = self.get_playlist_db_path(playlist_name, platform=platform)
 
         try:
             conn = sqlite3.connect(str(db_path))

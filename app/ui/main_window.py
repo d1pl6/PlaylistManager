@@ -9,6 +9,9 @@ from ui.login_ui import show_login_dialog
 from ui.settings_ui import show_settings_dialog
 from services.song_manager import SongManager
 from services.database import DatabaseManager
+from configparser import ConfigParser
+from utils.config import ensure_settings_file, SETTINGS_PATH as _settings_path
+from utils import resize_window
 
 logger = logging.getLogger(__name__)
 
@@ -512,6 +515,9 @@ class MainWindow:
             log_helper_2.grid(row=0, column=3)
             log_log.grid(row=0, column=4, padx=(0, 2))
 
+        # After adding frames, optionally auto-resize the main window
+        self._auto_resize()
+
     def _hide_main_content(self):
         for frame in self.frames:
             frame.grid_forget()
@@ -552,13 +558,38 @@ class MainWindow:
                 del self.frame_img_refs[frame]
 
             self.store.delete_playlist(playlist_name, platform=platform)
+            # Also delete the per-platform database file for this playlist
+            try:
+                db_path = DatabaseManager.get_playlist_db_path_static(playlist_name, platform)
+                if db_path.exists():
+                    db_path.unlink()
+                    logger.info(f"Deleted database file {db_path} for '{playlist_name}'")
+            except Exception as e:
+                logger.debug(f"Failed deleting DB for {playlist_name}: {e}")
 
             frame.grid_forget()
             frame.destroy()
             self._reorder_frames()
             logger.debug(f"Closed frame at index {index}")
+            # After removing a frame, optionally auto-resize the main window
+            self._auto_resize()
         except (ValueError, IndexError) as e:
             logger.error(f"Error closing frame: {e}")
+
+    def _auto_resize(self):
+        try:
+            ensure_settings_file()
+            cfg = ConfigParser()
+            cfg.read(str(_settings_path))
+            val = cfg.get("auto_resize", "is_true", fallback="no").lower()
+            if val == "yes":
+                try:
+                    resize_window(self.root)
+                except Exception as e:
+                    logger.debug(f"Auto-resize failed: {e}")
+        except Exception:
+            # Swallow errors, auto-resize is a convenience
+            pass
 
     def _reorder_frames(self):
         self.frame_positions.clear()
@@ -639,7 +670,7 @@ class MainWindow:
 
         def run_reload():
             try:
-                db_path = DatabaseManager.get_playlist_db_path_static(playlist_name)
+                db_path = DatabaseManager.get_playlist_db_path_static(playlist_name, platform)
                 if db_path.exists():
                     db_path.unlink()
                     logger.info(f"Deleted database for '{playlist_name}'")
