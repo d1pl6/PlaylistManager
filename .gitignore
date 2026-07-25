@@ -5,6 +5,7 @@ sample.json
 tree.txt
 requirements.txt
 *.pyc
+AGENTS.md
 
 auth/
 __pycache__/

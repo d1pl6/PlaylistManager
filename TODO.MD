@@ -1,3 +1,7 @@
+[ ] Auto resize window setting
+
+[ ] Theme settings
+
 [ ] Show last N added songs in playlist:
 
 album img	| name		| add to playlist img

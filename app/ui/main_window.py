@@ -56,9 +56,9 @@ class MainWindow:
         style.theme_use("clam")
 
         self.root.title("PlaylistManager")
-        self.root.configure(background="#1A1A1A")
+        self.root.configure(background="#1A1A1A", pady=5, padx=5)
         self.root.geometry("650x460")
-        self.root.minsize(650, 150)
+        self.root.minsize(325, 150)
         self.root.maxsize(999999, 999999)
 
         icon_path = assets_dir / "app_image.png"
