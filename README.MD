@@ -1,5 +1,7 @@
 Add songs that you're currently listening to your chosen playlists or liked tracks using keybinds.
 
+![screenshot1](https://github.com/d1pl6/PlaylistManager/blob/dev/assets/screenshot1.png)
+
 # About
 I couldn't find something similar so I did it. First PlaylistManager used TypeScript and Electron, but I didn't like 5 billion RAM usage so I asked AI to rewrite it on Python and ended up doing everything from 0.
 
