@@ -20,6 +20,7 @@ AUTH_DIR = Path(user_config_dir("playlistmanager")) / "auth"
 
 
 from utils import center_window
+from utils.config import get_theme_value
 
 
 def _open_directory(path: Path):
@@ -34,38 +35,57 @@ def _open_directory(path: Path):
         logger.error(f"Failed to open directory {path}: {e}")
 
 
+def _theme_value(section: str, option: str, default: str) -> str:
+    try:
+        return get_theme_value(section, option, default)
+    except Exception:
+        return default
+
+
 def show_login_dialog(parent, on_success=None):
     win = tk.Toplevel(parent)
     win.title("Login")
-    win.configure(background="#2A2A2A")
+    win.configure(background=_theme_value("frame_main", "background", "#2A2A2A"))
     win.transient(parent)
     win.update_idletasks()
     win.grab_set()
 
-    header = tk.Frame(win, background="#2A2A2A")
+    header_bg = _theme_value("frame_header", "background", "#2A2A2A")
+    label_fg = _theme_value("label", "foreground", "white")
+    button_bg = _theme_value("button_header", "background", "#0A0000")
+    button_abg = _theme_value("button_header", "activebackground", "#320000")
+    button_fg = _theme_value("button_header", "foreground", "white")
+    button_afg = _theme_value("button_header", "activeforeground", "#FFFFFF")
+    button_c_bg = _theme_value("button_close", "background", "#0A0000")
+    button_c_fg = _theme_value("button_close", "foreground", "white")
+    button_c_abg = _theme_value("button_close", "activebackground", "#320000")
+    button_c_afg = _theme_value("button_close", "activeforeground", "#FF0000")
+    frame_bg = _theme_value("frame_main", "background", "#2A2A2A")
+
+    header = tk.Frame(win, background=header_bg)
     header.pack(fill="x", padx=10, pady=10)
 
     tk.Label(
         header,
         text="Select platform",
-        background="#2A2A2A",
-        foreground="white",
+        background=header_bg,
+        foreground=label_fg,
         font=("Noto", 14),
     ).pack(side="left", anchor="w")
 
     tk.Button(
         header,
         text="Cancel",
-        background="#0A0000",
-        foreground="white",
-        activebackground="#320000",
-        activeforeground="#ff0000",
+        background=button_c_bg,
+        foreground=button_c_fg,
+        activebackground=button_c_abg,
+        activeforeground=button_c_afg,
         font=("Noto", 10),
-        bd=0,
+        bd=1,
         command=win.destroy,
     ).pack(side="right", anchor="e")
 
-    platforms_frame = tk.Frame(win, background="#2A2A2A")
+    platforms_frame = tk.Frame(win, background=frame_bg)
     platforms_frame.pack(pady=20, padx=20)
 
     _create_platform_button(
@@ -86,7 +106,9 @@ def show_login_dialog(parent, on_success=None):
 
 
 def _create_platform_button(parent, name, icon_path, command):
-    frame = tk.Frame(parent, background="#404040", cursor="hand2", padx=10, pady=10)
+    frame_bg = _theme_value("frame_main", "background", "#404040")
+    label_fg = _theme_value("label", "foreground", "white")
+    frame = tk.Frame(parent, background=frame_bg, cursor="hand2", padx=10, pady=10)
 
     img = None
     try:
@@ -95,23 +117,23 @@ def _create_platform_button(parent, name, icon_path, command):
         logger.error(f"Failed to load icon {icon_path}: {e}")
 
     if img:
-        label_img = tk.Label(frame, image=img, background="#404040")
+        label_img = tk.Label(frame, image=img, background=frame_bg)
         cast(Any, label_img).image = img
         label_img.pack(pady=(5, 5))
     else:
         tk.Label(
             frame,
             text="?",
-            background="#404040",
-            foreground="white",
+            background=frame_bg,
+            foreground=label_fg,
             font=("Noto", 20),
         ).pack(pady=(5, 5))
 
     tk.Label(
         frame,
         text=name,
-        background="#404040",
-        foreground="white",
+        background=frame_bg,
+        foreground=label_fg,
         font=("Noto", 10),
     ).pack(pady=(0, 5))
 
@@ -181,10 +203,29 @@ def _get_terminal_command(work_dir: Path) -> list:
 def _on_spotify(parent, on_success):
     win = tk.Toplevel(parent)
     win.title("Spotify Login")
-    win.configure(background="#2A2A2A")
+    win.configure(background=_theme_value("frame_main", "background", "#2A2A2A"))
     win.transient(parent)
     win.update_idletasks()
     win.grab_set()
+
+    header_bg = _theme_value("frame_header", "background", "#2A2A2A")
+    label_fg = _theme_value("label", "foreground", "white")
+    entry_bg = _theme_value("frame_main", "background", "#404040")
+    entry_fg = _theme_value("label", "foreground", "white")
+    btn_bg = _theme_value("button_main", "background", "#006713")
+    btn_abg = _theme_value("button_main", "activebackground", "#004d0e")
+    btn_fg = _theme_value("button_main", "foreground", "white")
+    btn_test_bg = _theme_value("button_main", "background", "#404040")
+    btn_test_abg = _theme_value("button_main", "activebackground", "#555555")
+    btn_test_fg = _theme_value("button_main", "foreground", "white")
+    normal_btn_bg = _theme_value("button_header", "background", "#0A0000")
+    normal_btn_abg = _theme_value("button_header", "activebackground", "#320000")
+    normal_btn_fg = _theme_value("button_header", "foreground", "white")
+    normal_btn_afg = _theme_value("button_header", "activeforeground", "#FFFFFF")
+    button_c_bg = _theme_value("button_close", "background", "#0A0000")
+    button_c_fg = _theme_value("button_close", "foreground", "white")
+    button_c_abg = _theme_value("button_close", "activebackground", "#320000")
+    button_c_afg = _theme_value("button_close", "activeforeground", "#FF0000")
 
     existing = {}
     spotify_file = AUTH_DIR / "spotify.json"
@@ -194,30 +235,33 @@ def _on_spotify(parent, on_success):
         except Exception:
             pass
 
-    header = tk.Frame(win, background="#2A2A2A")
+    header = tk.Frame(win, background=header_bg)
     header.pack(fill="x", padx=10, pady=10)
 
     tk.Label(
         header,
         text="Spotify Credentials",
-        background="#2A2A2A",
-        foreground="white",
+        background=header_bg,
+        foreground=label_fg,
         font=("Noto", 14),
     ).pack(side="left", anchor="w")
 
     tk.Button(
         header,
         text="Cancel",
-        background="#0A0000",
-        foreground="white",
-        activebackground="#320000",
-        activeforeground="#ff0000",
+        background=button_c_bg,
+        foreground=button_c_fg,
+        activebackground=button_c_abg,
+        activeforeground=button_c_afg,
         font=("Noto", 10),
-        bd=0,
+        bd=1,
         command=win.destroy,
     ).pack(side="right", anchor="e")
 
-    fields_frame = tk.Frame(win, background="#2A2A2A")
+    fields_frame = tk.Frame(
+        win,
+        background=_theme_value("frame_main", "background", "#2A2A2A"),
+        )
     fields_frame.pack(fill="x", padx=20, pady=10)
 
     client_id_var = tk.StringVar(value=existing.get("client_id", ""))
@@ -234,17 +278,17 @@ def _on_spotify(parent, on_success):
         tk.Label(
             fields_frame,
             text=label_text,
-            background="#2A2A2A",
-            foreground="white",
+            background=_theme_value("frame_main", "background", "#2A2A2A"),
+            foreground=label_fg,
             font=("Noto", 10),
         ).grid(row=i, column=0, sticky="w", pady=5)
 
         entry = tk.Entry(
             fields_frame,
             textvariable=var,
-            background="#404040",
-            foreground="white",
-            insertbackground="white",
+            background=entry_bg,
+            foreground=entry_fg,
+            insertbackground=entry_fg,
             font=("Noto", 10),
             width=40,
             show="*"
@@ -256,13 +300,13 @@ def _on_spotify(parent, on_success):
     status_label = tk.Label(
         win,
         text="",
-        background="#2A2A2A",
-        foreground="white",
+        background=_theme_value("frame_main", "background", "#2A2A2A"),
+        foreground=label_fg,
         font=("Noto", 10),
     )
     status_label.pack(padx=20, pady=5)
 
-    btn_frame = tk.Frame(win, background="#2A2A2A")
+    btn_frame = tk.Frame(win, background=_theme_value("frame_main", "background", "#2A2A2A"))
     btn_frame.pack(fill="x", padx=20, pady=10)
 
     def save_credentials():
@@ -376,9 +420,9 @@ def _on_spotify(parent, on_success):
     btn_delete = tk.Button(
         btn_frame,
         text="Delete",
-        background="#7a0000",
-        foreground="white",
-        activebackground="#550000",
+        background=button_c_bg,
+        foreground=button_c_fg,
+        activebackground=button_c_abg,
         font=("Noto", 10),
         command=delete_credentials,
     )
@@ -387,9 +431,9 @@ def _on_spotify(parent, on_success):
     btn_test = tk.Button(
         btn_frame,
         text="Test",
-        background="#404040",
-        foreground="white",
-        activebackground="#555555",
+        background=btn_test_bg,
+        foreground=btn_test_fg,
+        activebackground=btn_test_abg,
         font=("Noto", 10),
         command=test_credentials,
     )
@@ -398,9 +442,9 @@ def _on_spotify(parent, on_success):
     btn_save = tk.Button(
         btn_frame,
         text="Save",
-        background="#006713",
-        foreground="white",
-        activebackground="#004d0e",
+        background=btn_bg,
+        foreground=btn_fg,
+        activebackground=btn_abg,
         font=("Noto", 10),
         command=save_credentials,
     )

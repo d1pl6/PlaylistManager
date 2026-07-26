@@ -10,8 +10,13 @@ from ui.settings_ui import show_settings_dialog
 from services.song_manager import SongManager
 from services.database import DatabaseManager
 from configparser import ConfigParser
-from utils.config import ensure_settings_file, SETTINGS_PATH as _settings_path
+from utils.config import (
+    ensure_settings_file,
+    get_theme_value,
+    SETTINGS_PATH as _settings_path,
+)
 from utils import resize_window
+
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +83,8 @@ class MainWindow:
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=1)
 
-        self.header_frame = tk.Frame(self.root, background="#181818")
+        header_bg = self._theme_bg("frame_header", "background", "#181818")
+        self.header_frame = tk.Frame(self.root, background=header_bg)
         self.header_frame.bind("<B1-Motion>", self.on_drag)
 
         self._create_widgets()
@@ -86,15 +92,46 @@ class MainWindow:
         self.root.bind("<Button-1>", self._on_root_click, add="+")
         self.root.protocol("WM_DELETE_WINDOW", self.ac.quit_app)
 
+    def _theme_bg(self, section: str, option: str, default: str) -> str:
+        try:
+            return get_theme_value(section, option, default)
+        except Exception:
+            return default
+
+    def apply_theme(self) -> None:
+        header_bg = self._theme_bg("frame_header", "background", "#181818")
+        self.header_frame.configure(background=header_bg)
+        for widget in self.header_frame.winfo_children():
+            if isinstance(widget, tk.Frame):
+                widget.configure(background=header_bg)
+            elif isinstance(widget, tk.Button):
+                pass
+
+        for frame in self.frames:
+            main_bg = self._theme_bg("frame_main", "background", "#404040")
+            frame.configure(background=main_bg)
+            for child in frame.winfo_children():
+                try:
+                    child.configure(background=main_bg)
+                except Exception:
+                    pass
+
     def _create_widgets(self):
+        btn_header_bg = self._theme_bg("button_header", "background", "#6c6c6c")
+        btn_header_abg = self._theme_bg("button_header", "activebackground", "#868686")
+        btn_close_bg = self._theme_bg("button_close", "background", "#160000")
+        btn_close_abg = self._theme_bg("button_close", "activebackground", "#390000")
+        btn_close_fg = self._theme_bg("button_close", "foreground", "#FFFFFF")
+        btn_close_afg = self._theme_bg("button_close", "activeforeground", "#ffffff")
+
         login_img_path = assets_dir / "login.png"
         self.login_img = tk.PhotoImage(file=str(login_img_path))
         self.btn_login = tk.Button(
             self.header_frame,
             image=self.login_img,
             cursor="hand2",
-            background="#9A9A9A",
-            activebackground="#868686",
+            background=btn_header_bg,
+            activebackground=btn_header_abg,
             command=lambda: show_login_dialog(
                 self.root, on_success=self.ac.refresh_auth
             ),
@@ -106,18 +143,20 @@ class MainWindow:
             self.header_frame,
             image=self.add_playlist_img,
             cursor="hand2",
-            background="#9A9A9A",
-            activebackground="#868686",
+            background=btn_header_bg,
+            activebackground=btn_header_abg,
             command=self._open_playlist_dialog,
         )
 
         self.close_btn = tk.Button(
             self.header_frame,
             text="✕",
+            cursor="hand2",
             command=self.ac.quit_app,
-            background="#0A0000",
-            activebackground="#320000",
-            activeforeground="#ff0000",
+            background=btn_close_bg,
+            foreground=btn_close_fg,
+            activebackground=btn_close_abg,
+            activeforeground=btn_close_afg,
             fg="white",
             bd=0,
         )
@@ -128,9 +167,11 @@ class MainWindow:
             self.header_frame,
             image=self.open_settings_img,
             cursor="hand2",
-            background="#9A9A9A",
-            activebackground="#868686",
-            command=lambda: show_settings_dialog(self.root, keybind_controller=self.kc),
+            background=btn_header_bg,
+            activebackground=btn_header_abg,
+            command=lambda: show_settings_dialog(
+                self.root, keybind_controller=self.kc, on_theme_change=self.apply_theme
+            ),
         )
 
         self.header_frame.grid(row=0, column=0, columnspan=2, sticky="nsew")
@@ -400,20 +441,21 @@ class MainWindow:
             col = i % 2
             row = (i // 2) + 1
 
-            main_frame = tk.Frame(self.root, width=320)
-            main_header_frame = tk.Frame(main_frame, background="#404040")
-            main_log_frame = tk.Frame(main_frame, background="#404040")
+            main_bg = self._theme_bg("frame_main", "background", "#404040")
+            main_frame = tk.Frame(self.root, width=320, background=main_bg)
+            main_header_frame = tk.Frame(main_frame, background=main_bg)
+            main_log_frame = tk.Frame(main_frame, background=main_bg)
 
             playlist_cover = tk.Label(
                 main_header_frame,
                 image=self.playlist_cover_img,
-                background="#404040",
+                background=main_bg,
             )
             playlist_name = tk.Label(
                 main_header_frame,
                 text=f"row:{row} col:{col}",
                 font="Noto, 12",
-                background="#404040",
+                background=main_bg,
                 width=25,
             )
 
@@ -428,7 +470,7 @@ class MainWindow:
                 main_header_frame,
                 font="Noto, 12",
                 justify="center",
-                background="#404040",
+                background=main_bg,
                 readonlybackground="#2A2A2A",
                 foreground="white",
                 state="readonly",
@@ -449,7 +491,7 @@ class MainWindow:
                 main_log_frame,
                 text="log_artist placeholder",
                 font="Noto, 12",
-                background="#404040",
+                background=main_bg,
                 width=8,
                 anchor="w",
             )
@@ -457,14 +499,14 @@ class MainWindow:
                 main_log_frame,
                 text="-",
                 font="Noto, 12",
-                background="#404040",
+                background=main_bg,
                 anchor="w",
             )
             log_name = tk.Label(
                 main_log_frame,
                 text="log_name placeholder",
                 font="Noto, 12",
-                background="#404040",
+                background=main_bg,
                 width=18,
                 anchor="w",
             )
@@ -472,7 +514,7 @@ class MainWindow:
                 main_log_frame,
                 text="|",
                 font="Noto, 12",
-                background="#404040",
+                background=main_bg,
                 anchor="w",
             )
             log_log = tk.Label(
@@ -515,7 +557,6 @@ class MainWindow:
             log_helper_2.grid(row=0, column=3)
             log_log.grid(row=0, column=4, padx=(0, 2))
 
-        # After adding frames, optionally auto-resize the main window
         self._auto_resize()
 
     def _hide_main_content(self):
@@ -571,7 +612,6 @@ class MainWindow:
             frame.destroy()
             self._reorder_frames()
             logger.debug(f"Closed frame at index {index}")
-            # After removing a frame, optionally auto-resize the main window
             self._auto_resize()
         except (ValueError, IndexError) as e:
             logger.error(f"Error closing frame: {e}")
@@ -588,7 +628,6 @@ class MainWindow:
                 except Exception as e:
                     logger.debug(f"Auto-resize failed: {e}")
         except Exception:
-            # Swallow errors, auto-resize is a convenience
             pass
 
     def _reorder_frames(self):
