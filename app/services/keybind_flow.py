@@ -1,6 +1,6 @@
+from __future__ import annotations
 import logging
 from typing import Callable, Dict, Optional
-from ytmusicapi import YTMusic
 from services.song_manager import SongManager
 from integrations.music_youtube.music_youtube_receiver import URLReceiverManager
 from integrations.music_spotify.music_spotify import SpotifyAPI

@@ -219,7 +219,7 @@ class KeybindController:
 
     def _handle_press(self, name: str):
         if self._recording:
-            if name in ("esc", "Escape"):
+            if name in ("esc", "escape", "Escape"):
                 with self._pressed_keys_lock:
                     self._pressed_keys.discard(name)
                 self._recording = False

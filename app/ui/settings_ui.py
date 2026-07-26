@@ -1,16 +1,10 @@
 import logging
 import tkinter as tk
-from pathlib import Path
-from tkinter import colorchooser
 from configparser import ConfigParser
 
 from utils.config import (
     ensure_settings_file,
-    ensure_theme_file,
     get_theme_value,
-    set_theme_value,
-    apply_theme_preset,
-    restore_theme_defaults,
     SETTINGS_PATH as _settings_path,
 )
 
@@ -19,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 from utils import center_window
 from utils import resize_window
+from ui.settings_theme_ui import show_theme_dialog
 
 
 def _toggle_setting(section, var):
@@ -47,9 +42,6 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None):
     theme_check_select = _theme_value("checkbutton", "selectcolor", "#000000")
     theme_check_abg = _theme_value("checkbutton", "activebackground", "#5C5C5C")
     theme_check_afg = _theme_value("checkbutton", "activeforeground", "#E4E4E4")
-    theme_button_bg = _theme_value("button_main", "background", "#0A0000")
-    theme_button_abg = _theme_value("button_main", "activebackground", "#320000")
-    theme_button_fg = _theme_value("button_main", "foreground", "white")
     theme_button_c_bg = _theme_value("button_close", "background", "#0A0000")
     theme_button_c_fg = _theme_value("button_close", "foreground", "white")
     theme_button_c_abg = _theme_value("button_close", "activebackground", "#320000")
@@ -95,7 +87,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None):
 
     tk.Checkbutton(
         win,
-        text="Enable check for Updates?",
+        text="Check for updates on startup?",
         background=theme_check_bg,
         foreground=theme_check_fg,
         selectcolor=theme_check_select,
@@ -156,111 +148,16 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None):
         variable=global_var,
     ).pack(fill="both")
 
-    tk.Label(
+    tk.Button(
         win,
-        text="Theme settings",
-        background=theme_header_bg,
-        foreground=theme_label_fg,
-        font=("Noto", 12),
-    ).pack(fill="both")
-
-    ensure_theme_file()
-    theme_cfg = ConfigParser()
-    theme_cfg.read(str(Path(__file__).resolve().parents[2] / "cfg" / "theme.ini"))
-
-    def _choose_color(section, option, button):
-        current = theme_cfg.get(section, option, fallback=get_theme_value(section, option, "#000000"))
-        _, color = colorchooser.askcolor(color=current, parent=win)
-        if color:
-            theme_cfg[section][option] = color
-            set_theme_value(section, option, color)
-            button.config(background=color)
-            if callable(on_theme_change):
-                on_theme_change()
-
-    def _create_theme_button(label_text, section, option, default):
-        frame = tk.Frame(win, background=theme_win_bg)
-        frame.pack(fill="x", pady=2)
-
-        tk.Label(
-            frame,
-            text=label_text,
-            background=theme_label_bg,
-            foreground=theme_label_fg,
-            font=("Noto", 10),
-            width=24,
-            anchor="w",
-        ).pack(side="left", padx=(4, 4))
-
-        value = theme_cfg.get(section, option, fallback=default)
-        btn = tk.Button(
-            frame,
-            text="Choose",
-            command=lambda: _choose_color(section, option, btn),
-            background=value,
-            activebackground=value,
-            foreground="#ffffff" if value.lower() != "#ffffff" else "#000000",
-            bd=0,
-        )
-        btn.pack(side="right", padx=4)
-        return btn
-
-    def _apply_preset(preset):
-        apply_theme_preset(preset)
-        theme_cfg.read(str(Path(__file__).resolve().parents[2] / "cfg" / "theme.ini"))
-
-    def _restore_defaults():
-        restore_theme_defaults()
-        theme_cfg.read(str(Path(__file__).resolve().parents[2] / "cfg" / "theme.ini"))
-
-    _create_theme_button("Frame header background", "frame_header", "background", "#181818")
-    _create_theme_button("Frame main background", "frame_main", "background", "#404040")
-    _create_theme_button("Label background", "label", "background", "#404040")
-    _create_theme_button("Label foreground", "label", "foreground", "#F2F2F2")
-    _create_theme_button("Checkbutton background", "checkbutton", "background", "#292929")
-    _create_theme_button("Checkbutton foreground", "checkbutton", "foreground", "#CBCBCB")
-    _create_theme_button("Checkbutton selectcolor", "checkbutton", "selectcolor", "#000000")
-    _create_theme_button("Checkbutton activebackground", "checkbutton", "activebackground", "#5C5C5C")
-    _create_theme_button("Checkbutton activeforeground", "checkbutton", "activeforeground", "#E4E4E4")
-    _create_theme_button("Button header background", "button_header", "background", "#0A0000")
-    _create_theme_button("Button header activebackground", "button_header", "activebackground", "#320000")
-    _create_theme_button("Button header foreground", "button_header", "foreground", "white")
-    _create_theme_button("Button main background", "button_main", "background", "#9A9A9A")
-    _create_theme_button("Button main activebackground", "button_main", "activebackground", "#868686")
-    _create_theme_button("Button main foreground", "button_main", "foreground", "black")
-
-    button_frame = tk.Frame(win, background=theme_win_bg)
-    button_frame.pack(fill="x", pady=6)
-
-    tk.Button(
-        button_frame,
-        text="White Theme",
-        command=lambda: (_apply_preset("white"), on_theme_change() if callable(on_theme_change) else None),
-        background=theme_button_bg,
-        activebackground=theme_button_abg,
-        foreground=theme_button_fg,
+        text="Theme Settings",
+        command=lambda: show_theme_dialog(win, on_theme_change=on_theme_change),
+        background=_theme_value("button_main", "background", "#0A0000"),
+        activebackground=_theme_value("button_main", "activebackground", "#320000"),
+        foreground=_theme_value("button_main", "foreground", "white"),
+        font=("Noto", 10),
         bd=0,
-    ).pack(side="left", expand=True, fill="x", padx=2)
-
-    tk.Button(
-        button_frame,
-        text="Dark Theme",
-        command=lambda: (_apply_preset("dark"), on_theme_change() if callable(on_theme_change) else None),
-        background=theme_button_bg,
-        activebackground=theme_button_abg,
-        foreground=theme_button_fg,
-        bd=0,
-    ).pack(side="left", expand=True, fill="x", padx=2)
-
-    tk.Button(
-        button_frame,
-        text="Restore Defaults",
-        command=lambda: (_restore_defaults(), on_theme_change() if callable(on_theme_change) else None),
-        background=theme_button_bg,
-        activebackground=theme_button_abg,
-        foreground=theme_button_fg,
-        bd=0,
-    ).pack(side="left", expand=True, fill="x", padx=2)
+    ).pack(fill="both", padx=4, pady=4)
 
     tk.Button(
         win,
