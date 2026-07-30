@@ -1,3 +1,11 @@
+"""
+Persistent storage for playlists metadata (``db/playlists.json``).
+
+Playlists are uniquely identified by the combination ``(platform, playlist_id)``.
+When *playlist_id* is unknown (legacy entries), ``(platform, name)`` is used as
+a fallback so existing data is never orphaned.
+"""
+
 import json
 import os
 import time
@@ -18,6 +26,41 @@ _CACHE_TTL: float = 1.0  # seconds before re-reading
 
 # Serialise all read/write access so concurrent mutations don't lose data.
 _lock = threading.Lock()
+
+
+def _find_by_key(
+    playlists: list[dict],
+    *,
+    platform: str = "",
+    name: str = "",
+    playlist_id: str = "",
+) -> dict | None:
+    """Locate a playlist dict inside *playlists*.
+
+    Lookup priority (first match wins):
+
+    1. ``(platform, playlist_id)`` — primary key, used when *playlist_id* is
+       non-empty.
+    2. ``(platform, name)`` — legacy fallback for entries stored before the
+       *playlist_id* field existed.
+    3. ``name`` alone — legacy catch-all (no platform filter).
+    """
+    if playlist_id and platform:
+        for p in playlists:
+            if p.get("playlist_id") == playlist_id and p.get("platform") == platform:
+                return p
+
+    if name and platform:
+        for p in playlists:
+            if p.get("name") == name and p.get("platform") == platform:
+                return p
+
+    if name:
+        for p in playlists:
+            if p.get("name") == name:
+                return p
+
+    return None
 
 
 class PlaylistStore:
@@ -56,25 +99,40 @@ class PlaylistStore:
         return {p.get("name") for p in playlists}
 
     @staticmethod
-    def find_playlist(name: str, platform: str = ""):
-        """Find a playlist by name, with an optional platform filter.
+    def get_existing_ids_by_platform(platform: str) -> set[str]:
+        """Return the set of *playlist_id* values already stored for *platform*.
 
-        If *platform* is provided, only entries matching *both* name and
-        platform are returned.  If *platform* is empty, the first entry
-        with a matching name is returned (order follows the JSON file).
-
-        Because playlists on different platforms may share the same name,
-        callers that know the platform should *always* pass it so they
-        don't accidentally pick up a playlist from a different service.
+        Useful for filtering API results before showing the playlist dialog
+        so already-added playlists are hidden even if their name changed.
         """
         with _lock:
             playlists = PlaylistStore.load_playlists()
-        for p in playlists:
-            if p.get("name") == name:
-                stored_platform = p.get("platform")
-                if not platform or stored_platform == platform:
-                    return p
-        return None
+        return {
+            p.get("playlist_id")
+            for p in playlists
+            if p.get("platform") == platform and p.get("playlist_id")
+        }
+
+    @staticmethod
+    def find_playlist(
+        name: str,
+        platform: str = "",
+        playlist_id: str = "",
+    ):
+        """Find a playlist entry by key.
+
+        Args:
+            name: Playlist name.
+            platform: Platform identifier.
+            playlist_id: Stable API identifier.  When provided the lookup
+                favours ``(platform, playlist_id)`` over ``(platform, name)``.
+
+        Returns:
+            The playlist dict, or ``None`` if not found.
+        """
+        with _lock:
+            playlists = PlaylistStore.load_playlists()
+        return _find_by_key(playlists, platform=platform, name=name, playlist_id=playlist_id)
 
     @staticmethod
     def add_playlist(
@@ -83,55 +141,146 @@ class PlaylistStore:
         playlist_id: str = "",
         thumbnail_url: str = "",
     ):
+        """Add or update a playlist.
+
+        The unique key is ``(platform, playlist_id)``.  If an entry with the
+        same key already exists the existing record is updated **in-place**
+        (preserving ``hotkey``) instead of appending a duplicate.
+
+        If *playlist_id* is empty (legacy path) the fallback key
+        ``(platform, name)`` is used for dedup.
+        """
         with _lock:
             playlists = PlaylistStore.load_playlists()
-            playlists.append(
-                {
-                    "name": name,
-                    "platform": platform,
-                    "hotkey": "",
-                    "playlist_id": playlist_id,
-                    "thumbnail_url": thumbnail_url,
-                }
+            existing = _find_by_key(
+                playlists, platform=platform, name=name, playlist_id=playlist_id,
             )
+            if existing is not None:
+                existing["name"] = name
+                existing["playlist_id"] = playlist_id
+                if thumbnail_url:
+                    existing["thumbnail_url"] = thumbnail_url
+                # hotkey is intentionally preserved — do not overwrite.
+                logger.info(
+                    "Updated playlist '%s' (platform=%s, id=%s)",
+                    name, platform, playlist_id or "<legacy>",
+                )
+            else:
+                playlists.append(
+                    {
+                        "name": name,
+                        "platform": platform,
+                        "hotkey": "",
+                        "playlist_id": playlist_id,
+                        "thumbnail_url": thumbnail_url,
+                    }
+                )
+                logger.info(
+                    "Added playlist '%s' (platform=%s, id=%s)",
+                    name, platform, playlist_id or "<none>",
+                )
             PlaylistStore._write(playlists)
 
     @staticmethod
     def update_thumbnail(name: str, platform: str, thumbnail_url: str):
+        """Update the thumbnail URL for a single playlist.
+
+        Matches by ``(platform, playlist_id)`` when available, falling back
+        to ``(platform, name)`` for legacy entries.
+        """
         with _lock:
             playlists = PlaylistStore.load_playlists()
-            for p in playlists:
-                if p.get("name") == name and p.get("platform") == platform:
-                    p["thumbnail_url"] = thumbnail_url
-                    break
-            PlaylistStore._write(playlists)
+            # We don't have playlist_id here, so match by (platform, name).
+            target = _find_by_key(playlists, platform=platform, name=name)
+            if target is not None:
+                target["thumbnail_url"] = thumbnail_url
+                PlaylistStore._write(playlists)
 
     @staticmethod
     def update_keybind(name: str, platform: str, hotkey: str):
+        """Update the hotkey binding for a single playlist."""
         with _lock:
             playlists = PlaylistStore.load_playlists()
-            for p in playlists:
-                if p.get("name") == name and p.get("platform") == platform:
-                    p["hotkey"] = hotkey
-                    break
-            PlaylistStore._write(playlists)
+            target = _find_by_key(playlists, platform=platform, name=name)
+            if target is not None:
+                target["hotkey"] = hotkey
+                PlaylistStore._write(playlists)
 
     @staticmethod
-    def delete_playlist(name: str, platform: str = ""):
+    def delete_playlist(name: str, platform: str, playlist_id: str = ""):
+        """Remove a playlist entry.
+
+        Args:
+            name: Playlist name (used for fallback lookup).
+            platform: Platform identifier (required).
+            playlist_id: Stable API identifier (preferred lookup key).
+        """
         with _lock:
             playlists = PlaylistStore.load_playlists()
-            if platform:
-                playlists = [
-                    p
-                    for p in playlists
-                    if not (
-                        p.get("name") == name
-                        and p.get("platform", PLATFORM_YOUTUBE_MUSIC) == platform
-                    )
-                ]
+            target = _find_by_key(
+                playlists, platform=platform, name=name, playlist_id=playlist_id,
+            )
+            if target is not None:
+                playlists.remove(target)
+                logger.info(
+                    "Deleted playlist '%s' (platform=%s, id=%s)",
+                    name, platform, playlist_id or "<legacy>",
+                )
+                PlaylistStore._write(playlists)
             else:
-                playlists = [p for p in playlists if p.get("name") != name]
-            PlaylistStore._write(playlists)
+                logger.warning(
+                    "No playlist found to delete: name='%s', platform=%s, id=%s",
+                    name, platform, playlist_id or "<none>",
+                )
+
+    @staticmethod
+    def migrate_schema(
+        lookup_playlist_id: "Callable[[str, str], str] | None" = None,
+    ):
+        """Backfill missing *playlist_id* values for legacy entries.
+
+        For each entry where ``playlist_id`` is empty, attempt to fill it
+        by calling *lookup_playlist_id(name, platform)*.  Provide a callback
+        that queries the appropriate integration API.
+
+        If no callback is supplied (or the callback returns an empty string),
+        the entry is left untouched — the fallback logic in ``_find_by_key``
+        will continue to work using ``(platform, name)``.
+        """
+        from collections.abc import Callable  # inline to avoid import at module level
+
+        if lookup_playlist_id is None:
+            return
+
+        with _lock:
+            playlists = PlaylistStore.load_playlists()
+            changed = False
+            for p in playlists:
+                if p.get("playlist_id"):
+                    continue  # already has a valid id
+                platform = p.get("platform", "")
+                name = p.get("name", "")
+                if not platform or not name:
+                    continue
+                try:
+                    pid = lookup_playlist_id(name, platform)
+                except Exception:
+                    logger.exception(
+                        "Migration lookup failed for '%s' (%s)", name, platform
+                    )
+                    continue
+                if pid:
+                    p["playlist_id"] = pid
+                    changed = True
+                    logger.info(
+                        "Migrated playlist '%s' (%s): playlist_id=%s", name, platform, pid
+                    )
+            if changed:
+                PlaylistStore._write(playlists)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _write(playlists):

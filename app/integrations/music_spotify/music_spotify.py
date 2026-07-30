@@ -1,3 +1,12 @@
+"""
+Spotify OAuth manager and API wrapper.
+
+Only standard-library and core dependencies (``requests``, ``platformdirs``)
+are imported at module level.  The filesystem side effect
+``AUTH_FOLDER.mkdir()`` is deferred to the first access of ``AUTH_FOLDER``
+via the ``_ensure_auth_dir()`` helper.
+"""
+
 import json
 import logging
 import os
@@ -12,13 +21,22 @@ from platformdirs import user_config_dir
 logger = logging.getLogger(__name__)
 
 AUTH_FOLDER = Path(user_config_dir("playlistmanager")) / "auth"
-AUTH_FOLDER.mkdir(parents=True, exist_ok=True, mode=0o700)
 SPOTIFY_AUTH_FILE = AUTH_FOLDER / "spotify.json"
 
 SPOTIFY_AUTH_URL = "https://accounts.spotify.com/authorize"
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_API_BASE = "https://api.spotify.com/v1"
 SCOPES = "user-read-currently-playing playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private"
+
+# Lazy AUTH_FOLDER initialisation — created on first method call that needs it.
+_auth_dir_created = False
+
+
+def _ensure_auth_dir():
+    global _auth_dir_created
+    if not _auth_dir_created:
+        AUTH_FOLDER.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _auth_dir_created = True
 
 
 class SpotifyAPI:
@@ -209,6 +227,7 @@ class SpotifyAPI:
         }
 
     def _save_credentials(self):
+        _ensure_auth_dir()
         try:
             creds = {
                 "client_id": self.client_id,
@@ -229,6 +248,7 @@ class SpotifyAuthManager:
         self.api: Optional[SpotifyAPI] = None
 
     def setup_auth(self) -> bool:
+        _ensure_auth_dir()
         if not SPOTIFY_AUTH_FILE.exists():
             logger.info(
                 f"Spotify credentials not found at {SPOTIFY_AUTH_FILE}.\n"

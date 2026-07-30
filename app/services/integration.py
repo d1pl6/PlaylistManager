@@ -1,9 +1,15 @@
+"""
+Integration registry and platform-specific integration wrappers.
+
+Concrete integration classes receive their auth manager as a constructor
+argument rather than importing it at module level, so this file has zero
+import-time side effects and does not pull in optional dependencies.
+"""
+
 import logging
 from typing import Dict, List, Optional
 
 from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
-from integrations.music_youtube.music_youtube import youtube_auth
-from integrations.music_spotify.music_spotify import spotify_auth
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +57,13 @@ class YouTubeMusicIntegration(BaseIntegration):
     id = PLATFORM_YOUTUBE_MUSIC
     display_name = "YouTube Music"
 
-    def __init__(self):
-        self._auth = youtube_auth
+    def __init__(self, auth_manager=None):
+        self._auth = auth_manager
         self.yt_client = None
 
     def authenticate(self) -> bool:
+        if self._auth is None:
+            return False
         if self._auth.setup_auth():
             self.yt_client = self._auth.get_yt_music()
             return True
@@ -119,11 +127,13 @@ class SpotifyIntegration(BaseIntegration):
     id = PLATFORM_SPOTIFY
     display_name = "Spotify"
 
-    def __init__(self):
-        self._auth = spotify_auth
+    def __init__(self, auth_manager=None):
+        self._auth = auth_manager
         self.spotify_api = None
 
     def authenticate(self) -> bool:
+        if self._auth is None:
+            return False
         if self._auth.setup_auth():
             self.spotify_api = self._auth.get_api()
             return True

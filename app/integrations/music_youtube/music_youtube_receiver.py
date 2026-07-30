@@ -1,12 +1,16 @@
+"""
+Flask-based HTTP receiver for YouTube Music URLs from the browser extension.
+
+All Flask imports are **lazy** — they happen only when the receiver is
+actually started (at most ~30 s per keybind press).
+"""
+
 import logging
 import re
 import threading
 import time
 from typing import Optional
 from queue import Queue, Empty
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from werkzeug.serving import make_server
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +38,7 @@ class URLReceiverManager:
 
     Protocol:
       1. Flow controller calls start() + set_waiting(True) when keybind is pressed.
-      2. Extension polls GET /status → {"ready": true} while server is up.
+      2. Extension polls GET /status -> {"ready": true} while server is up.
       3. Extension POSTs URL to /receive-url once.
       4. Flow controller calls set_waiting(False), retrieves URL from queue, stops server.
 
@@ -49,19 +53,29 @@ class URLReceiverManager:
         self.port = port
         self.timeout = timeout
         self.url_queue: Queue = Queue()
-        self.app = Flask(__name__)
+        self.app = None   # created lazily by _ensure_app()
         self.thread: Optional[threading.Thread] = None
         self._server = None
         self._running = False
         self._waiting_for_url = False
         self._state_lock = threading.Lock()
         self._rate_limiter = _RateLimiter(max_requests=10, window_seconds=60)
-        self._setup_flask()
+        # NOTE: _ensure_app() is NOT called here — Flask is imported lazily.
 
-    def _setup_flask(self):
-        """Setup Flask app and routes."""
+    def _ensure_app(self):
+        """Lazy initialisation of the Flask application and routes."""
+        if self.app is not None:
+            return
+
+        from flask import Flask, request, jsonify
+        from flask_cors import CORS
+        from werkzeug.serving import make_server
+
+        self._make_server = make_server
+
+        app = Flask(__name__)
         CORS(
-            self.app,
+            app,
             resources={
                 r"/*": {
                     "origins": "*",
@@ -71,13 +85,13 @@ class URLReceiverManager:
             },
         )
 
-        @self.app.route("/status", methods=["GET"])
-        def status():
+        @app.route("/status", methods=["GET"])
+        def _status():
             """Extension polls this to know when to send a URL."""
             return jsonify({"ready": self._waiting_for_url})
 
-        @self.app.route("/receive-url", methods=["POST", "OPTIONS"])
-        def receive_url():
+        @app.route("/receive-url", methods=["POST", "OPTIONS"])
+        def _receive_url():
             """Endpoint to receive YouTube Music URLs."""
             if request.method == "OPTIONS":
                 return "", 200
@@ -117,6 +131,8 @@ class URLReceiverManager:
                 logger.error(f"Error in receive_url endpoint: {e}")
                 return jsonify({"error": "Internal server error"}), 500
 
+        self.app = app
+
     @staticmethod
     def _extract_video_id(url: str) -> str | None:
         """Validate and extract the video ID from a YouTube Music URL.
@@ -140,8 +156,12 @@ class URLReceiverManager:
             logger.warning("URLReceiverManager is already running")
             return self.thread
 
+        self._ensure_app()
+
         try:
-            self._server = make_server(self.host, self.port, self.app, threaded=True)
+            self._server = self._make_server(
+                self.host, self.port, self.app, threaded=True
+            )
             server = self._server
             self._running = True
 

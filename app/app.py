@@ -7,8 +7,6 @@ from tkinter import messagebox
 from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from controllers.app_controller import AppController
 from controllers.keybind_controller import KeybindController
-from integrations.music_spotify.music_spotify import spotify_auth
-from integrations.music_youtube.music_youtube import youtube_auth
 from services.integration import (
     IntegrationRegistry,
     SpotifyIntegration,
@@ -31,37 +29,55 @@ class App:
         self.root = tk.Tk()
 
         yt_client = None
-        if youtube_auth.setup_auth():
-            try:
-                yt_client = youtube_auth.get_yt_music()
-                logger.info("YouTube Music authenticated")
-            except Exception as e:
-                logger.error(f"YouTube Music auth failed: {e}")
-                messagebox.showwarning("YouTube Music", f"YouTube Music authentication failed:\n{e}")
-        else:
-            logger.warning("YouTube Music not configured")
+        youtube_auth = None
+        try:
+            from integrations.music_youtube.music_youtube import youtube_auth as _yt_auth
+            youtube_auth = _yt_auth
+            if _yt_auth.setup_auth():
+                try:
+                    yt_client = _yt_auth.get_yt_music()
+                    logger.info("YouTube Music authenticated")
+                except Exception as e:
+                    logger.error(f"YouTube Music auth failed: {e}")
+                    messagebox.showwarning(
+                        "YouTube Music",
+                        f"YouTube Music authentication failed:\n{e}",
+                    )
+            else:
+                logger.warning("YouTube Music not configured (no browser.json)")
+        except ImportError:
+            logger.info(
+                "ytmusicapi not installed — YouTube Music integration disabled"
+            )
 
         self.integrations = IntegrationRegistry()
-        yt_integration = YouTubeMusicIntegration()
+        yt_integration = YouTubeMusicIntegration(auth_manager=youtube_auth)
         yt_integration.yt_client = yt_client
         self.integrations.register(yt_integration)
 
         sp_api = None
+        spotify_auth = None
         try:
-            if spotify_auth.setup_auth():
-                sp_api = spotify_auth.get_api()
+            from integrations.music_spotify.music_spotify import spotify_auth as _sp_auth
+            spotify_auth = _sp_auth
+            if _sp_auth.setup_auth():
+                sp_api = _sp_auth.get_api()
                 logger.info("Spotify authenticated")
             else:
                 logger.warning("Spotify not configured")
         except Exception as e:
             logger.error(f"Spotify auth failed: {e}")
             messagebox.showwarning("Spotify", f"Spotify authentication failed:\n{e}")
-        sp_integration = SpotifyIntegration()
+        sp_integration = SpotifyIntegration(auth_manager=spotify_auth)
         sp_integration.spotify_api = sp_api
         self.integrations.register(sp_integration)
 
         keybind_controller = KeybindController(yt_client, spotify_integration=sp_integration)
         app_controller = AppController(self)
+
+        # Migrate legacy playlists (without playlist_id) so the new
+        # (platform, playlist_id) dedup key works for existing entries.
+        self._migrate_playlist_schema()
 
         self.main_window = MainWindow(
             self.root,
@@ -76,6 +92,33 @@ class App:
         if cfg.getboolean("center_windows", "is_true", fallback=True):
             center_window(self.root)
         self._check_updates()
+
+    def _migrate_playlist_schema(self) -> None:
+        """Backfill missing *playlist_id* values in the store.
+
+        Uses the registered integrations to look up playlist IDs by name
+        for any legacy entries that lack one.
+        """
+        if not hasattr(self, "integrations"):
+            return
+
+        def lookup(name: str, platform: str) -> str:
+            integration = self.integrations.get(platform)
+            if integration is None:
+                return ""
+            try:
+                if hasattr(integration, "get_playlist_id"):
+                    pid = integration.get_playlist_id(name)
+                elif hasattr(integration, "get_playlist_id_by_name"):
+                    pid = integration.get_playlist_id_by_name(name)
+                else:
+                    pid = None
+                return pid or ""
+            except Exception:
+                logger.exception("Migration lookup failed for '%s' (%s)", name, platform)
+                return ""
+
+        PlaylistStore.migrate_schema(lookup_playlist_id=lookup)
 
     def refresh_auth(self):
         for integration in self.integrations.get_all().values():

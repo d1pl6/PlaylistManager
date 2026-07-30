@@ -105,8 +105,16 @@ class PlaylistController:
             self._cancel_and_show_error()
             return
 
+        # Exclude playlists already in the store — check both name and
+        # playlist_id so renames don't cause duplicates.
         existing_names = PlaylistStore.get_existing_names(platform=integration.id)
-        available = [p for p in playlists if p.get("title") not in existing_names]
+        existing_ids = PlaylistStore.get_existing_ids_by_platform(integration.id)
+        available = [
+            p
+            for p in playlists
+            if p.get("title") not in existing_names
+            and p.get("playlistId") not in existing_ids
+        ]
 
         self._on_show_playlist_dialog(
             available,
