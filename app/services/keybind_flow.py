@@ -1,9 +1,12 @@
 from __future__ import annotations
 import logging
-from typing import Callable, Dict, Optional
+from typing import TYPE_CHECKING, Callable, Dict, Optional
 from services.song_manager import SongManager
 from integrations.music_youtube.music_youtube_receiver import URLReceiverManager
-from integrations.music_spotify.music_spotify import SpotifyAPI
+
+if TYPE_CHECKING:
+    from ytmusicapi import YTMusic
+    from services.integration import SpotifyIntegration
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,11 @@ class KeybindFlowController:
         self.yt_music = yt_music_api
         self.song_manager = song_manager
         self.url_receiver = url_receiver
+        self._playlist_id_cache: Dict[str, str] = {}
+
+    def _invalidate_playlist_cache(self) -> None:
+        """Clear the playlist ID cache (e.g. after re-auth)."""
+        self._playlist_id_cache.clear()
 
     def execute_flow(
         self,
@@ -60,12 +68,13 @@ class KeybindFlowController:
 
             # Step 2: Wait for URL
             on_status("Waiting")
+            self.url_receiver.set_waiting(True)
             url = self._get_url_from_receiver()
 
             # Step 3: Validate URL
             on_status("Valid")
             video_id = URLReceiverManager._extract_video_id(url)
-            if not video_id:
+            if video_id is None:
                 raise ValueError("Failed to extract video ID from URL")
 
             # Step 4: Fetch song details
@@ -164,6 +173,12 @@ class KeybindFlowController:
         """
         Fetch song details using ytmusicapi.
 
+        Artist resolution priority:
+          1. get_song_related() — structured artist data from the related response
+          2. videoDetails.author split on common separators (e.g. " — Topic")
+          3. subtitle from related[0] contents
+          4. channel name / "Unknown Artist"
+
         Args:
             video_id: YouTube video ID
 
@@ -182,43 +197,20 @@ class KeybindFlowController:
             if not song_info:
                 raise ValueError(f"Song not found for video ID: {video_id}")
 
-            # Extract song details
             video_details = song_info.get("videoDetails", {})
             title = video_details.get("title", "Unknown")
 
-            # Get artists from the song details
-            artists = []
+            # --- Artist resolution ---
+            artists = self._resolve_artists(video_id, song_info, video_details)
 
-            # Try author from videoDetails (most reliable)
-            author = video_details.get("author")
-            if author:
-                artists = [author]
-
-            # Try subtitle from related contents if available
-            if not artists:
-                related = song_info.get("related", [])
-                if related and len(related) > 0:
-                    subtitle = related[0].get("subtitle", "")
-                    if subtitle:
-                        artists = [a.strip() for a in subtitle.split(",") if a.strip()]
-
-            # Fallback to channel name if nothing else worked
-            if not artists:
-                channel_id = video_details.get("channelId")
-                if channel_id:
-                    artists = [video_details.get("author", "Unknown Artist")]
-                else:
-                    artists = ["Unknown Artist"]
-
-            # Get duration
-            duration = song_info.get("videoDetails", {}).get("lengthSeconds", 0)
+            # --- Duration ---
+            duration = video_details.get("lengthSeconds", 0)
             if isinstance(duration, str):
                 duration = int(duration)
 
-            # Get thumbnail
+            # --- Thumbnail ---
             thumbnails = (
-                song_info.get("videoDetails", {})
-                .get("thumbnail", {})
+                video_details.get("thumbnail", {})
                 .get("thumbnails", [])
             )
             thumbnail_url = None
@@ -242,9 +234,73 @@ class KeybindFlowController:
             logger.error(f"Error fetching song details: {e}")
             raise
 
+    def _resolve_artists(
+        self, video_id: str, song_info: Dict, video_details: Dict
+    ) -> list[str]:
+        """Resolve artist names using multiple sources."""
+        # Priority 1: structured artist data from get_song_related
+        artists = self._artists_from_song_related(video_id)
+        if artists:
+            return artists
+
+        # Priority 2: videoDetails.author — may include channel suffix
+        author = video_details.get("author", "")
+        if author:
+            # Strip common YouTube Music suffixes like " — Topic", " - Topic"
+            cleaned = _strip_channel_suffix(author)
+            if cleaned:
+                return [cleaned]
+
+        # Priority 3: subtitle from related contents
+        related = song_info.get("related", [])
+        if related:
+            subtitle = related[0].get("subtitle", "")
+            if subtitle:
+                parsed = [a.strip() for a in subtitle.split(",") if a.strip()]
+                if parsed:
+                    return parsed
+
+        # Priority 4: channel name fallback
+        channel_id = video_details.get("channelId")
+        if channel_id and author:
+            return [_strip_channel_suffix(author) or author]
+        if author:
+            return [author]
+
+        return ["Unknown Artist"]
+
+    def _artists_from_song_related(self, video_id: str) -> list[str]:
+        """
+        Attempt to extract artist names from get_song_related response.
+
+        The response may contain sections keyed by type (e.g. 'artist',
+        'song', 'video'). Look for 'artist' entries carrying a 'name' field.
+        """
+        try:
+            related = self.yt_music.get_song_related(video_id)
+            if not isinstance(related, dict):
+                return []
+
+            artists = []
+            # The response may have an 'artist' key with artist cards
+            for entry in related.get("artist", []):
+                if isinstance(entry, dict):
+                    name = entry.get("name") or entry.get("title")
+                    if name:
+                        artists.append(name)
+            return artists
+        except Exception:
+            logger.debug("get_song_related artist extraction failed", exc_info=True)
+            return []
+
+
     def _get_playlist_id(self, playlist_name: str) -> Optional[str]:
         """
-        Get YouTube Music playlist ID by name.
+        Get YouTube Music playlist ID by name, with caching.
+
+        The cache avoids a network call on every keybind press since
+        playlist IDs rarely change within a session. The cache is
+        invalidated on re-auth via _invalidate_playlist_cache().
 
         Args:
             playlist_name: Name of the playlist
@@ -252,11 +308,18 @@ class KeybindFlowController:
         Returns:
             Playlist ID or None if not found
         """
+        cached = self._playlist_id_cache.get(playlist_name)
+        if cached is not None:
+            return cached
+
         try:
             playlists = self.yt_music.get_library_playlists()
             for playlist in playlists:
                 if playlist.get("title") == playlist_name:
-                    return playlist.get("playlistId")
+                    pid = playlist.get("playlistId")
+                    if pid:
+                        self._playlist_id_cache[playlist_name] = pid
+                    return pid
             return None
         except Exception as e:
             logger.error(f"Failed to get playlist ID for '{playlist_name}': {e}")
@@ -272,13 +335,25 @@ class KeybindFlowController:
             logger.error(f"Error during cleanup: {e}")
 
 
+def _strip_channel_suffix(name: str) -> str:
+    """Remove common YouTube Music channel suffixes from an artist name.
+
+    Handles patterns like "Taylor Swift — Topic", "Artist Name - Topic",
+    "Various Artists — Topic" etc.
+    """
+    import re
+    # Strip " — Topic", " - Topic", "– Topic" and similar variants
+    cleaned = re.sub(r"\s*[—–-]\s*Topic\s*$", "", name, flags=re.IGNORECASE).strip()
+    return cleaned
+
+
 class SpotifyFlowController:
     def __init__(
         self,
-        spotify_api: SpotifyAPI,
+        spotify_integration: SpotifyIntegration,
         song_manager: SongManager,
     ):
-        self.spotify_api = spotify_api
+        self.spotify_integration = spotify_integration
         self.song_manager = song_manager
 
     def execute_flow(
@@ -290,7 +365,7 @@ class SpotifyFlowController:
     ) -> None:
         try:
             on_status("Fetch")
-            playing = self.spotify_api.get_currently_playing()
+            playing = self.spotify_integration.get_currently_playing()
             if not playing:
                 on_error("Nothing playing")
                 return
@@ -324,9 +399,9 @@ class SpotifyFlowController:
             )
 
             on_status("Sync")
-            playlist_id = self.spotify_api.get_playlist_id_by_name(playlist_name)
+            playlist_id = self.spotify_integration.get_playlist_id_by_name(playlist_name)
             if playlist_id:
-                self.spotify_api.add_tracks_to_playlist(playlist_id, [track_id])
+                self.spotify_integration.add_tracks_to_playlist(playlist_id, [track_id])
                 logger.info(f"Added {track_id} to Spotify playlist {playlist_id}")
             else:
                 logger.warning(f"Could not find Spotify playlist '{playlist_name}'")

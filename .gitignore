@@ -6,6 +6,8 @@ tree.txt
 requirements.txt
 *.pyc
 AGENTS.md
+opencode.jsonc
+.gitignore
 
 auth/
 __pycache__/
@@ -20,14 +22,7 @@ cfg/
 !.vscode/launch.json
 !.vscode/extensions.json
 .history/*
-
-
-test.py
-fonts.py
-amain_window.py
-test-fonts.txt
-keybind.json
-
+youtube-music-extension/
 
 album_img.png
 close.png

@@ -1,7 +1,11 @@
 import sys
 import argparse
 import logging
-from app import App  # type: ignore
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from app import App
 
 
 def parse_args():

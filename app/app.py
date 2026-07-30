@@ -57,7 +57,7 @@ class App:
 
         playlist_store = PlaylistStore()
         playlist_service = PlaylistService(yt_client)
-        keybind_controller = KeybindController(yt_client, spotify_api=sp_api)
+        keybind_controller = KeybindController(yt_client, spotify_integration=sp_integration)
         app_controller = AppController(self)
 
         self.main_window = MainWindow(
@@ -82,15 +82,21 @@ class App:
                 logger.info(f"{integration.display_name} re-authenticated")
             else:
                 logger.error(f"{integration.display_name} re-authentication failed")
+
+        yt_client = None
+        spotify_integration = None
+
         yt = self.integrations.get("youtube_music")
         if isinstance(yt, YouTubeMusicIntegration):
-            self.main_window.ps.yt = yt.yt_client
-            self.main_window.kc.yt = yt.yt_client
-            self.main_window.kc.keybind_flow = None
+            yt_client = yt.yt_client
         sp = self.integrations.get("spotify")
         if isinstance(sp, SpotifyIntegration):
-            self.main_window.kc.spotify_api = sp.spotify_api
-            self.main_window.kc.spotify_flow = None
+            spotify_integration = sp
+
+        self.main_window.ps.yt = yt_client
+        self.main_window.kc.update_credentials(
+            yt_client=yt_client, spotify_integration=spotify_integration
+        )
 
     def _check_updates(self):
         def on_result(

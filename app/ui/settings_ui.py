@@ -65,19 +65,15 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None):
     cfg = ConfigParser()
     try:
         cfg.read(str(_settings_path))
-        update_val = cfg.get("update_check", "is_true", fallback="yes").lower()
-        update_var_value = 1 if update_val == "yes" else 0
-        center_val = cfg.get("center_windows", "is_true", fallback="yes").lower()
-        center_var_value = 1 if center_val == "yes" else 0
-        resize_val = cfg.get("auto_resize", "is_true", fallback="yes").lower()
-        resize_var_value = 1 if resize_val == "yes" else 0
-        global_val = cfg.get("global_listener", "is_true", fallback="yes").lower()
-        global_var_value = 1 if global_val == "yes" else 0
+        update_var_value = 1 if cfg.getboolean("update_check", "is_true", fallback=True) else 0
+        center_var_value = 1 if cfg.getboolean("center_windows", "is_true", fallback=True) else 0
+        resize_var_value = 1 if cfg.getboolean("auto_resize", "is_true", fallback=False) else 0
+        global_var_value = 1 if cfg.getboolean("global_listener", "is_true", fallback=True) else 0
     except Exception as e:
         logger.error("Error loading config, defaulting to yes: %s", e)
         update_var_value = 1
         center_var_value = 1
-        resize_var_value = 1
+        resize_var_value = 0
         global_var_value = 1
 
     update_var = tk.IntVar(value=update_var_value)

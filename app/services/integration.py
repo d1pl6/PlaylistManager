@@ -211,3 +211,13 @@ class SpotifyIntegration(BaseIntegration):
         if not self.spotify_api:
             return None
         return self.spotify_api.get_currently_playing()
+
+    def get_playlist_id_by_name(self, name: str) -> Optional[str]:
+        if not self.spotify_api:
+            return None
+        return self.spotify_api.get_playlist_id_by_name(name)
+
+    def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]) -> bool:
+        if not self.spotify_api:
+            return False
+        return self.spotify_api.add_tracks_to_playlist(playlist_id, track_ids)

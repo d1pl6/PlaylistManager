@@ -2,6 +2,8 @@
 
 [-] Theme settings
 
+[ ] Make integrations optional (now - hard dependency)
+
 [/] Theme change
 
 [ ] Show last N added songs in playlist and option in settings:

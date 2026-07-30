@@ -35,7 +35,8 @@ class PlaylistStore:
         playlists = PlaylistStore.load_playlists()
         for p in playlists:
             if p.get("name") == name:
-                if not platform or p.get("platform", "youtube_music") == platform:
+                stored_platform = p.get("platform")
+                if not platform or stored_platform == platform:
                     return p
         return None
 
@@ -62,7 +63,7 @@ class PlaylistStore:
     def update_thumbnail(name: str, platform: str, thumbnail_url: str):
         playlists = PlaylistStore.load_playlists()
         for p in playlists:
-            if p.get("name") == name and p.get("platform", "youtube_music") == platform:
+            if p.get("name") == name and p.get("platform") == platform:
                 p["thumbnail_url"] = thumbnail_url
                 break
         PlaylistStore._write(playlists)
@@ -71,7 +72,7 @@ class PlaylistStore:
     def update_keybind(name: str, platform: str, hotkey: str):
         playlists = PlaylistStore.load_playlists()
         for p in playlists:
-            if p.get("name") == name and p.get("platform", "youtube_music") == platform:
+            if p.get("name") == name and p.get("platform") == platform:
                 p["hotkey"] = hotkey
                 break
         PlaylistStore._write(playlists)

@@ -90,16 +90,15 @@ def _read_global_listener_setting() -> bool:
     cfg = ConfigParser()
     try:
         cfg.read(str(SETTINGS_PATH))
-        val = cfg.get("global_listener", "is_true", fallback="yes").lower()
-        return val == "yes"
+        return cfg.getboolean("global_listener", "is_true", fallback=True)
     except Exception:
         return True
 
 
 class KeybindController:
-    def __init__(self, yt_client, spotify_api=None):
+    def __init__(self, yt_client, spotify_integration=None):
         self.yt = yt_client
-        self.spotify_api = spotify_api
+        self.spotify_integration = spotify_integration
         self.song_manager: Optional[SongManager] = None
         self.url_receiver: Optional[URLReceiverManager] = None
         self.keybind_flow: Optional[KeybindFlowController] = None
@@ -117,8 +116,25 @@ class KeybindController:
         self._recording = False
         self._last_recording_combo = ""
         self._recording_callback: Optional[Callable[[str], None]] = None
+        self._recording_stop_callback: Optional[Callable[[], None]] = None
 
         self._global_mode = _read_global_listener_setting()
+
+    def update_credentials(self, yt_client=None, spotify_integration=None):
+        """Update API clients and invalidate active flow controllers.
+
+        Called from the UI thread after re-authentication. The flow controllers
+        are set to None so they will be lazily re-created on the next keybind
+        trigger with the new credentials.
+        """
+        if yt_client is not None:
+            self.yt = yt_client
+        if spotify_integration is not None:
+            self.spotify_integration = spotify_integration
+        self.keybind_flow = None
+        self.spotify_flow = None
+        self.url_receiver = None
+        logger.info("KeybindController credentials updated, flows invalidated")
 
     def set_root(self, root):
         self._root = root
@@ -158,10 +174,12 @@ class KeybindController:
 
     def _stop_global_listener(self):
         with self._listener_lock:
-            if self._listener is not None:
-                self._listener.stop()
-                self._listener = None
-                logger.info("Global hotkey listener stopped")
+            listener = self._listener
+            self._listener = None
+        if listener is not None:
+            listener.stop()
+            listener.join(timeout=2.0)
+            logger.info("Global hotkey listener stopped")
 
     def _bind_local_keys(self):
         if self._root is None:
@@ -184,6 +202,16 @@ class KeybindController:
     def _on_focus_out(self, event):
         with self._pressed_keys_lock:
             self._pressed_keys.clear()
+        if self._recording:
+            self._recording = False
+            combo = self._last_recording_combo
+            self._last_recording_combo = ""
+            if self._recording_callback and self._root:
+                self._root.after(0, self._recording_callback, combo)
+            self._recording_callback = None
+            if self._recording_stop_callback and self._root:
+                self._root.after(0, self._recording_stop_callback)
+            self._recording_stop_callback = None
 
     def _on_global_press(self, key):
         name = _normalize_key(key)
@@ -219,7 +247,7 @@ class KeybindController:
 
     def _handle_press(self, name: str):
         if self._recording:
-            if name in ("esc", "escape", "Escape"):
+            if name == "escape":
                 with self._pressed_keys_lock:
                     self._pressed_keys.discard(name)
                 self._recording = False
@@ -227,6 +255,9 @@ class KeybindController:
                 if self._recording_callback and self._root:
                     self._root.after(0, self._recording_callback, "")
                 self._recording_callback = None
+                if self._recording_stop_callback and self._root:
+                    self._root.after(0, self._recording_stop_callback)
+                self._recording_stop_callback = None
                 return
             if name not in _MODIFIER_NAMES:
                 combo = self._build_combo()
@@ -251,7 +282,7 @@ class KeybindController:
         with self._pressed_keys_lock:
             snapshot_keys = set(self._pressed_keys)
         for hotkey_str, info in snapshot_map.items():
-            expected = _parse_hotkey(hotkey_str)
+            expected = info["_parsed"]
             if expected and expected.issubset(snapshot_keys):
                 playlist_name = info["playlist_name"]
                 labels_dict = info["labels_dict"]
@@ -262,10 +293,11 @@ class KeybindController:
                     )
                 break
 
-    def start_recording(self, callback: Callable[[str], None]):
+    def start_recording(self, callback: Callable[[str], None], on_stop: Callable[[], None] | None = None):
         self._recording = True
         self._last_recording_combo = ""
         self._recording_callback = callback
+        self._recording_stop_callback = on_stop
         logger.debug("Started recording keybind")
 
     def stop_recording(self) -> str:
@@ -290,6 +322,7 @@ class KeybindController:
                     "playlist_name": playlist_name,
                     "labels_dict": labels_dict,
                     "platform": platform,
+                    "_parsed": _parse_hotkey(hotkey),
                 }
             logger.info(
                 f"Registered hotkey '{hotkey}' for playlist '{playlist_name}' (platform={platform})"
@@ -311,6 +344,11 @@ class KeybindController:
         log_artist_label = labels_dict["artist"]
         log_name_label = labels_dict["name"]
         playlist_keybind_entry = labels_dict["keybind_entry"]
+
+        if self.keybind_thread is not None and self.keybind_thread.is_alive():
+            log_status_label.config(text="Busy", background="#AA8800")
+            logger.warning("Flow already in progress, ignoring keybind")
+            return
 
         playlist_keybind_entry.config(state="readonly")
         log_status_label.config(text="Loading...", background="#4A5A00")
@@ -361,7 +399,7 @@ class KeybindController:
             if self._root is not None:
                 self._root.after(0, _apply)
             else:
-                _apply()
+                logger.warning("Cannot apply success result: root window is not available")
 
         def run_flow():
             try:
@@ -399,13 +437,13 @@ class KeybindController:
         if platform == "spotify":
             if self.spotify_flow is not None:
                 return True
-            if self.spotify_api is None:
+            if self.spotify_integration is None or not self.spotify_integration.is_authenticated():
                 log_status_label.config(text="Error", background="#A00000")
                 playlist_keybind_entry.config(state="readonly")
                 logger.error("Spotify not authenticated.")
                 return False
             self.spotify_flow = SpotifyFlowController(
-                self.spotify_api, self.song_manager
+                self.spotify_integration, self.song_manager
             )
             logger.info("Initialized Spotify flow")
             return True
@@ -431,10 +469,10 @@ class KeybindController:
                 return False
 
     def stop_receiver(self):
-        if self.url_receiver is not None:
+        receiver = self.url_receiver
+        if receiver is not None:
             try:
-                if self.url_receiver.is_running():
-                    self.url_receiver.stop()
+                receiver.stop()
             except Exception as e:
                 logger.error(f"Error stopping URL receiver: {e}")
 
@@ -451,4 +489,5 @@ class KeybindController:
         self.url_receiver = None
         self.keybind_flow = None
         self.spotify_flow = None
+        self.spotify_integration = None
         self.keybind_thread = None

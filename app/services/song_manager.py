@@ -27,6 +27,27 @@ class SongManager:
         self,
         playlist_name: str,
         tracks: List[Dict],
+        platform: str = "youtube_music",
+    ) -> int:
+        """
+        Bulk-insert songs into the database, dispatching by platform.
+
+        Args:
+            playlist_name: Name of the playlist
+            tracks: List of track dicts from the platform API
+            platform: Platform identifier ("youtube_music" or "spotify")
+
+        Returns:
+            Number of songs actually inserted (skips duplicates)
+        """
+        if platform == "spotify":
+            return self.add_songs_bulk_spotify(playlist_name, tracks)
+        return self._add_songs_bulk_youtube(playlist_name, tracks)
+
+    def _add_songs_bulk_youtube(
+        self,
+        playlist_name: str,
+        tracks: List[Dict],
     ) -> int:
         """
         Bulk-insert songs from ytmusicapi playlist tracks into the database.
@@ -45,8 +66,8 @@ class SongManager:
 
             rows = []
             for track in tracks:
-                video_id = track.get("videoId")
-                if not video_id:
+                track_id = track.get("videoId")
+                if not track_id:
                     continue
 
                 title = track.get("title", "Unknown")
@@ -71,12 +92,12 @@ class SongManager:
                     ).get("url")
 
                 artists_json = json.dumps(artists)
-                rows.append((title, artists_json, duration, video_id, thumbnail_url))
+                rows.append((title, artists_json, duration, track_id, thumbnail_url))
 
             rows_before = len(rows)
             cursor.executemany(
                 """
-                INSERT OR IGNORE INTO songs (title, artists, duration, video_id, thumbnail_url)
+                INSERT OR IGNORE INTO songs (title, artists, duration, track_id, thumbnail_url)
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 rows,
@@ -110,27 +131,11 @@ class SongManager:
         playlist_name: str,
         tracks: List[Dict],
     ) -> int:
-        """Bulk-insert Spotify tracks. Matches by title+artists+duration."""
+        """Bulk-insert Spotify tracks. Deduplication is handled by UNIQUE constraint on track_id."""
         conn = None
         try:
             conn = self.db_manager.get_db_connection(playlist_name)
             cursor = conn.cursor()
-
-            existing = set()
-            cursor.execute(
-                "SELECT LOWER(TRIM(title)), artists, duration FROM songs"
-            )
-            for row in cursor.fetchall():
-                raw_artists = row[1]
-                try:
-                    artists_list = json.loads(raw_artists)
-                    if isinstance(artists_list, list):
-                        norm = json.dumps(sorted(a.strip().lower() for a in artists_list))
-                    else:
-                        norm = raw_artists
-                except (json.JSONDecodeError, TypeError):
-                    norm = raw_artists
-                existing.add((row[0], norm, row[2]))
 
             rows = []
             for track in tracks:
@@ -149,20 +154,13 @@ class SongManager:
                 images = track.get("album", {}).get("images", [])
                 thumbnail_url = images[0]["url"] if images else None
 
-                norm_title = self._normalize_text(title)
-                norm_artists = self._normalize_artists(artists)
-
-                if (norm_title, norm_artists, duration) in existing:
-                    continue
-
                 artists_json = json.dumps(artists)
                 rows.append((title, artists_json, duration, track_id, thumbnail_url))
-                existing.add((norm_title, norm_artists, duration))
 
             rows_before = len(rows)
             cursor.executemany(
                 """
-                INSERT OR IGNORE INTO songs (title, artists, duration, video_id, thumbnail_url)
+                INSERT OR IGNORE INTO songs (title, artists, duration, track_id, thumbnail_url)
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 rows,
@@ -230,7 +228,7 @@ class SongManager:
                 raise sqlite3.IntegrityError("Song already exists by info match")
 
             cursor.execute(
-                "INSERT INTO songs (title, artists, duration, video_id, thumbnail_url) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO songs (title, artists, duration, track_id, thumbnail_url) VALUES (?, ?, ?, ?, ?)",
                 (title, artists_json, duration, track_id, thumbnail_url),
             )
             conn.commit()
@@ -256,7 +254,7 @@ class SongManager:
         title: str,
         artists: List[str],
         duration: int,
-        video_id: str,
+        track_id: str,
         thumbnail_url: Optional[str] = None,
     ) -> int:
         """
@@ -267,7 +265,7 @@ class SongManager:
             title: Song title
             artists: List of artist names
             duration: Duration in seconds
-            video_id: YouTube video ID
+            track_id: Platform track/video ID
             thumbnail_url: URL to song thumbnail
 
         Returns:
@@ -286,10 +284,10 @@ class SongManager:
 
             cursor.execute(
                 """
-                INSERT INTO songs (title, artists, duration, video_id, thumbnail_url)
+                INSERT INTO songs (title, artists, duration, track_id, thumbnail_url)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (title, artists_json, duration, video_id, thumbnail_url),
+                (title, artists_json, duration, track_id, thumbnail_url),
             )
 
             conn.commit()
@@ -297,14 +295,14 @@ class SongManager:
             if song_id is None:
                 raise RuntimeError("song_id is None after INSERT")
             logger.info(
-                f"Added song {video_id} to playlist {playlist_name} (ID: {song_id})"
+                f"Added song {track_id} to playlist {playlist_name} (ID: {song_id})"
             )
 
             return song_id
 
         except sqlite3.IntegrityError:
             logger.warning(
-                f"Song {video_id} already exists in playlist {playlist_name}"
+                f"Song {track_id} already exists in playlist {playlist_name}"
             )
             raise
         except sqlite3.Error as e:
@@ -314,13 +312,13 @@ class SongManager:
             if conn:
                 DatabaseManager.close_connection(conn)
 
-    def song_exists(self, playlist_name: str, video_id: str) -> bool:
+    def song_exists(self, playlist_name: str, track_id: str) -> bool:
         """
-        Check if a song exists in the playlist's database.
+        Check if a song exists in the playlist's database by track ID.
 
         Args:
             playlist_name: Name of the playlist
-            video_id: YouTube video ID
+            track_id: Platform track/video ID
 
         Returns:
             True if song exists, False otherwise
@@ -330,7 +328,7 @@ class SongManager:
             conn = self.db_manager.get_db_connection(playlist_name)
             cursor = conn.cursor()
 
-            cursor.execute("SELECT id FROM songs WHERE video_id = ?", (video_id,))
+            cursor.execute("SELECT id FROM songs WHERE track_id = ?", (track_id,))
             result = cursor.fetchone()
 
             return result is not None
@@ -342,13 +340,13 @@ class SongManager:
             if conn:
                 DatabaseManager.close_connection(conn)
 
-    def get_song_by_video_id(self, playlist_name: str, video_id: str) -> Optional[Dict]:
+    def get_song_by_track_id(self, playlist_name: str, track_id: str) -> Optional[Dict]:
         """
-        Get song data by video ID.
+        Get song data by track ID.
 
         Args:
             playlist_name: Name of the playlist
-            video_id: YouTube video ID
+            track_id: Platform track/video ID
 
         Returns:
             Song data as dict or None if not found
@@ -358,7 +356,7 @@ class SongManager:
             conn = self.db_manager.get_db_connection(playlist_name)
             cursor = conn.cursor()
 
-            cursor.execute("SELECT * FROM songs WHERE video_id = ?", (video_id,))
+            cursor.execute("SELECT * FROM songs WHERE track_id = ?", (track_id,))
             row = cursor.fetchone()
 
             if row is None:

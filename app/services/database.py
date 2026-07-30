@@ -84,14 +84,14 @@ class DatabaseManager:
                         title TEXT NOT NULL,
                         artists TEXT NOT NULL,
                         duration INTEGER,
-                        video_id TEXT UNIQUE NOT NULL,
+                        track_id TEXT UNIQUE NOT NULL,
                         thumbnail_url TEXT,
                         added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
 
-                # Create index on video_id for faster lookups
-                cursor.execute("CREATE INDEX idx_video_id ON songs(video_id)")
+                # Create index on track_id for faster lookups
+                cursor.execute("CREATE INDEX idx_track_id ON songs(track_id)")
 
                 conn.commit()
                 logger.debug("Initialized new playlist database schema")

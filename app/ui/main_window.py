@@ -244,8 +244,13 @@ class MainWindow:
         self._choose_open = True
         self.btn_add_playlist.configure(state="disabled", image=self.loading_img)
         self._hide_main_content()
-
-        playlists = integration.get_library_playlists()
+        try:
+            playlists = integration.get_library_playlists()
+        except Exception as e:
+            logger.error(f"Failed to fetch playlists: {e}")
+            self._on_dialog_cancel()
+            self._show_integration_error()
+            return
         if not playlists:
             self._on_dialog_cancel()
             self._show_integration_error()
@@ -355,29 +360,38 @@ class MainWindow:
             try:
                 tracks = integration.get_playlist_tracks(playlist_id)
                 if not tracks:
-                    self.root.after(0, self._on_import_done, frame_idx, 0, "No tracks")
+                    self.root.after(0, self._on_import_done, playlist_name, 0, "No tracks")
                     return
 
                 sm = SongManager()
-                if platform == "spotify":
-                    inserted = sm.add_songs_bulk_spotify(playlist_name, tracks)
-                else:
-                    inserted = sm.add_songs_bulk(playlist_name, tracks)
+                inserted = sm.add_songs_bulk(playlist_name, tracks, platform=platform)
                 self.root.after(
                     0,
                     self._on_import_done,
-                    frame_idx,
+                    playlist_name,
                     inserted,
                     f"{inserted} new",
                 )
             except Exception as e:
                 logger.error(f"Import failed for '{playlist_name}': {e}")
-                self.root.after(0, self._on_import_done, frame_idx, 0, "Error")
+                self.root.after(0, self._on_import_done, playlist_name, 0, "Error")
 
         threading.Thread(target=run_import, daemon=True).start()
 
-    def _on_import_done(self, frame_idx, count, status_text):
-        if frame_idx >= len(self.active_log_labels):
+    def _find_frame_index_by_name(self, playlist_name: str) -> int | None:
+        """Look up the current frame index for a playlist by name.
+
+        Returns the index if found, or None if the playlist no longer has a frame.
+        This is safe to call after reindexing since it matches on name, not index.
+        """
+        for i, label in enumerate(self.playlist_name_labels):
+            if label.cget("text") == playlist_name:
+                return i
+        return None
+
+    def _on_import_done(self, playlist_name, count, status_text):
+        frame_idx = self._find_frame_index_by_name(playlist_name)
+        if frame_idx is None or frame_idx not in self.active_log_labels:
             return
         status_label = self.active_log_labels[frame_idx]["status"]
         if count > 0:
@@ -386,13 +400,13 @@ class MainWindow:
             status_label.config(text=status_text, background="#A00000")
         else:
             status_label.config(text=status_text, background="#006713")
-        playlist_name = self.playlist_name_labels[frame_idx].cget("text")
         self._update_log_labels_from_db(frame_idx, playlist_name)
-        logger.info(f"Import finished for frame {frame_idx}: {status_text}")
+        logger.info(f"Import finished for '{playlist_name}': {status_text}")
 
-    def _on_reload_done(self, frame_idx, count, status_text, thumb_url):
-        self._on_import_done(frame_idx, count, status_text)
-        if thumb_url:
+    def _on_reload_done(self, playlist_name, count, status_text, thumb_url):
+        self._on_import_done(playlist_name, count, status_text)
+        frame_idx = self._find_frame_index_by_name(playlist_name)
+        if frame_idx is not None and thumb_url:
             self._set_playlist_cover(frame_idx, thumb_url)
 
     def setup(self):
@@ -621,8 +635,7 @@ class MainWindow:
             ensure_settings_file()
             cfg = ConfigParser()
             cfg.read(str(_settings_path))
-            val = cfg.get("auto_resize", "is_true", fallback="no").lower()
-            if val == "yes":
+            if cfg.getboolean("auto_resize", "is_true", fallback=False):
                 try:
                     resize_window(self.root)
                 except Exception as e:
@@ -657,7 +670,13 @@ class MainWindow:
             entry.delete(0, tk.END)
             entry.insert(0, combo)
 
-        self.kc.start_recording(on_combo)
+        def on_stop():
+            """Restore entry state when recording ends via escape or focus-out."""
+            self._recording_frame_idx = None
+            entry.config(state="readonly", readonlybackground="#2A2A2A")
+            entry.delete(0, tk.END)
+
+        self.kc.start_recording(on_combo, on_stop=on_stop)
         return "break"
 
     def _stop_recording(self, frame_idx):
@@ -716,7 +735,7 @@ class MainWindow:
 
                 integration = self.integrations.get(platform)
                 if not integration:
-                    self.root.after(0, self._on_import_done, frame_idx, 0, "Error")
+                    self.root.after(0, self._on_import_done, playlist_name, 0, "Error")
                     return
 
                 details = integration.get_playlist_details(playlist_id)
@@ -729,23 +748,20 @@ class MainWindow:
 
                 tracks = integration.get_playlist_tracks(playlist_id)
                 if not tracks:
-                    self.root.after(0, self._on_import_done, frame_idx, 0, "No tracks")
+                    self.root.after(0, self._on_import_done, playlist_name, 0, "No tracks")
                     return
 
                 sm = SongManager()
-                if platform == "spotify":
-                    inserted = sm.add_songs_bulk_spotify(playlist_name, tracks)
-                else:
-                    inserted = sm.add_songs_bulk(playlist_name, tracks)
+                inserted = sm.add_songs_bulk(playlist_name, tracks, platform=platform)
 
                 if thumb_url:
                     self.store.update_thumbnail(playlist_name, platform, thumb_url)
                 self.root.after(
-                    0, self._on_reload_done, frame_idx, inserted, f"{inserted} new", thumb_url
+                    0, self._on_reload_done, playlist_name, inserted, f"{inserted} new", thumb_url
                 )
             except Exception as e:
                 logger.error(f"Reload failed for '{playlist_name}': {e}")
-                self.root.after(0, self._on_import_done, frame_idx, 0, "Error")
+                self.root.after(0, self._on_import_done, playlist_name, 0, "Error")
 
         threading.Thread(target=run_reload, daemon=True).start()
 

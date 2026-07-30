@@ -19,7 +19,7 @@ def check(callback=None):
     """Check for updates on GitHub in a background thread.
 
     Args:
-        callback: Optional callable(available: bool, latest_version: str | None, download_url: str | None, body: str | None)
+        callback: Optional callable(available: bool, latest_version: str | None, download_url: str | None, body: str | None, error: str | None)
     """
 
     def _check():
@@ -32,7 +32,7 @@ def check(callback=None):
             if not enabled:
                 logger.debug("Update check is disabled in settings")
                 if callback:
-                    callback(False)
+                    callback(False, None, None, None, None)
                 return
 
             resp = requests.get(API_URL, timeout=10)
@@ -58,17 +58,17 @@ def check(callback=None):
 
             if callback:
                 callback(
-                    available, latest_tag or None, download_url or None, body or None
+                    available, latest_tag or None, download_url or None, body or None, None
                 )
 
         except requests.RequestException as e:
             logger.warning("Update check failed: %s", e)
             if callback:
-                callback(False, error=f"Could not reach update server.\n{e}")
+                callback(False, None, None, None, f"Could not reach update server.\n{e}")
         except Exception as e:
             logger.warning("Update check failed: %s", e)
             if callback:
-                callback(False, error=f"Update check failed.\n{e}")
+                callback(False, None, None, None, f"Update check failed.\n{e}")
 
     thread = threading.Thread(target=_check, daemon=True)
     thread.start()

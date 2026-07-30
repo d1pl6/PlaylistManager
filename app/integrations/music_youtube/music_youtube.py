@@ -40,7 +40,13 @@ def _patched_get_library_playlists(self, limit: int | None = 25):
             if results is None:
                 return []
 
-            playlists = parse_content_list(results["items"][1:], parse_playlist)
+            # Filter items: skip the first entry if it looks like a header
+            # (no playlistId) rather than unconditionally slicing [1:].
+            items = results.get("items", [])
+            if items and not _is_likely_playlist_item(items[0]):
+                items = items[1:]
+
+            playlists = parse_content_list(items, parse_playlist)
             if "continuations" in results:
                 remaining_limit = None if limit is None else (limit - len(playlists))
                 request_func = lambda additionalParams: self._send_request(
@@ -67,21 +73,25 @@ def _patched_get_library_playlists(self, limit: int | None = 25):
     return []
 
 
-def _patch_yt_music_library_playlists(yt=None):
+def _is_likely_playlist_item(item: dict) -> bool:
+    """Heuristic: a playlist item typically has a playlistId or a title."""
+    return bool(item.get("playlistId")) or bool(item.get("title"))
+
+
+def _patch_yt_music_library_playlists(yt):
+    """Instance-level patch: replace get_library_playlists on a YTMusic instance.
+
+    Class-level patching is avoided to prevent global side effects on the
+    YTMusic class. Every YTMusic instance should be patched individually
+    after creation via this function.
+    """
     try:
-        if yt is None:
-            YTMusic.get_library_playlists = _patched_get_library_playlists
-        else:
-            yt.get_library_playlists = MethodType(_patched_get_library_playlists, yt)
+        yt.get_library_playlists = MethodType(_patched_get_library_playlists, yt)
         logger.debug(
             "Patched YTMusic.get_library_playlists with fallback implementation"
         )
     except Exception as exc:
         logger.warning(f"Failed to patch YTMusic.get_library_playlists: {exc}")
-
-
-# Patch the class method globally so any YTMusic instance uses the fallback.
-_patch_yt_music_library_playlists()
 
 
 class YouTubeAuthManager:
