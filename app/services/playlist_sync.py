@@ -106,7 +106,7 @@ class PlaylistSyncService:
                 thumbnails = details.get("thumbnails") or details.get("thumbnail")
                 thumb_url: Optional[str] = None
                 if isinstance(thumbnails, list):
-                    from services.thumbnail import ThumbnailService
+                    from utils.thumbnail import ThumbnailService
                     thumb_url = ThumbnailService.get_smallest_thumbnail(thumbnails)
                 elif isinstance(thumbnails, str):
                     thumb_url = thumbnails

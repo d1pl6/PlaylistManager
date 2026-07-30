@@ -6,7 +6,7 @@ Replaces the three duplicate thumbnail implementations:
   - PlaylistService.fetch_thumbnail / get_smallest_thumbnail
   - MainWindow._set_playlist_cover (inline threading + download)
 
-Only the ThumbnailService should import requests and PIL for thumbnail
+Only this module should import ``requests`` and ``PIL`` for thumbnail
 work, keeping the integration and UI layers free of those dependencies.
 """
 
@@ -47,7 +47,7 @@ class ThumbnailService:
     ) -> Optional[ImageTk.PhotoImage]:
         """Download, resize and return a PhotoImage.
 
-        Handles HTTP → HTTPS upgrade, network errors, and invalid image
+        Handles HTTP to HTTPS upgrade, network errors, and invalid image
         data.  Returns *None* on any failure so callers don't need to
         catch exceptions.
         """

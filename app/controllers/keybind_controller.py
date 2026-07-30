@@ -1,152 +1,37 @@
 """
-Keybind controller — hotkey recording, matching, and dispatch.
+Keybind controller — hotkey recording and flow dispatch.
 
-Modified for Issue #3: the controller no longer directly manipulates
-tkinter widgets.  Instead, callers register a ``KeybindCallbacks``
-instance that exposes typed UI-update methods.
+Responsibilities (after the A4 split):
+  1. Key event processing (recording state machine)
+  2. Credential management / flow invalidation
+  3. Flow controller lazy-initialisation and dispatch
+  4. Listener lifecycle (global hotkey vs local tk bindings)
+
+Delegates hotkey storage/matching to :class:`HotkeyRegistry` and key
+normalisation to :mod:`utils.key_mapping`.
 """
 
 import threading
 import logging
-from configparser import ConfigParser
 from typing import Callable, Dict, Optional, Set
 
 from pynput import keyboard
 from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
-from utils.config import ensure_settings_file, SETTINGS_PATH
-
+from utils.key_mapping import (
+    MODIFIER_NAMES,
+    normalize_key,
+    normalize_tk_key,
+    read_global_listener_setting,
+)
+from controllers.hotkey_registry import KeybindCallbacks, HotkeyRegistry
 from services.song_manager import SongManager
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Callback interface (replaces raw labels_dict)
-# ---------------------------------------------------------------------------
-
-
-class KeybindCallbacks:
-    """Thin callback container that replaces direct widget access.
-
-    A ``KeybindCallbacks`` instance is registered once per playlist
-    and is called from worker threads — the implementation should
-    route to the main thread (e.g. via ``root.after()``).
-    """
-
-    def __init__(
-        self,
-        on_status: Callable[[str, str], None] = lambda text, bg: None,
-        on_song_info: Callable[[str, str], None] = lambda artist, name: None,
-        on_entry_state: Callable[[str], None] = lambda state: None,
-        on_reset: Callable[[str], None] = lambda entry_state: None,
-    ):
-        """
-        Args:
-            on_status: Called with (text, background_colour) to update status.
-            on_song_info: Called with (artist_text, title_text).
-            on_entry_state: Called with the new state for the keybind entry.
-            on_reset: Called with entry_state when all labels should be cleared.
-        """
-        self.on_status = on_status
-        self.on_song_info = on_song_info
-        self.on_entry_state = on_entry_state
-        self.on_reset = on_reset
-
-
-# ---------------------------------------------------------------------------
-# Key helpers
-# ---------------------------------------------------------------------------
-
-_KEY_MAP = {
-    keyboard.Key.ctrl_l: "ctrl",
-    keyboard.Key.ctrl_r: "ctrl",
-    keyboard.Key.alt_l: "alt",
-    keyboard.Key.alt_r: "alt",
-    # Note: AltGr deliberately omitted — it is a distinct modifier on European
-    # layouts and should NOT be conflated with Alt. Keep the generic "alt" entry
-    # only for actual Alt keys; AltGr falls through to key.name = "alt_gr".
-    keyboard.Key.shift: "shift",
-    keyboard.Key.shift_l: "shift",
-    keyboard.Key.shift_r: "shift",
-    keyboard.Key.cmd: "cmd",
-    keyboard.Key.cmd_l: "cmd",
-    keyboard.Key.cmd_r: "cmd",
-}
-
-_TK_KEY_MAP = {
-    "Control_L": "ctrl",
-    "Control_R": "ctrl",
-    "Control": "ctrl",
-    "Alt_L": "alt",
-    "Alt_R": "alt",
-    "Alt": "alt",
-    "Alt_gr": "alt",
-    "Shift_L": "shift",
-    "Shift_R": "shift",
-    "Shift": "shift",
-    "Super_L": "cmd",
-    "Super_R": "cmd",
-    "Escape": "escape",
-}
-
-_MODIFIER_NAMES = {"ctrl", "alt", "shift", "cmd"}
-
-
-def _normalize_key(key) -> Optional[str]:
-    if key in _KEY_MAP:
-        return _KEY_MAP[key]
-    if isinstance(key, keyboard.KeyCode) and key.char:
-        return key.char.lower()
-    if not isinstance(key, keyboard.KeyCode) and hasattr(key, "name"):
-        return key.name
-    return None
-
-
-def _normalize_tk_key(keysym: str) -> Optional[str]:
-    if keysym in _TK_KEY_MAP:
-        return _TK_KEY_MAP[keysym]
-    if len(keysym) == 1:
-        return keysym.lower()
-    if keysym.startswith("F") and keysym[1:].isdigit():
-        return keysym.lower()
-    if keysym in (
-        "space",
-        "Return",
-        "BackSpace",
-        "Tab",
-        "Delete",
-        "Home",
-        "End",
-        "Left",
-        "Right",
-        "Up",
-        "Down",
-        "Prior",
-        "Next",
-    ):
-        return keysym.lower()
-    return None
-
-
-def _parse_hotkey(hotkey_str: str) -> Set[str]:
-    return {k.strip().lower() for k in hotkey_str.split("+") if k.strip()}
-
-
-def _read_global_listener_setting() -> bool:
-    ensure_settings_file()
-    cfg = ConfigParser()
-    try:
-        cfg.read(str(SETTINGS_PATH))
-        return cfg.getboolean("global_listener", "is_true", fallback=True)
-    except Exception:
-        return True
-
-
-# ---------------------------------------------------------------------------
-# Controller
-# ---------------------------------------------------------------------------
-
 
 class KeybindController:
+    """Orchestrates hotkey listeners, recording, and flow dispatch."""
+
     def __init__(self, yt_client, spotify_integration=None):
         self.yt = yt_client
         self.spotify_integration = spotify_integration
@@ -158,20 +43,23 @@ class KeybindController:
         self._spotify_flow = None
         self._url_receiver = None
 
-        self._hotkey_map: Dict[str, Dict] = {}
-        self._hotkey_lock = threading.Lock()
+        # Registry
+        self.registry = HotkeyRegistry()
+
+        # Listener / key state
         self._pressed_keys: Set[str] = set()
         self._pressed_keys_lock = threading.Lock()
         self._listener: Optional[keyboard.Listener] = None
         self._listener_lock = threading.Lock()
         self._root = None
 
+        # Recording state machine
         self._recording = False
         self._last_recording_combo = ""
         self._recording_callback: Optional[Callable[[str], None]] = None
         self._recording_stop_callback: Optional[Callable[[], None]] = None
 
-        self._global_mode = _read_global_listener_setting()
+        self._global_mode = read_global_listener_setting()
 
     # ------------------------------------------------------------------
     # Credentials
@@ -283,7 +171,7 @@ class KeybindController:
     # ------------------------------------------------------------------
 
     def _on_global_press(self, key):
-        name = _normalize_key(key)
+        name = normalize_key(key)
         if name is None:
             return
         with self._pressed_keys_lock:
@@ -291,14 +179,14 @@ class KeybindController:
         self._handle_press(name)
 
     def _on_global_release(self, key):
-        name = _normalize_key(key)
+        name = normalize_key(key)
         if name is None:
             return
         with self._pressed_keys_lock:
             self._pressed_keys.discard(name)
 
     def _on_tk_press(self, event):
-        name = _normalize_tk_key(event.keysym)
+        name = normalize_tk_key(event.keysym)
         if name is None:
             return
         with self._pressed_keys_lock:
@@ -308,7 +196,7 @@ class KeybindController:
             return "break"
 
     def _on_tk_release(self, event):
-        name = _normalize_tk_key(event.keysym)
+        name = normalize_tk_key(event.keysym)
         if name is None:
             return
         with self._pressed_keys_lock:
@@ -332,7 +220,7 @@ class KeybindController:
                     self._root.after(0, self._recording_stop_callback)
                 self._recording_stop_callback = None
                 return
-            if name not in _MODIFIER_NAMES:
+            if name not in MODIFIER_NAMES:
                 combo = self._build_combo()
                 self._last_recording_combo = combo
                 if self._recording_callback and self._root:
@@ -343,10 +231,8 @@ class KeybindController:
     def _build_combo(self) -> str:
         with self._pressed_keys_lock:
             snapshot = set(self._pressed_keys)
-        modifiers = sorted(k for k in snapshot if k in _MODIFIER_NAMES)
-        non_modifiers = sorted(
-            k for k in snapshot if k not in _MODIFIER_NAMES
-        )
+        modifiers = sorted(k for k in snapshot if k in MODIFIER_NAMES)
+        non_modifiers = sorted(k for k in snapshot if k not in MODIFIER_NAMES)
         return "+".join(modifiers + non_modifiers)
 
     def start_recording(
@@ -369,7 +255,7 @@ class KeybindController:
         return combo
 
     # ------------------------------------------------------------------
-    # Hotkey registry
+    # Hotkey delegation
     # ------------------------------------------------------------------
 
     def register_hotkey(
@@ -379,69 +265,23 @@ class KeybindController:
         callbacks: KeybindCallbacks,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
     ):
-        """Register a hotkey + callbacks for a playlist.
-
-        Args:
-            playlist_name: Name of the playlist.
-            hotkey: Combo string (e.g. ``"ctrl+shift+a"``).
-            callbacks: :class:`KeybindCallbacks` for UI updates.
-            platform: Platform identifier.
-        """
-        self.unregister_hotkey(playlist_name)
-        if hotkey:
-            with self._hotkey_lock:
-                self._hotkey_map[hotkey] = {
-                    "playlist_name": playlist_name,
-                    "callbacks": callbacks,
-                    "platform": platform,
-                    "_parsed": _parse_hotkey(hotkey),
-                }
-            logger.info(
-                f"Registered hotkey '{hotkey}' for playlist '{playlist_name}' "
-                f"(platform={platform})"
-            )
+        self.registry.register(playlist_name, hotkey, callbacks, platform)
 
     def unregister_hotkey(self, playlist_name: str):
-        with self._hotkey_lock:
-            to_remove = [
-                k
-                for k, v in self._hotkey_map.items()
-                if v["playlist_name"] == playlist_name
-            ]
-            for k in to_remove:
-                del self._hotkey_map[k]
-                logger.info(
-                    f"Unregistered hotkey '{k}' for playlist '{playlist_name}'"
-                )
-
-    # ------------------------------------------------------------------
-    # Hotkey matching
-    # ------------------------------------------------------------------
+        self.registry.unregister(playlist_name)
 
     def _check_hotkeys(self):
-        with self._hotkey_lock:
-            snapshot_map = dict(self._hotkey_map)
         with self._pressed_keys_lock:
-            snapshot_keys = frozenset(self._pressed_keys)
-
-        best_match = None  # (specificity, hotkey_str, info)
-        for hotkey_str, info in snapshot_map.items():
-            expected = info["_parsed"]
-            if not expected:
-                continue
-            if expected == snapshot_keys:
-                specificity = len(expected)
-                if best_match is None or specificity > best_match[0]:
-                    best_match = (specificity, hotkey_str, info)
-
-        if best_match is not None:
-            _, hotkey_str, info = best_match
+            pressed = frozenset(self._pressed_keys)
+        match = self.registry.match(pressed)
+        if match is not None:
+            _, hotkey_str, info = match
             playlist_name = info["playlist_name"]
             callbacks = info["callbacks"]
             platform = info.get("platform", PLATFORM_YOUTUBE_MUSIC)
             if self._root:
                 self._root.after(
-                    0, self.handle_keybind, playlist_name, callbacks, platform
+                    0, self.handle_keybind, playlist_name, callbacks, platform,
                 )
 
     # ------------------------------------------------------------------
@@ -564,7 +404,7 @@ class KeybindController:
                 logger.error("Spotify not authenticated.")
                 return False
 
-            from services.keybind_flow import SpotifyFlowController
+            from controllers.keybind_flow import SpotifyFlowController
 
             self._spotify_flow = SpotifyFlowController(
                 self.spotify_integration, self.song_manager
@@ -585,7 +425,7 @@ class KeybindController:
             from integrations.music_youtube.music_youtube_receiver import (
                 URLReceiverManager,
             )
-            from services.keybind_flow import KeybindFlowController
+            from controllers.keybind_flow import KeybindFlowController
 
             self._url_receiver = URLReceiverManager()
             self._keybind_flow = KeybindFlowController(

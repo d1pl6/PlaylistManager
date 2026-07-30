@@ -2,7 +2,7 @@ import logging
 import tkinter as tk
 from tkinter import ttk
 
-from services.thumbnail import ThumbnailService
+from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
 

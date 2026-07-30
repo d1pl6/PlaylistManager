@@ -13,13 +13,13 @@ from pathlib import Path
 from tkinter import ttk, messagebox
 
 from constants import PLATFORM_YOUTUBE_MUSIC
-from controllers.keybind_controller import KeybindCallbacks
+from controllers.hotkey_registry import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
 from services.playlist_sync import PlaylistSyncService
 from services.song_manager import SongManager
-from services.thumbnail import ThumbnailService
+from utils.thumbnail import ThumbnailService
 from ui.login_ui import show_login_dialog
 from ui.playlist_dialog import PlaylistDialog
 from ui.settings_ui import show_settings_dialog

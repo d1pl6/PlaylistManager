@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import logging
+import threading
 from typing import Dict, List, Optional, Callable
 from constants import PLATFORM_YOUTUBE_MUSIC, PLATFORM_SPOTIFY
 from services.database import DatabaseManager
@@ -151,15 +152,26 @@ def _normalize_artists(artists: List[str]) -> str:
 # ── SongManager ────────────────────────────────────────────────────────────
 
 class SongManager:
-    """Manages song CRUD operations for playlists."""
+    """Manages song CRUD operations for playlists.
+
+    Thread-safe singleton — the single instance (and its ``db_manager``)
+    are created once under a class-level lock so that concurrent calls
+    from background sync threads never produce a second ``DatabaseManager``.
+    """
 
     _instance = None
+    _instance_lock = threading.Lock()
 
     def __new__(cls):
         if cls._instance is None:
-            inst = super().__new__(cls)
-            inst.db_manager = DatabaseManager()
-            cls._instance = inst
+            cls._instance_lock.acquire()
+            try:
+                if cls._instance is None:          # double-check after acquire
+                    inst = super().__new__(cls)
+                    inst.db_manager = DatabaseManager()
+                    cls._instance = inst
+            finally:
+                cls._instance_lock.release()
         return cls._instance
 
     def __init__(self):
