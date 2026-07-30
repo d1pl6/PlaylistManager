@@ -9,6 +9,7 @@ from ui.login_ui import show_login_dialog
 from ui.settings_ui import show_settings_dialog
 from services.song_manager import SongManager
 from services.database import DatabaseManager
+from services.playlist_store import PlaylistStore
 from configparser import ConfigParser
 from utils.config import (
     ensure_settings_file,
@@ -39,14 +40,12 @@ class MainWindow:
         *,
         integrations,
         playlist_service,
-        playlist_store,
         keybind_controller,
         app_controller,
     ):
         self.root = root
         self.integrations = integrations
         self.ps = playlist_service
-        self.store = playlist_store
         self.kc = keybind_controller
         self.ac = app_controller
 
@@ -256,7 +255,7 @@ class MainWindow:
             self._show_integration_error()
             return
 
-        existing_names = self.store.get_existing_names(platform=integration.id)
+        existing_names = PlaylistStore.get_existing_names(platform=integration.id)
         available = [p for p in playlists if p.get("title") not in existing_names]
 
         dialog = PlaylistDialog(
@@ -280,7 +279,7 @@ class MainWindow:
     def _on_playlist_selected(
         self, playlist_name, platform="youtube_music", playlist_id="", thumb_url=None
     ):
-        self.store.add_playlist(
+        PlaylistStore.add_playlist(
             playlist_name,
             platform=platform,
             playlist_id=playlist_id,
@@ -411,7 +410,7 @@ class MainWindow:
 
     def setup(self):
         self.kc.set_root(self.root)
-        playlists = self.store.load_playlists()
+        playlists = PlaylistStore.load_playlists()
         if playlists:
             self.create_main_frame(len(playlists))
             for i, playlist in enumerate(playlists):
@@ -612,7 +611,7 @@ class MainWindow:
                 self.frame_img_refs[frame].clear()
                 del self.frame_img_refs[frame]
 
-            self.store.delete_playlist(playlist_name, platform=platform)
+            PlaylistStore.delete_playlist(playlist_name, platform=platform)
             # Also delete the per-platform database file for this playlist
             try:
                 db_path = DatabaseManager.get_playlist_db_path_static(playlist_name, platform)
@@ -694,7 +693,7 @@ class MainWindow:
 
         if combo:
             entry.insert(0, combo)
-            self.store.update_keybind(playlist_name, platform, combo)
+            PlaylistStore.update_keybind(playlist_name, platform, combo)
             self.kc.register_hotkey(
                 playlist_name,
                 combo,
@@ -702,7 +701,7 @@ class MainWindow:
                 platform=platform,
             )
         else:
-            self.store.update_keybind(playlist_name, platform, "")
+            PlaylistStore.update_keybind(playlist_name, platform, "")
             self.kc.unregister_hotkey(playlist_name)
 
     def _on_root_click(self, event):
@@ -716,7 +715,7 @@ class MainWindow:
             return
         playlist_name = self.playlist_name_labels[frame_idx].cget("text")
         platform = self.frame_platforms[frame_idx]
-        playlist_data = self.store.find_playlist(playlist_name, platform)
+        playlist_data = PlaylistStore.find_playlist(playlist_name, platform)
         playlist_id = playlist_data.get("playlist_id", "") if playlist_data else ""
 
         if not playlist_id:
@@ -755,7 +754,7 @@ class MainWindow:
                 inserted = sm.add_songs_bulk(playlist_name, tracks, platform=platform)
 
                 if thumb_url:
-                    self.store.update_thumbnail(playlist_name, platform, thumb_url)
+                    PlaylistStore.update_thumbnail(playlist_name, platform, thumb_url)
                 self.root.after(
                     0, self._on_reload_done, playlist_name, inserted, f"{inserted} new", thumb_url
                 )

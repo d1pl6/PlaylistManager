@@ -3,6 +3,7 @@ import logging
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 from services.song_manager import SongManager
 from integrations.music_youtube.music_youtube_receiver import URLReceiverManager
+import re
 
 if TYPE_CHECKING:
     from ytmusicapi import YTMusic
@@ -97,7 +98,18 @@ class KeybindFlowController:
                 )
                 return
 
-            # Step 6: Add to local database
+            # Step 6: Add to YouTube Music playlist first (platform API)
+            on_status("Sync")
+            playlist_id = self._get_playlist_id(playlist_name)
+            logger.debug(f"YouTube Music playlist ID: {playlist_id}")
+            if playlist_id:
+                self.yt_music.add_playlist_items(playlist_id, [video_id])
+                logger.info(f"Added {video_id} to YouTube Music playlist {playlist_id}")
+            else:
+                logger.warning(f"Could not find YouTube Music playlist '{playlist_name}'")
+
+            # Step 7: Then add to local database (so platform failure doesn't
+            # leave us with a stale local entry that requires manual cleanup)
             on_status("Add")
             logger.debug("Adding song to local database")
             song_id = self.song_manager.add_song(
@@ -109,16 +121,6 @@ class KeybindFlowController:
                 song_data.get("thumbnail"),
             )
             logger.debug(f"Added to local DB with ID: {song_id}")
-
-            # Step 7: Add to YouTube Music playlist
-            on_status("Sync")
-            playlist_id = self._get_playlist_id(playlist_name)
-            logger.debug(f"YouTube Music playlist ID: {playlist_id}")
-            if playlist_id:
-                self.yt_music.add_playlist_items(playlist_id, [video_id])
-                logger.info(f"Added {video_id} to YouTube Music playlist {playlist_id}")
-            else:
-                logger.warning(f"Could not find YouTube Music playlist '{playlist_name}'")
 
             on_success(
                 {
@@ -341,7 +343,7 @@ def _strip_channel_suffix(name: str) -> str:
     Handles patterns like "Taylor Swift — Topic", "Artist Name - Topic",
     "Various Artists — Topic" etc.
     """
-    import re
+
     # Strip " — Topic", " - Topic", "– Topic" and similar variants
     cleaned = re.sub(r"\s*[—–-]\s*Topic\s*$", "", name, flags=re.IGNORECASE).strip()
     return cleaned
@@ -355,6 +357,26 @@ class SpotifyFlowController:
     ):
         self.spotify_integration = spotify_integration
         self.song_manager = song_manager
+        self._playlist_id_cache: Dict[str, str] = {}
+
+    def _invalidate_playlist_cache(self) -> None:
+        """Clear the playlist ID cache (e.g. after re-auth)."""
+        self._playlist_id_cache.clear()
+
+    def _get_playlist_id(self, playlist_name: str) -> Optional[str]:
+        """Get Spotify playlist ID by name, with caching."""
+        cached = self._playlist_id_cache.get(playlist_name)
+        if cached is not None:
+            return cached
+
+        try:
+            pid = self.spotify_integration.get_playlist_id_by_name(playlist_name)
+            if pid:
+                self._playlist_id_cache[playlist_name] = pid
+            return pid
+        except Exception as e:
+            logger.error(f"Failed to get Spotify playlist ID for '{playlist_name}': {e}")
+            return None
 
     def execute_flow(
         self,
@@ -393,18 +415,21 @@ class SpotifyFlowController:
                 })
                 return
 
-            on_status("Add")
-            song_id = self.song_manager.add_song_by_info(
-                playlist_name, title, artists, duration, track_id, thumbnail
-            )
-
+            # Step 1: Add to Spotify playlist first (platform API)
             on_status("Sync")
-            playlist_id = self.spotify_integration.get_playlist_id_by_name(playlist_name)
+            playlist_id = self._get_playlist_id(playlist_name)
             if playlist_id:
                 self.spotify_integration.add_tracks_to_playlist(playlist_id, [track_id])
                 logger.info(f"Added {track_id} to Spotify playlist {playlist_id}")
             else:
                 logger.warning(f"Could not find Spotify playlist '{playlist_name}'")
+
+            # Step 2: Then add to local database (platform failure won't
+            # leave a stale local entry behind)
+            on_status("Add")
+            song_id = self.song_manager.add_song_by_info(
+                playlist_name, title, artists, duration, track_id, thumbnail
+            )
 
             on_success({
                 "status": "added",

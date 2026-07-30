@@ -55,7 +55,6 @@ class App:
         sp_integration.spotify_api = sp_api
         self.integrations.register(sp_integration)
 
-        playlist_store = PlaylistStore()
         playlist_service = PlaylistService(yt_client)
         keybind_controller = KeybindController(yt_client, spotify_integration=sp_integration)
         app_controller = AppController(self)
@@ -64,7 +63,6 @@ class App:
             self.root,
             integrations=self.integrations,
             playlist_service=playlist_service,
-            playlist_store=playlist_store,
             keybind_controller=keybind_controller,
             app_controller=app_controller,
         )

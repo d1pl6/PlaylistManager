@@ -17,7 +17,9 @@ _KEY_MAP = {
     keyboard.Key.ctrl_r: "ctrl",
     keyboard.Key.alt_l: "alt",
     keyboard.Key.alt_r: "alt",
-    keyboard.Key.alt_gr: "alt",
+    # Note: AltGr deliberately omitted — it is a distinct modifier on European
+    # layouts and should NOT be conflated with Alt. Keep the generic "alt" entry
+    # only for actual Alt keys; AltGr falls through to key.name = "alt_gr".
     keyboard.Key.shift: "shift",
     keyboard.Key.shift_l: "shift",
     keyboard.Key.shift_r: "shift",
@@ -126,7 +128,11 @@ class KeybindController:
         Called from the UI thread after re-authentication. The flow controllers
         are set to None so they will be lazily re-created on the next keybind
         trigger with the new credentials.
+
+        The old URL receiver is stopped to free port 5000 before a new
+        receiver is created on the next keybind.
         """
+        self.stop_receiver()
         if yt_client is not None:
             self.yt = yt_client
         if spotify_integration is not None:
@@ -280,18 +286,32 @@ class KeybindController:
         with self._hotkey_lock:
             snapshot_map = dict(self._hotkey_map)
         with self._pressed_keys_lock:
-            snapshot_keys = set(self._pressed_keys)
+            snapshot_keys = frozenset(self._pressed_keys)
+
+        best_match = None  # (specificity, hotkey_str, info)
         for hotkey_str, info in snapshot_map.items():
             expected = info["_parsed"]
-            if expected and expected.issubset(snapshot_keys):
-                playlist_name = info["playlist_name"]
-                labels_dict = info["labels_dict"]
-                platform = info.get("platform", "youtube_music")
-                if self._root:
-                    self._root.after(
-                        0, self.handle_keybind, playlist_name, labels_dict, platform
-                    )
-                break
+            if not expected:
+                continue
+            # Exact set match — only trigger when the pressed keys are
+            # *exactly* the expected set.  This prevents:
+            #   - extra modifiers shadowing a different hotkey  (bug #3)
+            #   - a less-specific combo triggering when a more-specific
+            #     one was intended                           (bug #10)
+            if expected == snapshot_keys:
+                specificity = len(expected)
+                if best_match is None or specificity > best_match[0]:
+                    best_match = (specificity, hotkey_str, info)
+
+        if best_match is not None:
+            _, hotkey_str, info = best_match
+            playlist_name = info["playlist_name"]
+            labels_dict = info["labels_dict"]
+            platform = info.get("platform", "youtube_music")
+            if self._root:
+                self._root.after(
+                    0, self.handle_keybind, playlist_name, labels_dict, platform
+                )
 
     def start_recording(self, callback: Callable[[str], None], on_stop: Callable[[], None] | None = None):
         self._recording = True
@@ -339,6 +359,23 @@ class KeybindController:
                 del self._hotkey_map[k]
                 logger.info(f"Unregistered hotkey '{k}' for playlist '{playlist_name}'")
 
+    def _reset_ui(
+        self,
+        playlist_keybind_entry,
+        log_status_label,
+        log_artist_label,
+        log_name_label,
+        entry_state: str,
+    ):
+        """Restore UI state after a flow completes or fails."""
+        try:
+            playlist_keybind_entry.config(state=entry_state)
+            log_status_label.config(text="", background="SystemButtonFace")
+            log_artist_label.config(text="")
+            log_name_label.config(text="")
+        except Exception as e:
+            logger.warning(f"Error resetting UI: {e}")
+
     def handle_keybind(self, playlist_name, labels_dict, platform="youtube_music"):
         log_status_label = labels_dict["status"]
         log_artist_label = labels_dict["artist"]
@@ -350,12 +387,20 @@ class KeybindController:
             logger.warning("Flow already in progress, ignoring keybind")
             return
 
+        # Save the original entry state so we can restore it on every exit path.
+        _entry_original_state = playlist_keybind_entry.cget("state")
         playlist_keybind_entry.config(state="readonly")
         log_status_label.config(text="Loading...", background="#4A5A00")
+        log_artist_label.config(text="")
+        log_name_label.config(text="")
 
         if not self._ensure_initialized(
             platform, log_status_label, playlist_keybind_entry
         ):
+            self._reset_ui(
+                playlist_keybind_entry, log_status_label,
+                log_artist_label, log_name_label, _entry_original_state,
+            )
             return
 
         def on_status(msg):
@@ -368,6 +413,10 @@ class KeybindController:
 
         def on_error(error_msg):
             def _apply():
+                self._reset_ui(
+                    playlist_keybind_entry, log_status_label,
+                    log_artist_label, log_name_label, _entry_original_state,
+                )
                 log_status_label.config(text="Error", background="#A00000")
 
             logger.error(f"Keybind flow error: {error_msg}")
@@ -394,7 +443,7 @@ class KeybindController:
                     log_artist_label.config(text=artists_str[:8])
                     log_name_label.config(text=song_data.get("title", "")[:18])
 
-                playlist_keybind_entry.config(state="readonly")
+                playlist_keybind_entry.config(state=_entry_original_state)
 
             if self._root is not None:
                 self._root.after(0, _apply)
