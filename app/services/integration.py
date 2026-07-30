@@ -1,10 +1,7 @@
-import io
 import logging
 from typing import Dict, List, Optional
 
-import requests
-from PIL import Image, ImageTk
-
+from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from integrations.music_youtube.music_youtube import youtube_auth
 from integrations.music_spotify.music_spotify import spotify_auth
 
@@ -30,31 +27,6 @@ class BaseIntegration:
     def get_playlist_details(self, playlist_id: str, limit: int = 1) -> dict:
         raise NotImplementedError
 
-    @staticmethod
-    def get_smallest_thumbnail(thumbnails: Optional[List[Dict]]) -> Optional[str]:
-        if not thumbnails:
-            return None
-        return min(
-            thumbnails, key=lambda t: t.get("width") or t.get("height", 0)
-        ).get("url")
-
-    @staticmethod
-    def fetch_thumbnail(thumb_url: Optional[str], size=(40, 40)) -> Optional[object]:
-        if not thumb_url:
-            return None
-        if thumb_url.lower().startswith("http://"):
-            thumb_url = "https://" + thumb_url[7:]
-        if not thumb_url.lower().startswith("https://"):
-            logger.warning(f"Rejected non-HTTPS thumbnail URL: {thumb_url}")
-            return None
-        try:
-            resp = requests.get(thumb_url, timeout=10)
-            img = Image.open(io.BytesIO(resp.content)).resize(size)
-            return ImageTk.PhotoImage(img)
-        except Exception as e:
-            logger.error(f"Failed to fetch thumbnail: {e}")
-            return None
-
 
 class IntegrationRegistry:
     def __init__(self):
@@ -76,7 +48,7 @@ class IntegrationRegistry:
 
 
 class YouTubeMusicIntegration(BaseIntegration):
-    id = "youtube_music"
+    id = PLATFORM_YOUTUBE_MUSIC
     display_name = "YouTube Music"
 
     def __init__(self):
@@ -144,7 +116,7 @@ class YouTubeMusicIntegration(BaseIntegration):
 
 
 class SpotifyIntegration(BaseIntegration):
-    id = "spotify"
+    id = PLATFORM_SPOTIFY
     display_name = "Spotify"
 
     def __init__(self):

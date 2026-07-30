@@ -1,20 +1,24 @@
 import logging
 import tkinter as tk
-from tkinter import messagebox
 from configparser import ConfigParser
 from pathlib import Path
+from tkinter import messagebox
 
-from ui.main_window import MainWindow
-from ui.updater_ui import show_update_dialog
+from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from controllers.app_controller import AppController
 from controllers.keybind_controller import KeybindController
-from services.playlist_store import PlaylistStore
-from services.playlist_service import PlaylistService
-from integrations.music_youtube.music_youtube import youtube_auth
 from integrations.music_spotify.music_spotify import spotify_auth
-from services.integration import IntegrationRegistry, YouTubeMusicIntegration, SpotifyIntegration
-from utils import updater, center_window
-from utils.config import ensure_settings_file, SETTINGS_PATH
+from integrations.music_youtube.music_youtube import youtube_auth
+from services.integration import (
+    IntegrationRegistry,
+    SpotifyIntegration,
+    YouTubeMusicIntegration,
+)
+from services.playlist_store import PlaylistStore
+from ui.main_window import MainWindow
+from ui.updater_ui import show_update_dialog
+from utils import center_window, updater
+from utils.config import SETTINGS_PATH, ensure_settings_file
 from _version import __version__
 
 logger = logging.getLogger(__name__)
@@ -55,14 +59,12 @@ class App:
         sp_integration.spotify_api = sp_api
         self.integrations.register(sp_integration)
 
-        playlist_service = PlaylistService(yt_client)
         keybind_controller = KeybindController(yt_client, spotify_integration=sp_integration)
         app_controller = AppController(self)
 
         self.main_window = MainWindow(
             self.root,
             integrations=self.integrations,
-            playlist_service=playlist_service,
             keybind_controller=keybind_controller,
             app_controller=app_controller,
         )
@@ -84,14 +86,13 @@ class App:
         yt_client = None
         spotify_integration = None
 
-        yt = self.integrations.get("youtube_music")
+        yt = self.integrations.get(PLATFORM_YOUTUBE_MUSIC)
         if isinstance(yt, YouTubeMusicIntegration):
             yt_client = yt.yt_client
-        sp = self.integrations.get("spotify")
+        sp = self.integrations.get(PLATFORM_SPOTIFY)
         if isinstance(sp, SpotifyIntegration):
             spotify_integration = sp
 
-        self.main_window.ps.yt = yt_client
         self.main_window.kc.update_credentials(
             yt_client=yt_client, spotify_integration=spotify_integration
         )

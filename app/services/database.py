@@ -2,7 +2,9 @@ import sqlite3
 import logging
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator
+
+from constants import PLATFORM_YOUTUBE_MUSIC
 
 logger = logging.getLogger(__name__)
 
@@ -11,54 +13,36 @@ class DatabaseManager:
     """Manages SQLite connections for per-playlist databases."""
 
     def __init__(self):
-        self.db_dir = self._get_db_directory()
-        self.db_dir.mkdir(parents=True, exist_ok=True)
+        self._base_dir = self._get_db_directory(PLATFORM_YOUTUBE_MUSIC)
 
     @staticmethod
-    def _get_db_directory(platform: str = "platform") -> Path:
+    def _get_db_directory(platform: str) -> Path:
         """Get the database directory path for a given platform."""
         return Path(__file__).resolve().parents[2] / "db" / platform
 
     @staticmethod
-    def get_playlist_db_path_static(playlist_name: str, platform: str = "platform") -> Path:
+    def get_playlist_db_path_static(playlist_name: str, platform: str) -> Path:
         db_dir = DatabaseManager._get_db_directory(platform)
         safe_name = "".join(
             c if c.isalnum() or c in ("-", "_") else "_" for c in playlist_name
         )
         return db_dir / f"{safe_name}.db"
 
-    def get_playlist_db_path(self, playlist_name: str, platform: str | None = None) -> Path:
-        """Get the database file path for a playlist. If `platform` is None,
-        the method will attempt to look up the playlist's platform from the
-        registry before falling back to a default.
+    def get_playlist_db_path(self, playlist_name: str, platform: str = PLATFORM_YOUTUBE_MUSIC) -> Path:
+        """Get the database file path for a playlist.
+
+        *platform* is required — callers always know which platform the
+        playlist belongs to.  The old fallback-to-PlaylistStore lookup
+        (which created a circular dependency) has been removed.
         """
-        # Sanitize playlist name for filesystem
         safe_name = "".join(
             c if c.isalnum() or c in ("-", "_") else "_" for c in playlist_name
         )
-        plat = platform
-        if plat is None:
-            try:
-                p = PlaylistStore.find_playlist(playlist_name)
-                if p and p.get("platform"):
-                    plat = p.get("platform")
-                else:
-                    plat = "youtube_music"
-                    logger.warning(
-                        "No platform found for '%s', falling back to '%s'",
-                        playlist_name, plat,
-                    )
-            except Exception:
-                plat = "youtube_music"
-                logger.warning(
-                    "Error looking up platform for '%s', falling back to '%s'",
-                    playlist_name, plat, exc_info=True,
-                )
-        db_dir = DatabaseManager._get_db_directory(plat)
+        db_dir = DatabaseManager._get_db_directory(platform)
         db_dir.mkdir(parents=True, exist_ok=True)
         return db_dir / f"{safe_name}.db"
 
-    def get_db_connection(self, playlist_name: str, platform: str | None = None) -> sqlite3.Connection:
+    def get_db_connection(self, playlist_name: str, platform: str = PLATFORM_YOUTUBE_MUSIC) -> sqlite3.Connection:
         """Get a connection to the playlist's database, creating it if needed."""
         db_path = self.get_playlist_db_path(playlist_name, platform=platform)
 
@@ -74,7 +58,7 @@ class DatabaseManager:
             raise
 
     @contextmanager
-    def get_connection(self, playlist_name: str, platform: str | None = None) -> Iterator[sqlite3.Connection]:
+    def get_connection(self, playlist_name: str, platform: str = PLATFORM_YOUTUBE_MUSIC) -> Iterator[sqlite3.Connection]:
         """Context manager: yields a connection and closes it on exit."""
         conn = None
         try:
@@ -130,12 +114,6 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"Error closing database connection: {e}")
 
-
-# Imported here (after the DatabaseManager class) rather than at the top
-# of the file so that playlist_store.py can import DatabaseManager without
-# cycling through an incomplete module.  When this line runs,
-# DatabaseManager is fully defined and safe to reference.
-from services.playlist_store import PlaylistStore
 
 def _set_pragmas(conn: sqlite3.Connection) -> None:
     """Set performance and safety pragmas on a connection.

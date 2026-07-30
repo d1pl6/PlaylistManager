@@ -1,23 +1,33 @@
-import tkinter as tk
-from tkinter import ttk, messagebox
-from pathlib import Path
+"""Main application window.
+
+Responsible for widget creation, layout, theme application, frame
+management, and thin hook methods that delegate business logic to
+controllers and services.
+"""
+
 import logging
 import threading
+import tkinter as tk
+from configparser import ConfigParser
+from pathlib import Path
+from tkinter import ttk, messagebox
 
-from ui.playlist_dialog import PlaylistDialog
-from ui.login_ui import show_login_dialog
-from ui.settings_ui import show_settings_dialog
-from services.song_manager import SongManager
+from constants import PLATFORM_YOUTUBE_MUSIC
+from controllers.playlist_controller import PlaylistController
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
-from configparser import ConfigParser
+from services.playlist_sync import PlaylistSyncService
+from services.song_manager import SongManager
+from services.thumbnail import ThumbnailService
+from ui.login_ui import show_login_dialog
+from ui.playlist_dialog import PlaylistDialog
+from ui.settings_ui import show_settings_dialog
+from utils import center_window, resize_window
 from utils.config import (
     ensure_settings_file,
     get_theme_value,
     SETTINGS_PATH as _settings_path,
 )
-from utils import resize_window
-
 
 logger = logging.getLogger(__name__)
 
@@ -39,26 +49,43 @@ class MainWindow:
         root,
         *,
         integrations,
-        playlist_service,
         keybind_controller,
         app_controller,
-    ):
+    ) -> None:
         self.root = root
         self.integrations = integrations
-        self.ps = playlist_service
         self.kc = keybind_controller
         self.ac = app_controller
 
-        self.frames = []
-        self.frame_positions = []
-        self.playlist_name_labels = []
-        self.frame_platforms = []
-        self.active_log_labels = {}
-        self.img_refs = []
-        self.frame_img_refs = {}
+        # ----- state ---------------------------------------------------
+        self.frames: list[tk.Frame] = []
+        self.frame_positions: list[tuple[int, int]] = []
+        self.playlist_name_labels: list[tk.Label] = []
+        self.frame_platforms: list[str] = []
+        self.active_log_labels: dict[int, dict] = {}
+        self.img_refs: list = []
+        self.frame_img_refs: dict = {}
         self._choose_open = False
-        self._recording_frame_idx = None
+        self._recording_frame_idx: int | None = None
 
+        # Cache the auto-resize setting at startup (Issue #11).
+        self._auto_resize_enabled = self._read_auto_resize_setting()
+
+        # ----- services ------------------------------------------------
+        self._sync_service = PlaylistSyncService(integrations)
+
+        # ----- controller ----------------------------------------------
+        self._playlist_controller = PlaylistController(
+            self.root,
+            integrations,
+            on_show_platform_picker=self._show_platform_picker,
+            on_show_playlist_dialog=self._show_playlist_dialog,
+            on_add_playlist_frame=self._on_add_playlist_frame,
+            on_dialog_cancel=self._on_dialog_cancel,
+            on_show_error=self._show_integration_error,
+        )
+
+        # ----- theme & layout ------------------------------------------
         style = ttk.Style(self.root)
         style.theme_use("clam")
 
@@ -91,7 +118,12 @@ class MainWindow:
         self.root.bind("<Button-1>", self._on_root_click, add="+")
         self.root.protocol("WM_DELETE_WINDOW", self.ac.quit_app)
 
-    def _theme_bg(self, section: str, option: str, default: str) -> str:
+    # ------------------------------------------------------------------
+    # Theme helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _theme_bg(section: str, option: str, default: str) -> str:
         try:
             return get_theme_value(section, option, default)
         except Exception:
@@ -103,8 +135,6 @@ class MainWindow:
         for widget in self.header_frame.winfo_children():
             if isinstance(widget, tk.Frame):
                 widget.configure(background=header_bg)
-            elif isinstance(widget, tk.Button):
-                pass
 
         for frame in self.frames:
             main_bg = self._theme_bg("frame_main", "background", "#404040")
@@ -115,7 +145,11 @@ class MainWindow:
                 except Exception:
                     pass
 
-    def _create_widgets(self):
+    # ------------------------------------------------------------------
+    # Widget creation
+    # ------------------------------------------------------------------
+
+    def _create_widgets(self) -> None:
         btn_header_bg = self._theme_bg("button_header", "background", "#6c6c6c")
         btn_header_abg = self._theme_bg("button_header", "activebackground", "#868686")
         btn_close_bg = self._theme_bg("button_close", "background", "#160000")
@@ -149,7 +183,7 @@ class MainWindow:
 
         self.close_btn = tk.Button(
             self.header_frame,
-            text="✕",
+            text="\u2715",
             cursor="hand2",
             command=self.ac.quit_app,
             background=btn_close_bg,
@@ -174,7 +208,6 @@ class MainWindow:
         )
 
         self.header_frame.grid(row=0, column=0, columnspan=2, sticky="nsew")
-
         self.header_frame.grid_columnconfigure(0, weight=1)
         self.header_frame.grid_columnconfigure(1, weight=0)
         self.header_frame.grid_columnconfigure(2, weight=1)
@@ -184,27 +217,20 @@ class MainWindow:
         self.close_btn.grid(row=0, column=2, sticky="e")
         self.btn_open_settings.grid(row=0, column=3, sticky="e", padx=4, pady=4)
 
-    def _open_playlist_dialog(self):
-        if self._choose_open:
-            return
+    # ------------------------------------------------------------------
+    # Playlist dialog workflow (delegates to PlaylistController)
+    # ------------------------------------------------------------------
 
-        active = self.integrations.get_active()
-        if not active:
-            self._show_integration_error()
-            return
+    def _open_playlist_dialog(self) -> None:
+        self._playlist_controller.open_playlist_dialog()
 
-        if len(active) == 1:
-            platform = next(iter(active))
-            self._fetch_and_show_playlists(active[platform])
-        else:
-            self._choose_platform(active)
-
-    def _choose_platform(self, active_integrations):
-        platforms = list(active_integrations.values())
+    def _show_platform_picker(self, platforms, callback) -> None:
+        """Create a Toplevel to pick a platform (Issue #1, #12)."""
         win = tk.Toplevel(self.root)
         win.title("Choose Platform")
         win.configure(background="#2A2A2A")
         win.transient(self.root)
+        center_window(win)  # Issue #12 — was never centred
         win.grab_set()
 
         tk.Label(
@@ -215,10 +241,6 @@ class MainWindow:
             font="Noto, 11",
         ).pack(pady=10, padx=20)
 
-        def pick(integration):
-            win.destroy()
-            self._fetch_and_show_playlists(integration)
-
         for integration in platforms:
             tk.Button(
                 win,
@@ -227,7 +249,7 @@ class MainWindow:
                 foreground="white",
                 font="Noto, 11",
                 width=30,
-                command=lambda i=integration: pick(i),
+                command=lambda i=integration: (win.destroy(), callback(i)),
             ).pack(pady=4, padx=20)
 
         tk.Button(
@@ -239,56 +261,38 @@ class MainWindow:
             command=win.destroy,
         ).pack(pady=10)
 
-    def _fetch_and_show_playlists(self, integration):
+    def _show_playlist_dialog(self, playlists, integration, on_select, on_cancel) -> None:
+        """Create the playlist selection dialog (Issue #1)."""
         self._choose_open = True
         self.btn_add_playlist.configure(state="disabled", image=self.loading_img)
         self._hide_main_content()
-        try:
-            playlists = integration.get_library_playlists()
-        except Exception as e:
-            logger.error(f"Failed to fetch playlists: {e}")
-            self._on_dialog_cancel()
-            self._show_integration_error()
-            return
-        if not playlists:
-            self._on_dialog_cancel()
-            self._show_integration_error()
-            return
-
-        existing_names = PlaylistStore.get_existing_names(platform=integration.id)
-        available = [p for p in playlists if p.get("title") not in existing_names]
 
         dialog = PlaylistDialog(
             self.root,
-            lambda name, pid, thumb_url: self._on_playlist_selected(name, integration.id, pid, thumb_url),
-            on_cancel=self._on_dialog_cancel,
+            lambda name, pid, thumb_url: on_select(
+                name, integration.id, pid, thumb_url
+            ),
+            on_cancel=on_cancel,
         )
-        dialog.show(available, integration)
+        dialog.show(playlists, integration)
 
-    def _show_integration_error(self):
-        messagebox.showerror(
-            "Integration Error",
-            INTEGRATION_ERROR_MSG,
-        )
+    def _show_integration_error(self) -> None:
+        messagebox.showerror("Integration Error", INTEGRATION_ERROR_MSG)
 
-    def _on_dialog_cancel(self):
+    def _on_dialog_cancel(self) -> None:
+        """Restore UI after playlist dialog is cancelled."""
         self._choose_open = False
         self.btn_add_playlist.configure(state="normal", image=self.add_playlist_img)
         self._show_main_content()
 
-    def _on_playlist_selected(
-        self, playlist_name, platform="youtube_music", playlist_id="", thumb_url=None
-    ):
-        PlaylistStore.add_playlist(
-            playlist_name,
-            platform=platform,
-            playlist_id=playlist_id,
-            thumbnail_url=thumb_url or "",
-        )
-        self._choose_open = False
+    def _on_add_playlist_frame(
+        self, playlist_name: str, platform: str, playlist_id: str, thumb_url: str | None
+    ) -> None:
+        """Create a new frame for the selected playlist (Issue #1)."""
         self.btn_add_playlist.configure(state="normal", image=self.add_playlist_img)
         self._show_main_content()
         self.create_main_frame(1)
+
         if self.playlist_name_labels:
             self.playlist_name_labels[-1].config(text=playlist_name)
             self.frame_platforms[-1] = platform
@@ -300,31 +304,28 @@ class MainWindow:
             if thumb_url:
                 self._set_playlist_cover(frame_idx, thumb_url)
 
-            self._import_playlist_tracks(
-                playlist_name, platform, playlist_id, frame_idx
-            )
+            self._import_playlist_tracks(playlist_name, platform, playlist_id, frame_idx)
 
-    def _set_playlist_cover(self, frame_idx, thumb_url):
+    # ------------------------------------------------------------------
+    # Thumbnail management
+    # ------------------------------------------------------------------
+
+    def _set_playlist_cover(self, frame_idx: int, thumb_url: str) -> None:
+        """Fetch and apply a playlist thumbnail in a background thread."""
         if frame_idx not in self.active_log_labels:
             return
         cover_label = self.active_log_labels[frame_idx].get("cover")
         if not cover_label:
             return
-        integration = self.integrations.get(self.frame_platforms[frame_idx])
-        if not integration:
-            return
 
-        def fetch():
-            try:
-                tk_img = integration.fetch_thumbnail(thumb_url, size=(64, 64))
-                if tk_img:
-                    self.root.after(0, lambda: self._apply_cover(frame_idx, tk_img))
-            except Exception as e:
-                logger.error(f"Failed to set playlist cover: {e}")
+        def fetch() -> None:
+            tk_img = ThumbnailService.fetch_thumbnail(thumb_url, size=(64, 64))
+            if tk_img:
+                self.root.after(0, lambda: self._apply_cover(frame_idx, tk_img))
 
         threading.Thread(target=fetch, daemon=True).start()
 
-    def _apply_cover(self, frame_idx, tk_img):
+    def _apply_cover(self, frame_idx: int, tk_img) -> None:
         if frame_idx not in self.active_log_labels:
             return
         cover_label = self.active_log_labels[frame_idx].get("cover")
@@ -333,7 +334,11 @@ class MainWindow:
         cover_label.configure(image=tk_img)
         self.frame_img_refs.setdefault(id(cover_label), []).append(tk_img)
 
-    def _update_log_labels_from_db(self, frame_idx, playlist_name):
+    # ------------------------------------------------------------------
+    # Database / log label helpers
+    # ------------------------------------------------------------------
+
+    def _update_log_labels_from_db(self, frame_idx: int, playlist_name: str) -> None:
         sm = SongManager()
         latest = sm.get_latest_song(playlist_name)
         if not latest:
@@ -346,49 +351,30 @@ class MainWindow:
         labels["artist"].config(text=artists_str[:8])
         labels["name"].config(text=latest.get("title", "")[:18])
 
-    def _import_playlist_tracks(self, playlist_name, platform, playlist_id, frame_idx):
-        if not playlist_id:
-            logger.warning(f"No playlist_id for '{playlist_name}', skipping import")
-            return
+    # ------------------------------------------------------------------
+    # Track import / reload (delegates to PlaylistSyncService)
+    # ------------------------------------------------------------------
 
-        integration = self.integrations.get(platform)
-        if integration is None:
-            return
+    def _import_playlist_tracks(
+        self, playlist_name: str, platform: str, playlist_id: str, frame_idx: int
+    ) -> None:
+        """Start importing tracks in a background thread (Issue #1)."""
+        def on_done(name: str, count: int, status_text: str) -> None:
+            self.root.after(0, self._on_import_done, name, count, status_text)
 
-        def run_import():
-            try:
-                tracks = integration.get_playlist_tracks(playlist_id)
-                if not tracks:
-                    self.root.after(0, self._on_import_done, playlist_name, 0, "No tracks")
-                    return
-
-                sm = SongManager()
-                inserted = sm.add_songs_bulk(playlist_name, tracks, platform=platform)
-                self.root.after(
-                    0,
-                    self._on_import_done,
-                    playlist_name,
-                    inserted,
-                    f"{inserted} new",
-                )
-            except Exception as e:
-                logger.error(f"Import failed for '{playlist_name}': {e}")
-                self.root.after(0, self._on_import_done, playlist_name, 0, "Error")
-
-        threading.Thread(target=run_import, daemon=True).start()
+        self._sync_service.import_tracks(
+            playlist_name, platform, playlist_id, on_done
+        )
 
     def _find_frame_index_by_name(self, playlist_name: str) -> int | None:
-        """Look up the current frame index for a playlist by name.
-
-        Returns the index if found, or None if the playlist no longer has a frame.
-        This is safe to call after reindexing since it matches on name, not index.
-        """
         for i, label in enumerate(self.playlist_name_labels):
             if label.cget("text") == playlist_name:
                 return i
         return None
 
-    def _on_import_done(self, playlist_name, count, status_text):
+    def _on_import_done(
+        self, playlist_name: str, count: int, status_text: str
+    ) -> None:
         frame_idx = self._find_frame_index_by_name(playlist_name)
         if frame_idx is None or frame_idx not in self.active_log_labels:
             return
@@ -400,23 +386,29 @@ class MainWindow:
         else:
             status_label.config(text=status_text, background="#006713")
         self._update_log_labels_from_db(frame_idx, playlist_name)
-        logger.info(f"Import finished for '{playlist_name}': {status_text}")
+        logger.info("Import finished for '%s': %s", playlist_name, status_text)
 
-    def _on_reload_done(self, playlist_name, count, status_text, thumb_url):
+    def _on_reload_done(
+        self, playlist_name: str, count: int, status_text: str, thumb_url: str | None
+    ) -> None:
         self._on_import_done(playlist_name, count, status_text)
         frame_idx = self._find_frame_index_by_name(playlist_name)
         if frame_idx is not None and thumb_url:
             self._set_playlist_cover(frame_idx, thumb_url)
 
-    def setup(self):
+    # ------------------------------------------------------------------
+    # Setup (called once after __init__)
+    # ------------------------------------------------------------------
+
+    def setup(self) -> None:
         self.kc.set_root(self.root)
         playlists = PlaylistStore.load_playlists()
         if playlists:
             self.create_main_frame(len(playlists))
             for i, playlist in enumerate(playlists):
                 if i < len(self.playlist_name_labels):
-                    name = playlist.get("name", f"Playlist {i+1}")
-                    platform = playlist.get("platform", "youtube_music")
+                    name = playlist.get("name", f"Playlist {i + 1}")
+                    platform = playlist.get("platform", PLATFORM_YOUTUBE_MUSIC)
                     self.playlist_name_labels[i].config(text=name)
                     self.frame_platforms[i] = platform
 
@@ -439,16 +431,24 @@ class MainWindow:
                     if thumb_url:
                         self._set_playlist_cover(i, thumb_url)
 
-    def start_drag(self, event):
+    # ------------------------------------------------------------------
+    # Drag-to-move window
+    # ------------------------------------------------------------------
+
+    def start_drag(self, event) -> None:
         self._drag_x = event.x
         self._drag_y = event.y
 
-    def on_drag(self, event):
+    def on_drag(self, event) -> None:
         x = self.root.winfo_x() + (event.x - self._drag_x)
         y = self.root.winfo_y() + (event.y - self._drag_y)
         self.root.geometry(f"+{x}+{y}")
 
-    def create_main_frame(self, num):
+    # ------------------------------------------------------------------
+    # Frame creation / layout
+    # ------------------------------------------------------------------
+
+    def create_main_frame(self, num: int) -> None:
         start_index = len(self.frames)
         for i in range(start_index, start_index + num):
             col = i % 2
@@ -497,7 +497,7 @@ class MainWindow:
                 main_header_frame,
                 image=self.reload_database_img,
                 background="#404040",
-                command=lambda idx=len(self.frames): self._reload_database(idx),
+                command=lambda idx=len(self.frames): self._on_reload_requested(idx),
             )
 
             log_artist = tk.Label(
@@ -544,7 +544,7 @@ class MainWindow:
             self.frames.append(main_frame)
             self.frame_positions.append((row, col))
             self.playlist_name_labels.append(playlist_name)
-            self.frame_platforms.append("youtube_music")
+            self.frame_platforms.append(PLATFORM_YOUTUBE_MUSIC)
 
             frame_idx = len(self.frames) - 1
             self.active_log_labels[frame_idx] = {
@@ -572,15 +572,15 @@ class MainWindow:
 
         self._auto_resize()
 
-    def _hide_main_content(self):
+    def _hide_main_content(self) -> None:
         for frame in self.frames:
             frame.grid_forget()
 
-    def _show_main_content(self):
+    def _show_main_content(self) -> None:
         for frame, (row, col) in zip(self.frames, self.frame_positions):
             frame.grid(row=row, column=col)
 
-    def close_main_frame(self, frame):
+    def close_main_frame(self, frame) -> None:
         try:
             index = self.frames.index(frame)
             playlist_name = self.playlist_name_labels[index].cget("text")
@@ -612,37 +612,49 @@ class MainWindow:
                 del self.frame_img_refs[frame]
 
             PlaylistStore.delete_playlist(playlist_name, platform=platform)
-            # Also delete the per-platform database file for this playlist
             try:
-                db_path = DatabaseManager.get_playlist_db_path_static(playlist_name, platform)
+                db_path = DatabaseManager.get_playlist_db_path_static(
+                    playlist_name, platform
+                )
                 if db_path.exists():
                     db_path.unlink()
-                    logger.info(f"Deleted database file {db_path} for '{playlist_name}'")
+                    logger.info("Deleted database file %s for '%s'", db_path, playlist_name)
             except Exception as e:
-                logger.debug(f"Failed deleting DB for {playlist_name}: {e}")
+                logger.debug("Failed deleting DB for %s: %s", playlist_name, e)
 
             frame.grid_forget()
             frame.destroy()
             self._reorder_frames()
-            logger.debug(f"Closed frame at index {index}")
+            logger.debug("Closed frame at index %d", index)
             self._auto_resize()
         except (ValueError, IndexError) as e:
-            logger.error(f"Error closing frame: {e}")
+            logger.error("Error closing frame: %s", e)
 
-    def _auto_resize(self):
+    # ------------------------------------------------------------------
+    # Auto-resize
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _read_auto_resize_setting() -> bool:
+        """Read the auto-resize setting once (Issue #11)."""
         try:
             ensure_settings_file()
             cfg = ConfigParser()
             cfg.read(str(_settings_path))
-            if cfg.getboolean("auto_resize", "is_true", fallback=False):
-                try:
-                    resize_window(self.root)
-                except Exception as e:
-                    logger.debug(f"Auto-resize failed: {e}")
+            return cfg.getboolean("auto_resize", "is_true", fallback=False)
         except Exception:
-            pass
+            return False
 
-    def _reorder_frames(self):
+    def _auto_resize(self) -> None:
+        """Resize the window to fit playlist frames (uses cached setting)."""
+        if not self._auto_resize_enabled:
+            return
+        try:
+            resize_window(self.root)
+        except Exception as e:
+            logger.debug("Auto-resize failed: %s", e)
+
+    def _reorder_frames(self) -> None:
         self.frame_positions.clear()
         for i, frame in enumerate(self.frames):
             col = i % 2
@@ -651,7 +663,11 @@ class MainWindow:
             frame.grid(row=row, column=col)
         logger.debug("Reordered frames after deletion")
 
-    def _start_recording(self, frame_idx):
+    # ------------------------------------------------------------------
+    # Keybind recording (kept in MainWindow — tightly bound to widgets)
+    # ------------------------------------------------------------------
+
+    def _start_recording(self, frame_idx: int) -> str:
         if frame_idx >= len(self.playlist_name_labels):
             return "break"
         if frame_idx not in self.active_log_labels:
@@ -664,13 +680,12 @@ class MainWindow:
         entry.config(state="normal", readonlybackground="#A00000", background="#404040")
         entry.delete(0, tk.END)
 
-        def on_combo(combo):
+        def on_combo(combo: str) -> None:
             entry.config(state="normal")
             entry.delete(0, tk.END)
             entry.insert(0, combo)
 
-        def on_stop():
-            """Restore entry state when recording ends via escape or focus-out."""
+        def on_stop() -> None:
             self._recording_frame_idx = None
             entry.config(state="readonly", readonlybackground="#2A2A2A")
             entry.delete(0, tk.END)
@@ -678,7 +693,7 @@ class MainWindow:
         self.kc.start_recording(on_combo, on_stop=on_stop)
         return "break"
 
-    def _stop_recording(self, frame_idx):
+    def _stop_recording(self, frame_idx: int) -> None:
         if self._recording_frame_idx != frame_idx:
             return
         self._recording_frame_idx = None
@@ -704,13 +719,18 @@ class MainWindow:
             PlaylistStore.update_keybind(playlist_name, platform, "")
             self.kc.unregister_hotkey(playlist_name)
 
-    def _on_root_click(self, event):
+    def _on_root_click(self, event) -> None:
         if self._recording_frame_idx is not None:
             entry = self.active_log_labels[self._recording_frame_idx]["keybind_entry"]
             if event.widget != entry:
                 self.root.after(1, self._stop_recording, self._recording_frame_idx)
 
-    def _reload_database(self, frame_idx):
+    # ------------------------------------------------------------------
+    # Reload database (delegates to PlaylistSyncService)
+    # ------------------------------------------------------------------
+
+    def _on_reload_requested(self, frame_idx: int) -> None:
+        """User clicked the reload button for a playlist frame."""
         if frame_idx >= len(self.playlist_name_labels):
             return
         playlist_name = self.playlist_name_labels[frame_idx].cget("text")
@@ -719,52 +739,28 @@ class MainWindow:
         playlist_id = playlist_data.get("playlist_id", "") if playlist_data else ""
 
         if not playlist_id:
-            logger.warning(f"No playlist_id for '{playlist_name}', cannot reload")
+            logger.warning("No playlist_id for '%s', cannot reload", playlist_name)
             return
 
         status_label = self.active_log_labels[frame_idx]["status"]
         status_label.config(text="Sync", background="#5A4A00")
 
-        def run_reload():
-            try:
-                db_path = DatabaseManager.get_playlist_db_path_static(playlist_name, platform)
-                if db_path.exists():
-                    db_path.unlink()
-                    logger.info(f"Deleted database for '{playlist_name}'")
+        def on_done(
+            name: str, count: int, status_text: str, thumb_url: str | None
+        ) -> None:
+            self.root.after(
+                0, self._on_reload_done, name, count, status_text, thumb_url
+            )
 
-                integration = self.integrations.get(platform)
-                if not integration:
-                    self.root.after(0, self._on_import_done, playlist_name, 0, "Error")
-                    return
+        self._sync_service.reload_database(
+            playlist_name, platform, playlist_id, on_done
+        )
 
-                details = integration.get_playlist_details(playlist_id)
-                thumbnails = details.get("thumbnails") or details.get("thumbnail")
-                thumb_url = None
-                if isinstance(thumbnails, list):
-                    thumb_url = integration.get_smallest_thumbnail(thumbnails)
-                elif isinstance(thumbnails, str):
-                    thumb_url = thumbnails
+    # ------------------------------------------------------------------
+    # Cleanup
+    # ------------------------------------------------------------------
 
-                tracks = integration.get_playlist_tracks(playlist_id)
-                if not tracks:
-                    self.root.after(0, self._on_import_done, playlist_name, 0, "No tracks")
-                    return
-
-                sm = SongManager()
-                inserted = sm.add_songs_bulk(playlist_name, tracks, platform=platform)
-
-                if thumb_url:
-                    PlaylistStore.update_thumbnail(playlist_name, platform, thumb_url)
-                self.root.after(
-                    0, self._on_reload_done, playlist_name, inserted, f"{inserted} new", thumb_url
-                )
-            except Exception as e:
-                logger.error(f"Reload failed for '{playlist_name}': {e}")
-                self.root.after(0, self._on_import_done, playlist_name, 0, "Error")
-
-        threading.Thread(target=run_reload, daemon=True).start()
-
-    def cleanup(self):
+    def cleanup(self) -> None:
         self.img_refs.clear()
         self.frame_img_refs.clear()
         self.active_log_labels.clear()
@@ -773,7 +769,7 @@ class MainWindow:
                 frame.grid_forget()
                 frame.destroy()
             except Exception as e:
-                logger.warning(f"Error destroying frame: {e}")
+                logger.warning("Error destroying frame: %s", e)
         self.frames.clear()
         self.frame_positions.clear()
         self.playlist_name_labels.clear()

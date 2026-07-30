@@ -4,6 +4,7 @@ from configparser import ConfigParser
 from typing import Optional, Dict, Set, Callable
 
 from pynput import keyboard
+from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from utils.config import ensure_settings_file, SETTINGS_PATH
 
 from services.song_manager import SongManager
@@ -307,7 +308,7 @@ class KeybindController:
             _, hotkey_str, info = best_match
             playlist_name = info["playlist_name"]
             labels_dict = info["labels_dict"]
-            platform = info.get("platform", "youtube_music")
+            platform = info.get("platform", PLATFORM_YOUTUBE_MUSIC)
             if self._root:
                 self._root.after(
                     0, self.handle_keybind, playlist_name, labels_dict, platform
@@ -333,7 +334,7 @@ class KeybindController:
         playlist_name: str,
         hotkey: str,
         labels_dict: dict,
-        platform: str = "youtube_music",
+        platform: str = PLATFORM_YOUTUBE_MUSIC,
     ):
         self.unregister_hotkey(playlist_name)
         if hotkey:
@@ -376,7 +377,7 @@ class KeybindController:
         except Exception as e:
             logger.warning(f"Error resetting UI: {e}")
 
-    def handle_keybind(self, playlist_name, labels_dict, platform="youtube_music"):
+    def handle_keybind(self, playlist_name, labels_dict, platform=PLATFORM_YOUTUBE_MUSIC):
         log_status_label = labels_dict["status"]
         log_artist_label = labels_dict["artist"]
         log_name_label = labels_dict["name"]
@@ -452,7 +453,7 @@ class KeybindController:
 
         def run_flow():
             try:
-                if platform == "spotify":
+                if platform == PLATFORM_SPOTIFY:
                     if self.spotify_flow is None:
                         on_error("Spotify not initialized")
                         return
@@ -483,7 +484,7 @@ class KeybindController:
                 playlist_keybind_entry.config(state="readonly")
                 return False
 
-        if platform == "spotify":
+        if platform == PLATFORM_SPOTIFY:
             if self.spotify_flow is not None:
                 return True
             if self.spotify_integration is None or not self.spotify_integration.is_authenticated():

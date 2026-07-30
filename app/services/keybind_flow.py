@@ -1,9 +1,10 @@
 from __future__ import annotations
 import logging
+import re
 from typing import TYPE_CHECKING, Callable, Dict, Optional
+from constants import PLATFORM_SPOTIFY
 from services.song_manager import SongManager
 from integrations.music_youtube.music_youtube_receiver import URLReceiverManager
-import re
 
 if TYPE_CHECKING:
     from ytmusicapi import YTMusic

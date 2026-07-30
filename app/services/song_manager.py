@@ -2,6 +2,7 @@ import sqlite3
 import json
 import logging
 from typing import Dict, List, Optional, Callable
+from constants import PLATFORM_YOUTUBE_MUSIC, PLATFORM_SPOTIFY
 from services.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -98,8 +99,8 @@ def _extract_spotify_track(track: dict) -> Optional[tuple]:
 # Maps platform name → extractor callable.  Extractor signature:
 #   (track: dict) -> (title, artists, duration, track_id, thumbnail_url) | None
 _TRACK_EXTRACTORS: dict[str, Callable[[dict], Optional[tuple]]] = {
-    "youtube_music": _extract_youtube_track,
-    "spotify": _extract_spotify_track,
+    PLATFORM_YOUTUBE_MUSIC: _extract_youtube_track,
+    PLATFORM_SPOTIFY: _extract_spotify_track,
 }
 
 
@@ -172,7 +173,7 @@ class SongManager:
         self,
         playlist_name: str,
         tracks: List[Dict],
-        platform: str = "youtube_music",
+        platform: str = PLATFORM_YOUTUBE_MUSIC,
     ) -> int:
         """
         Bulk-insert songs into the database, dispatching by platform.
@@ -180,7 +181,7 @@ class SongManager:
         Args:
             playlist_name: Name of the playlist
             tracks: List of track dicts from the platform API
-            platform: Platform identifier ("youtube_music" or "spotify")
+            platform: Platform identifier (PLATFORM_YOUTUBE_MUSIC or PLATFORM_SPOTIFY)
 
         Returns:
             Number of songs actually inserted (skips duplicates)
@@ -188,7 +189,8 @@ class SongManager:
         extractor = _TRACK_EXTRACTORS.get(platform)
         if extractor is None:
             logger.warning(
-                "Unknown platform '%s' for bulk insert, falling back to youtube_music", platform
+                "Unknown platform '%s' for bulk insert, falling back to %s",
+                platform, PLATFORM_YOUTUBE_MUSIC,
             )
             extractor = _extract_youtube_track
         return self._add_songs_bulk(playlist_name, tracks, extractor, platform)

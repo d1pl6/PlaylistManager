@@ -5,6 +5,8 @@ import threading
 import logging
 from pathlib import Path
 
+from constants import PLATFORM_YOUTUBE_MUSIC
+
 logger = logging.getLogger(__name__)
 
 playlists_json = Path(__file__).resolve().parents[2] / "db" / "playlists.json"
@@ -49,7 +51,7 @@ class PlaylistStore:
             return {
                 p.get("name")
                 for p in playlists
-                if p.get("platform", "youtube_music") == platform
+                if p.get("platform", PLATFORM_YOUTUBE_MUSIC) == platform
             }
         return {p.get("name") for p in playlists}
 
@@ -77,7 +79,7 @@ class PlaylistStore:
     @staticmethod
     def add_playlist(
         name: str,
-        platform: str = "youtube_music",
+        platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
         thumbnail_url: str = "",
     ):
@@ -124,7 +126,7 @@ class PlaylistStore:
                     for p in playlists
                     if not (
                         p.get("name") == name
-                        and p.get("platform", "youtube_music") == platform
+                        and p.get("platform", PLATFORM_YOUTUBE_MUSIC) == platform
                     )
                 ]
             else:

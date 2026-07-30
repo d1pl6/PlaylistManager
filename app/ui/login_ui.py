@@ -1,38 +1,29 @@
-import json
+"""
+Platform login / credential dialog.
+
+Responsibilities:
+  - tkinter widget layout and visual feedback (status labels, buttons).
+  - Thread-safe credential verification (threading + ``win.after()``).
+
+Actual credential-file i/o, terminal launching, and API verification are
+delegated to :mod:`services.auth_setup` and :mod:`utils.platform`.
+"""
+
 import logging
-import os
-import platform
-import shutil
-import subprocess
 import threading
 import tkinter as tk
-from tkinter import messagebox
 from pathlib import Path
+from tkinter import messagebox
 from typing import Any, Optional, cast
 
-from platformdirs import user_config_dir
+from services import auth_setup
+from utils import center_window
+from utils.config import get_theme_value
 
 logger = logging.getLogger(__name__)
 
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets"
 LOGOS_DIR = ASSETS_DIR / "logos"
-AUTH_DIR = Path(user_config_dir("playlistmanager")) / "auth"
-
-
-from utils import center_window
-from utils.config import get_theme_value
-
-
-def _open_directory(path: Path):
-    try:
-        if platform.system() == "Windows":
-            os.startfile(str(path))
-        elif platform.system() == "Darwin":
-            subprocess.Popen(["open", str(path)])
-        else:
-            subprocess.Popen(["xdg-open", str(path)])
-    except Exception as e:
-        logger.error(f"Failed to open directory {path}: {e}")
 
 
 def _theme_value(section: str, option: str, default: str) -> str:
@@ -40,6 +31,11 @@ def _theme_value(section: str, option: str, default: str) -> str:
         return get_theme_value(section, option, default)
     except Exception:
         return default
+
+
+# ======================================================================
+# Public entry point
+# ======================================================================
 
 
 def show_login_dialog(parent, on_success=None):
@@ -52,10 +48,6 @@ def show_login_dialog(parent, on_success=None):
 
     header_bg = _theme_value("frame_header", "background", "#2A2A2A")
     label_fg = _theme_value("label", "foreground", "white")
-    button_bg = _theme_value("button_header", "background", "#0A0000")
-    button_abg = _theme_value("button_header", "activebackground", "#320000")
-    button_fg = _theme_value("button_header", "foreground", "white")
-    button_afg = _theme_value("button_header", "activeforeground", "#FFFFFF")
     button_c_bg = _theme_value("button_close", "background", "#0A0000")
     button_c_fg = _theme_value("button_close", "foreground", "white")
     button_c_abg = _theme_value("button_close", "activebackground", "#320000")
@@ -110,11 +102,11 @@ def _create_platform_button(parent, name, icon_path, command):
     label_fg = _theme_value("label", "foreground", "white")
     frame = tk.Frame(parent, background=frame_bg, cursor="hand2", padx=10, pady=10)
 
-    img = None
+    img: Optional[tk.PhotoImage] = None
     try:
         img = tk.PhotoImage(file=str(icon_path))
     except Exception as e:
-        logger.error(f"Failed to load icon {icon_path}: {e}")
+        logger.error("Failed to load icon %s: %s", icon_path, e)
 
     if img:
         label_img = tk.Label(frame, image=img, background=frame_bg)
@@ -143,61 +135,27 @@ def _create_platform_button(parent, name, icon_path, command):
     return frame
 
 
-def _on_youtube_music(parent, on_success):
-    AUTH_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _open_directory(AUTH_DIR)
+# ======================================================================
+# YouTube Music flow
+# ======================================================================
 
-    terminal_cmd = _get_terminal_command(AUTH_DIR)
-    try:
-        subprocess.Popen(terminal_cmd)
-    except Exception as e:
-        logger.error(f"Failed to open terminal: {e}")
+
+def _on_youtube_music(parent, on_success):
+    result = auth_setup.setup_ytmusic_auth()
+    if result.get("manual"):
         messagebox.showinfo(
             "Manual Step Required",
             f"Open a terminal and run:\n\n"
-            f"cd {AUTH_DIR}\nytmusicapi browser\n\n"
-            f"Then place the generated browser.json in:\n{AUTH_DIR}",
+            f"cd {result['auth_dir']}\n"
+            f"ytmusicapi browser\n\n"
+            f"Then place the generated browser.json in:\n{result['auth_dir']}",
             parent=parent,
         )
 
 
-def _find_linux_terminal() -> Optional[str]:
-    for term in [
-        "kgx", "gnome-terminal", "konsole", "xfce4-terminal",
-        "xterm", "alacritty", "kitty", "wezterm", "tilix",
-        "foot", "x-terminal-emulator",
-    ]:
-        if shutil.which(term):
-            return term
-    return None
-
-
-def _find_shell() -> str:
-    for sh in ["bash", "sh", "dash", "mksh", "busybox"]:
-        path = shutil.which(sh)
-        if path:
-            return path
-    for p in ["/bin/bash", "/bin/sh", "/usr/bin/bash", "/usr/bin/sh"]:
-        if os.path.isfile(p) and os.access(p, os.X_OK):
-            return p
-    return "sh"
-
-
-def _get_terminal_command(work_dir: Path) -> list:
-    system = platform.system()
-    if system == "Windows":
-        return ["cmd", "/k", f"cd /d \"{work_dir}\" && ytmusicapi browser"]
-    elif system == "Darwin":
-        return ["open", "-a", "Terminal", str(work_dir)]
-    else:
-        term = _find_linux_terminal()
-        if not term:
-            raise FileNotFoundError("No supported terminal emulator found")
-        shell = _find_shell()
-        cmd = f'cd "{work_dir}" && ytmusicapi browser; exec {shell}'
-        if term in ("xterm",):
-            return [term, "-e", shell, "-c", cmd]
-        return [term, "-e", shell, "-c", cmd]
+# ======================================================================
+# Spotify flow
+# ======================================================================
 
 
 def _on_spotify(parent, on_success):
@@ -208,6 +166,7 @@ def _on_spotify(parent, on_success):
     win.update_idletasks()
     win.grab_set()
 
+    # ---------- theme colours ----------
     header_bg = _theme_value("frame_header", "background", "#2A2A2A")
     label_fg = _theme_value("label", "foreground", "white")
     entry_bg = _theme_value("frame_main", "background", "#404040")
@@ -226,15 +185,12 @@ def _on_spotify(parent, on_success):
     button_c_fg = _theme_value("button_close", "foreground", "white")
     button_c_abg = _theme_value("button_close", "activebackground", "#320000")
     button_c_afg = _theme_value("button_close", "activeforeground", "#FF0000")
+    frame_bg = _theme_value("frame_main", "background", "#2A2A2A")
 
-    existing = {}
-    spotify_file = AUTH_DIR / "spotify.json"
-    if spotify_file.exists():
-        try:
-            existing = json.loads(spotify_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+    # ---------- load existing ----------
+    existing = auth_setup.load_spotify_credentials()
 
+    # ---------- header ----------
     header = tk.Frame(win, background=header_bg)
     header.pack(fill="x", padx=10, pady=10)
 
@@ -258,10 +214,8 @@ def _on_spotify(parent, on_success):
         command=win.destroy,
     ).pack(side="right", anchor="e")
 
-    fields_frame = tk.Frame(
-        win,
-        background=_theme_value("frame_main", "background", "#2A2A2A"),
-        )
+    # ---------- fields ----------
+    fields_frame = tk.Frame(win, background=frame_bg)
     fields_frame.pack(fill="x", padx=20, pady=10)
 
     client_id_var = tk.StringVar(value=existing.get("client_id", ""))
@@ -278,7 +232,7 @@ def _on_spotify(parent, on_success):
         tk.Label(
             fields_frame,
             text=label_text,
-            background=_theme_value("frame_main", "background", "#2A2A2A"),
+            background=frame_bg,
             foreground=label_fg,
             font=("Noto", 10),
         ).grid(row=i, column=0, sticky="w", pady=5)
@@ -291,132 +245,103 @@ def _on_spotify(parent, on_success):
             insertbackground=entry_fg,
             font=("Noto", 10),
             width=40,
-            show="*"
+            show="*",
         )
         entry.grid(row=i, column=1, sticky="ew", pady=5, padx=(10, 0))
 
     fields_frame.columnconfigure(1, weight=1)
 
+    # ---------- status ----------
     status_label = tk.Label(
         win,
         text="",
-        background=_theme_value("frame_main", "background", "#2A2A2A"),
+        background=frame_bg,
         foreground=label_fg,
         font=("Noto", 10),
     )
     status_label.pack(padx=20, pady=5)
 
-    btn_frame = tk.Frame(win, background=_theme_value("frame_main", "background", "#2A2A2A"))
+    # ---------- buttons ----------
+    btn_frame = tk.Frame(win, background=frame_bg)
     btn_frame.pack(fill="x", padx=20, pady=10)
 
-    def save_credentials():
-        creds = {
+    def _get_creds():
+        return {
             "client_id": client_id_var.get().strip(),
             "client_secret": client_secret_var.get().strip(),
             "refresh_token": refresh_token_var.get().strip(),
         }
-        if not all(creds.values()):
-            status_label.config(text="All fields are required", foreground="red")
-            return
-        try:
-            AUTH_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-            fd = os.open(str(spotify_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            try:
-                os.write(fd, json.dumps(creds, indent=2).encode("utf-8"))
-            finally:
-                os.close(fd)
-            status_label.config(text="Verifying...", foreground="white")
-            btn_save.config(state="disabled")
 
-            def verify():
-                try:
-                    from integrations.music_spotify.music_spotify import SpotifyAPI
+    def _all_filled(creds) -> bool:
+        return all(v for v in creds.values())
 
-                    api = SpotifyAPI(**creds)
-                    me = api.get_me()
-                    if me:
-                        win.after(
-                            0,
-                            lambda: _save_done(
-                                True, f"OK: {me.get('display_name', 'unknown')}"
-                            ),
-                        )
-                    else:
-                        win.after(0, lambda: _save_done(False, "Auth failed"))
-                except Exception as e:
-                    win.after(0, lambda: _save_done(False, f"Error: {e}"))
-
-            def _save_done(ok, msg):
-                btn_save.config(state="normal")
-                if ok:
-                    status_label.config(text=msg, foreground="#006713")
-                    if on_success:
-                        on_success()
-                else:
-                    status_label.config(text=msg, foreground="red")
-
-            threading.Thread(target=verify, daemon=True).start()
-        except Exception as e:
-            status_label.config(text=f"Save failed: {e}", foreground="red")
-
-    def test_credentials():
-        creds = {
-            "client_id": client_id_var.get().strip(),
-            "client_secret": client_secret_var.get().strip(),
-            "refresh_token": refresh_token_var.get().strip(),
-        }
-        if not all(creds.values()):
-            status_label.config(text="All fields are required", foreground="red")
-            return
-        status_label.config(text="Testing...", foreground="white")
-        btn_test.config(state="disabled")
-
-        def run_test():
-            try:
-                from integrations.music_spotify.music_spotify import SpotifyAPI
-
-                api = SpotifyAPI(**creds)
-                me = api.get_me()
-                if me:
-                    win.after(
-                        0,
-                        lambda: status_label.config(
-                            text=f"OK: {me.get('display_name', 'unknown')}",
-                            foreground="#006713",
-                        ),
-                    )
-                else:
-                    win.after(
-                        0,
-                        lambda: status_label.config(
-                            text="Auth failed", foreground="red"
-                        ),
-                    )
-            except Exception as e:
-                win.after(
-                    0,
-                    lambda: status_label.config(text=f"Error: {e}", foreground="red"),
-                )
-            finally:
-                win.after(0, lambda: btn_test.config(state="normal"))
-
-        threading.Thread(target=run_test, daemon=True).start()
-
+    # ---- Delete ----
     def delete_credentials():
-        if spotify_file.exists():
-            try:
-                spotify_file.unlink()
+        try:
+            deleted = auth_setup.delete_spotify_credentials()
+            if deleted:
                 client_id_var.set("")
                 client_secret_var.set("")
                 refresh_token_var.set("")
                 status_label.config(text="Credentials deleted", foreground="#006713")
                 if on_success:
                     on_success()
-            except Exception as e:
-                status_label.config(text=f"Delete failed: {e}", foreground="red")
-        else:
-            status_label.config(text="No credentials file found", foreground="red")
+            else:
+                status_label.config(text="No credentials file found", foreground="red")
+        except Exception as e:
+            status_label.config(text=f"Delete failed: {e}", foreground="red")
 
+    # ---- Test ----
+    def test_credentials():
+        creds = _get_creds()
+        if not _all_filled(creds):
+            status_label.config(text="All fields are required", foreground="red")
+            return
+        status_label.config(text="Testing...", foreground="white")
+        btn_test.config(state="disabled")
+
+        def run():
+            result = auth_setup.verify_spotify_credentials(**creds)
+            win.after(0, _test_done, result)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _test_done(result):
+        btn_test.config(state="normal")
+        if result.get("ok"):
+            status_label.config(
+                text=f"OK: {result['display_name']}", foreground="#006713"
+            )
+        else:
+            status_label.config(text=result.get("error", "Error"), foreground="red")
+
+    # ---- Save ----
+    def save_credentials():
+        creds = _get_creds()
+        if not _all_filled(creds):
+            status_label.config(text="All fields are required", foreground="red")
+            return
+        status_label.config(text="Verifying...", foreground="white")
+        btn_save.config(state="disabled")
+
+        def run():
+            result = auth_setup.save_and_verify_spotify_credentials(**creds)
+            win.after(0, _save_done, result)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _save_done(result):
+        btn_save.config(state="normal")
+        if result.get("ok"):
+            status_label.config(
+                text=f"OK: {result['display_name']}", foreground="#006713"
+            )
+            if on_success:
+                on_success()
+        else:
+            status_label.config(text=result.get("error", "Error"), foreground="red")
+
+    # ---- layout ----
     btn_delete = tk.Button(
         btn_frame,
         text="Delete",

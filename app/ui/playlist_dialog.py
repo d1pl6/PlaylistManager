@@ -1,6 +1,8 @@
+import logging
 import tkinter as tk
 from tkinter import ttk
-import logging
+
+from services.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +74,7 @@ class PlaylistDialog:
                     details = integration.get_playlist_details(playlist_id, limit=1)
                     thumbnails = details.get("thumbnails") or details.get("thumbnail")
                     if isinstance(thumbnails, list):
-                        thumb_url = integration.get_smallest_thumbnail(thumbnails)
+                        thumb_url = ThumbnailService.get_smallest_thumbnail(thumbnails)
                     elif isinstance(thumbnails, str):
                         thumb_url = thumbnails
                 except Exception as e:
@@ -81,7 +83,7 @@ class PlaylistDialog:
             tk_image = None
             if thumb_url:
                 try:
-                    tk_image = integration.fetch_thumbnail(thumb_url)
+                    tk_image = ThumbnailService.fetch_thumbnail(thumb_url, size=(40, 40))
                     if tk_image:
                         self.img_refs.append(tk_image)
                 except Exception as e:

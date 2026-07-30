@@ -8,6 +8,7 @@ requirements.txt
 AGENTS.md
 opencode.jsonc
 .gitignore
+plan.md
 
 auth/
 __pycache__/
