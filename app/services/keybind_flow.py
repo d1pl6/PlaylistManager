@@ -4,10 +4,10 @@ import re
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 from constants import PLATFORM_SPOTIFY
 from services.song_manager import SongManager
-from integrations.music_youtube.music_youtube_receiver import URLReceiverManager
 
 if TYPE_CHECKING:
     from ytmusicapi import YTMusic
+    from integrations.music_youtube.music_youtube_receiver import URLReceiverManager
     from services.integration import SpotifyIntegration
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,8 @@ class KeybindFlowController:
 
             # Step 3: Validate URL
             on_status("Valid")
-            video_id = URLReceiverManager._extract_video_id(url)
+            from integrations.music_youtube.music_youtube_receiver import URLReceiverManager as _RM
+            video_id = _RM._extract_video_id(url)
             if video_id is None:
                 raise ValueError("Failed to extract video ID from URL")
 

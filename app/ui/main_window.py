@@ -13,6 +13,7 @@ from pathlib import Path
 from tkinter import ttk, messagebox
 
 from constants import PLATFORM_YOUTUBE_MUSIC
+from controllers.keybind_controller import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
@@ -22,7 +23,7 @@ from services.thumbnail import ThumbnailService
 from ui.login_ui import show_login_dialog
 from ui.playlist_dialog import PlaylistDialog
 from ui.settings_ui import show_settings_dialog
-from utils import center_window, resize_window
+from utils.window import center_window, resize_window
 from utils.config import (
     ensure_settings_file,
     get_theme_value,
@@ -400,6 +401,37 @@ class MainWindow:
     # Setup (called once after __init__)
     # ------------------------------------------------------------------
 
+    def _make_keybind_callbacks(self, frame_idx: int) -> KeybindCallbacks:
+        """Build a :class:`KeybindCallbacks` bound to *frame_idx* widgets.
+
+        All callbacks are scheduled on the main thread (tkinter must be
+        accessed from the main thread).
+        """
+        labels = self.active_log_labels[frame_idx]
+
+        def on_status(text: str, background: str) -> None:
+            labels["status"].config(text=text, background=background)
+
+        def on_song_info(artist: str, name: str) -> None:
+            labels["artist"].config(text=artist)
+            labels["name"].config(text=name)
+
+        def on_entry_state(state: str) -> None:
+            labels["keybind_entry"].config(state=state)
+
+        def on_reset(entry_state: str) -> None:
+            labels["keybind_entry"].config(state=entry_state)
+            labels["status"].config(text="", background="SystemButtonFace")
+            labels["artist"].config(text="")
+            labels["name"].config(text="")
+
+        return KeybindCallbacks(
+            on_status=on_status,
+            on_song_info=on_song_info,
+            on_entry_state=on_entry_state,
+            on_reset=on_reset,
+        )
+
     def setup(self) -> None:
         self.kc.set_root(self.root)
         playlists = PlaylistStore.load_playlists()
@@ -421,7 +453,7 @@ class MainWindow:
                         self.kc.register_hotkey(
                             name,
                             hotkey,
-                            self.active_log_labels[i],
+                            self._make_keybind_callbacks(i),
                             platform=platform,
                         )
 
@@ -712,7 +744,7 @@ class MainWindow:
             self.kc.register_hotkey(
                 playlist_name,
                 combo,
-                self.active_log_labels[frame_idx],
+                self._make_keybind_callbacks(frame_idx),
                 platform=platform,
             )
         else:

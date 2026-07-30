@@ -2,7 +2,7 @@ import tkinter as tk
 import webbrowser
 
 from _version import __version__
-from utils import center_window
+from utils.window import center_window
 from utils.config import get_theme_value
 
 

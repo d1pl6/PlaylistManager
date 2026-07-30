@@ -17,7 +17,8 @@ from services.integration import (
 from services.playlist_store import PlaylistStore
 from ui.main_window import MainWindow
 from ui.updater_ui import show_update_dialog
-from utils import center_window, updater
+from utils.window import center_window
+from utils import updater
 from utils.config import SETTINGS_PATH, ensure_settings_file
 from _version import __version__
 

@@ -11,8 +11,7 @@ from utils.config import (
 logger = logging.getLogger(__name__)
 
 
-from utils import center_window
-from utils import resize_window
+from utils.window import center_window, resize_window
 from ui.settings_theme_ui import show_theme_dialog
 
 

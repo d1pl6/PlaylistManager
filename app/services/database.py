@@ -12,9 +12,6 @@ logger = logging.getLogger(__name__)
 class DatabaseManager:
     """Manages SQLite connections for per-playlist databases."""
 
-    def __init__(self):
-        self._base_dir = self._get_db_directory(PLATFORM_YOUTUBE_MUSIC)
-
     @staticmethod
     def _get_db_directory(platform: str) -> Path:
         """Get the database directory path for a given platform."""

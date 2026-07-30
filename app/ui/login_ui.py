@@ -17,7 +17,7 @@ from tkinter import messagebox
 from typing import Any, Optional, cast
 
 from services import auth_setup
-from utils import center_window
+from utils.window import center_window
 from utils.config import get_theme_value
 
 logger = logging.getLogger(__name__)

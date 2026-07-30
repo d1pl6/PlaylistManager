@@ -10,7 +10,7 @@ from utils.config import (
     restore_theme_defaults,
     THEME_PATH,
 )
-from utils import center_window
+from utils.window import center_window
 
 
 def show_theme_dialog(parent, on_theme_change=None):
