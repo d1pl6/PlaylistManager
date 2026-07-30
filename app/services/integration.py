@@ -33,6 +33,22 @@ class BaseIntegration:
     def get_playlist_details(self, playlist_id: str, limit: int = 1) -> dict:
         raise NotImplementedError
 
+    def get_playlist_id(self, name: str) -> Optional[str]:
+        """Look up a playlist's platform ID by name.
+
+        Returns *None* when the playlist cannot be found or the
+        platform does not support name-based lookups.
+        """
+        return None
+
+    def get_playlist_tracks(self, playlist_id: str) -> list:
+        """Fetch all tracks for a playlist.
+
+        Returns an empty list when the playlist doesn't exist or the
+        platform returns an error.
+        """
+        return []
+
 
 class IntegrationRegistry:
     def __init__(self):
@@ -194,10 +210,15 @@ class SpotifyIntegration(BaseIntegration):
             return None
         return self.spotify_api.get_currently_playing()
 
-    def get_playlist_id_by_name(self, name: str) -> Optional[str]:
+    def get_playlist_id(self, name: str) -> Optional[str]:
+        """Look up a Spotify playlist ID by name."""
         if not self.spotify_api:
             return None
         return self.spotify_api.get_playlist_id_by_name(name)
+
+    def get_playlist_id_by_name(self, name: str) -> Optional[str]:
+        """Alias for :meth:`get_playlist_id` — retained for backward compat."""
+        return self.get_playlist_id(name)
 
     def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]) -> bool:
         if not self.spotify_api:

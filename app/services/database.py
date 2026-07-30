@@ -1,5 +1,6 @@
 import sqlite3
 import logging
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -10,7 +11,16 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseManager:
-    """Manages SQLite connections for per-playlist databases."""
+    """Manages SQLite connections for per-playlist databases.
+
+    Connections are cached per-thread via ``threading.local()`` so that
+    repeated ``get_connection()`` calls within the same thread (e.g.
+    during bulk import) reuse the same connection instead of opening a
+    new one each time.  Connections are closed automatically when the
+    thread exits or when :meth:`close_thread_connections` is called.
+    """
+
+    _tls = threading.local()
 
     @staticmethod
     def _get_db_directory(platform: str) -> Path:
@@ -56,14 +66,19 @@ class DatabaseManager:
 
     @contextmanager
     def get_connection(self, playlist_name: str, platform: str = PLATFORM_YOUTUBE_MUSIC) -> Iterator[sqlite3.Connection]:
-        """Context manager: yields a connection and closes it on exit."""
-        conn = None
-        try:
+        """Context manager: yields a thread-cached connection.
+
+        The connection is opened once per (thread, playlist, platform)
+        combination and reused for the lifetime of the thread.  Call
+        :meth:`close_thread_connections` to release resources.
+        """
+        cache_key = f"{playlist_name}:{platform}"
+        connections = DatabaseManager._get_thread_connections()
+        conn = connections.get(cache_key)
+        if conn is None:
             conn = self.get_db_connection(playlist_name, platform=platform)
-            yield conn
-        finally:
-            if conn:
-                DatabaseManager.close_connection(conn)
+            connections[cache_key] = conn
+        yield conn
 
     def _init_playlist_database(self, conn: sqlite3.Connection) -> None:
         """Initialize the database schema if it doesn't exist."""
@@ -100,6 +115,27 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"Failed to initialize database schema: {e}")
             raise
+
+    @staticmethod
+    def _get_thread_connections() -> dict:
+        """Get the current thread's connection cache dict."""
+        if not hasattr(DatabaseManager._tls, "_db_connections"):
+            DatabaseManager._tls._db_connections = {}
+        return DatabaseManager._tls._db_connections
+
+    @staticmethod
+    def close_thread_connections() -> None:
+        """Close all cached connections for the calling thread."""
+        connections = getattr(DatabaseManager._tls, "_db_connections", None)
+        if connections is None:
+            return
+        for cache_key, conn in list(connections.items()):
+            try:
+                conn.close()
+                logger.debug("Closed cached connection: %s", cache_key)
+            except sqlite3.Error as e:
+                logger.error("Error closing cached connection %s: %s", cache_key, e)
+        DatabaseManager._tls._db_connections = {}
 
     @staticmethod
     def close_connection(conn: sqlite3.Connection) -> None:
