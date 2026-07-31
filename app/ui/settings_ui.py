@@ -5,9 +5,9 @@ from configparser import ConfigParser
 from ui.settings_theme_ui import show_theme_dialog
 from utils.config import (
     ensure_settings_file,
-    get_theme_value,
     SETTINGS_PATH as _settings_path,
 )
+from utils.theme import C
 from utils.window import center_window, resize_window
 
 logger = logging.getLogger(__name__)
@@ -22,27 +22,16 @@ def _toggle_setting(section, var):
         cfg.write(f)
 
 
-def _theme_value(section: str, option: str, default: str) -> str:
-    try:
-        return get_theme_value(section, option, default)
-    except Exception:
-        return default
-
-
 def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None):
-    theme_win_bg = _theme_value("frame_main", "background", "#181818")
-    theme_header_bg = _theme_value("frame_header", "background", "#181818")
-    theme_label_bg = _theme_value("label", "background", "#181818")
-    theme_label_fg = _theme_value("label", "foreground", "#F2F2F2")
-    theme_check_bg = _theme_value("checkbutton", "background", "#292929")
-    theme_check_fg = _theme_value("checkbutton", "foreground", "#CBCBCB")
-    theme_check_select = _theme_value("checkbutton", "selectcolor", "#000000")
-    theme_check_abg = _theme_value("checkbutton", "activebackground", "#5C5C5C")
-    theme_check_afg = _theme_value("checkbutton", "activeforeground", "#E4E4E4")
-    theme_button_c_bg = _theme_value("button_close", "background", "#0A0000")
-    theme_button_c_fg = _theme_value("button_close", "foreground", "white")
-    theme_button_c_abg = _theme_value("button_close", "activebackground", "#320000")
-    theme_button_c_afg = _theme_value("button_close", "activeforeground", "#FF0000")
+    theme_win_bg = C["frame_main_bg"]
+    theme_header_bg = C["frame_head_bg"]
+    theme_label_bg = C["label_def_bg"]
+    theme_label_fg = C["label_def_fg"]
+    theme_check_bg = C["checkbutton_bg"]
+    theme_check_fg = C["checkbutton_fg"]
+    theme_check_select = C["checkbutton_selector"]
+    theme_check_abg = C["checkbutton_a_bg"]
+    theme_check_afg = C["checkbutton_a_fg"]
 
     win = tk.Toplevel(parent)
     win.title("PlaylistManager")
@@ -56,7 +45,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None):
         background=theme_header_bg,
         foreground=theme_label_fg,
         font=("Noto", 12),
-    ).pack(fill="both")
+    ).pack(fill="both", pady=5, padx=5)
 
     ensure_settings_file()
     cfg = ConfigParser()
@@ -145,23 +134,12 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None):
         win,
         text="Theme Settings",
         command=lambda: show_theme_dialog(win, on_theme_change=on_theme_change),
-        background=_theme_value("button_main", "background", "#0A0000"),
-        activebackground=_theme_value("button_main", "activebackground", "#320000"),
-        foreground=_theme_value("button_main", "foreground", "white"),
+        background=C["button_main_bg"],
+        activebackground=C["button_main_a_bg"],
+        foreground=C["button_main_fg"],
         font=("Noto", 10),
         bd=0,
     ).pack(fill="both", padx=4, pady=4)
-
-    tk.Button(
-        win,
-        text="Close",
-        command=win.destroy,
-        background=theme_button_c_bg,
-        foreground=theme_button_c_fg,
-        activebackground=theme_button_c_abg,
-        activeforeground=theme_button_c_afg,
-        bd=0,
-    ).pack(fill="both")
 
     if center_var_value == 1:
         center_window(win)

@@ -10,23 +10,21 @@ from utils.config import (
     restore_theme_defaults,
     THEME_PATH,
 )
+from utils.theme import C
 from utils.window import center_window
 
 
 def show_theme_dialog(parent, on_theme_change=None):
     """Open a separate scrollable theme-settings window."""
 
-    win_bg = get_theme_value("frame_main", "background", "#181818")
-    header_bg = get_theme_value("frame_header", "background", "#181818")
-    label_bg = get_theme_value("label", "background", "#181818")
-    label_fg = get_theme_value("label", "foreground", "#F2F2F2")
-    button_bg = get_theme_value("button_main", "background", "#0A0000")
-    button_abg = get_theme_value("button_main", "activebackground", "#320000")
-    button_fg = get_theme_value("button_main", "foreground", "white")
-    close_bg = get_theme_value("button_close", "background", "#0A0000")
-    close_fg = get_theme_value("button_close", "foreground", "white")
-    close_abg = get_theme_value("button_close", "activebackground", "#320000")
-    close_afg = get_theme_value("button_close", "activeforeground", "#FF0000")
+    win_bg = C["frame_main_bg"]
+    header_bg = C["frame_head_bg"]
+    label_bg = C["label_def_bg"]
+    label_fg = C["label_def_fg"]
+    button_bg = C["button_main_bg"]
+    button_abg = C["button_main_a_bg"]
+    button_fg = C["button_main_fg"]
+
 
     win = tk.Toplevel(parent)
     win.title("Theme Settings")
@@ -173,15 +171,18 @@ def show_theme_dialog(parent, on_theme_change=None):
     _create_theme_button("Button close activebackground", "button_close", "activebackground", "#390000")
     _create_theme_button("Button close activeforeground", "button_close", "activeforeground", "#FFFFFF")
 
+    _create_theme_button("Button save background", "button_save", "background", "#004304")
+    _create_theme_button("Button save foreground", "button_save", "foreground", "#D7D7D7")
+    _create_theme_button("Button save activebackground", "button_save", "activebackground", "#006B07")
+    _create_theme_button("Button save activeforeground", "button_save", "activeforeground", "#FFFFFF")
+
     _create_theme_button("Entry default background", "entry_default", "background", "#404040")
     _create_theme_button("Entry default foreground", "entry_default", "foreground", "#FFFFFF")
     _create_theme_button("Entry default readonlybackground", "entry_default", "readonlybackground", "#2A2A2A")
-    _create_theme_button("Entry default readonlyforeground", "entry_default", "readonlyforeground", "#AEAEAE")
 
     _create_theme_button("Entry playlist background", "entry_playlist", "background", "#404040")
     _create_theme_button("Entry playlist foreground", "entry_playlist", "foreground", "#FFFFFF")
     _create_theme_button("Entry playlist readonlybackground", "entry_playlist", "readonlybackground", "#2A2A2A")
-    _create_theme_button("Entry playlist readonlyforeground", "entry_playlist", "readonlyforeground", "#AEAEAE")
 
     button_frame = tk.Frame(inner, background=win_bg)
     button_frame.pack(fill="x", pady=6)
@@ -197,16 +198,6 @@ def show_theme_dialog(parent, on_theme_change=None):
         background="#EDEDED",
         activebackground="#D2D2D2",
         foreground="#1A1A1A",
-        bd=0,
-    ).pack(side="left", expand=True, fill="x", padx=2)
-
-    tk.Button(
-        button_frame,
-        text="Dark Theme",
-        command=lambda: (_apply_preset("dark"), _fire_change()),
-        background="#101010",
-        activebackground="#555555",
-        foreground="#EDEDED",
         bd=0,
     ).pack(side="left", expand=True, fill="x", padx=2)
 

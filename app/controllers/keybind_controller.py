@@ -125,13 +125,20 @@ class KeybindController:
                 logger.error(f"Failed to start hotkey listener: {e}")
                 self._listener = None
 
-    def _stop_global_listener(self):
+    def _stop_global_listener(self, wait: bool = True):
         with self._listener_lock:
             listener = self._listener
             self._listener = None
         if listener is not None:
             listener.stop()
-            listener.join(timeout=2.0)
+            if wait:
+                # pynput's X11 listener thread does not reliably exit after
+                # stop() — its record_enable_context loop can stay blocked
+                # indefinitely, so joining here would stall the calling
+                # thread for the full timeout.  stop() already prevents any
+                # further event delivery (running == False); keep this join
+                # short and bounded so mode switches stay responsive.
+                listener.join(timeout=0.5)
             logger.info("Global hotkey listener stopped")
 
     def _bind_local_keys(self):
@@ -451,14 +458,16 @@ class KeybindController:
             except Exception as e:
                 logger.error(f"Error stopping URL receiver: {e}")
 
-    def stop_listener(self):
+    def stop_listener(self, wait: bool = True):
         if self._global_mode:
-            self._stop_global_listener()
+            self._stop_global_listener(wait=wait)
         else:
             self._unbind_local_keys()
 
     def cleanup(self):
-        self.stop_listener()
+        # Don't wait on the listener thread at quit — it may never exit
+        # (see _stop_global_listener) and the process is about to die anyway.
+        self.stop_listener(wait=False)
         self.stop_receiver()
         self.song_manager = None
         self._url_receiver = None

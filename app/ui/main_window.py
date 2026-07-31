@@ -26,9 +26,9 @@ from ui.settings_ui import show_settings_dialog
 from utils.window import center_window, resize_window
 from utils.config import (
     ensure_settings_file,
-    get_theme_value,
     SETTINGS_PATH as _settings_path,
 )
+from utils.theme import C, load_theme
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ class MainWindow:
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=1)
 
-        header_bg = self._theme_bg("frame_header", "background", "#181818")
+        header_bg = C["frame_head_bg"]
         self.header_frame = tk.Frame(self.root, background=header_bg)
         self.header_frame.bind("<B1-Motion>", self.on_drag)
 
@@ -123,22 +123,16 @@ class MainWindow:
     # Theme helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _theme_bg(section: str, option: str, default: str) -> str:
-        try:
-            return get_theme_value(section, option, default)
-        except Exception:
-            return default
-
     def apply_theme(self) -> None:
-        header_bg = self._theme_bg("frame_header", "background", "#181818")
+        load_theme()
+        header_bg = C["frame_head_bg"]
         self.header_frame.configure(background=header_bg)
         for widget in self.header_frame.winfo_children():
             if isinstance(widget, tk.Frame):
                 widget.configure(background=header_bg)
 
         for frame in self.frames:
-            main_bg = self._theme_bg("frame_main", "background", "#404040")
+            main_bg = C["frame_main_bg"]
             frame.configure(background=main_bg)
             for child in frame.winfo_children():
                 try:
@@ -151,12 +145,8 @@ class MainWindow:
     # ------------------------------------------------------------------
 
     def _create_widgets(self) -> None:
-        btn_header_bg = self._theme_bg("button_header", "background", "#6c6c6c")
-        btn_header_abg = self._theme_bg("button_header", "activebackground", "#868686")
-        btn_close_bg = self._theme_bg("button_close", "background", "#160000")
-        btn_close_abg = self._theme_bg("button_close", "activebackground", "#390000")
-        btn_close_fg = self._theme_bg("button_close", "foreground", "#FFFFFF")
-        btn_close_afg = self._theme_bg("button_close", "activeforeground", "#ffffff")
+        btn_header_bg = C["button_head_bg"]
+        btn_header_abg = C["button_head_a_bg"]
 
         login_img_path = assets_dir / "login.png"
         self.login_img = tk.PhotoImage(file=str(login_img_path))
@@ -182,19 +172,6 @@ class MainWindow:
             command=self._open_playlist_dialog,
         )
 
-        self.close_btn = tk.Button(
-            self.header_frame,
-            text="\u2715",
-            cursor="hand2",
-            command=self.ac.quit_app,
-            background=btn_close_bg,
-            foreground=btn_close_fg,
-            activebackground=btn_close_abg,
-            activeforeground=btn_close_afg,
-            fg="white",
-            bd=0,
-        )
-
         open_settings_img_path = assets_dir / "settings.png"
         self.open_settings_img = tk.PhotoImage(file=str(open_settings_img_path))
         self.btn_open_settings = tk.Button(
@@ -215,7 +192,6 @@ class MainWindow:
 
         self.btn_login.grid(row=0, column=0, sticky="w", padx=4, pady=4)
         self.btn_add_playlist.grid(row=0, column=1, padx=4, pady=4)
-        self.close_btn.grid(row=0, column=2, sticky="e")
         self.btn_open_settings.grid(row=0, column=3, sticky="e", padx=4, pady=4)
 
     # ------------------------------------------------------------------
@@ -509,28 +485,58 @@ class MainWindow:
             col = i % 2
             row = (i // 2) + 1
 
-            main_bg = self._theme_bg("frame_main", "background", "#404040")
-            main_frame = tk.Frame(self.root, width=320, background=main_bg)
-            main_header_frame = tk.Frame(main_frame, background=main_bg)
-            main_log_frame = tk.Frame(main_frame, background=main_bg)
+            main_bg = C["frame_main_bg"]
+            frame_playlist_bg = C["frame_playlist_bg"]
+            label_playlist_bg = C["label_playlist_bg"]
+            label_playlist_fg = C["label_playlist_fg"]
+            label_playlist_name_bg = C["label_playlist_name_bg"]
+            label_playlist_name_fg = C["label_playlist_name_fg"]
+            label_playlist_log_bg = C["label_playlist_log_bg"]
+            label_playlist_log_fg = C["label_playlist_log_fg"]
+            label_playlist_good_bg = C["label_playlist_good_bg"]
+            label_playlist_good_fg = C["label_playlist_good_fg"]
+            label_playlist_warn_bg = C["label_playlist_warn_bg"]
+            label_playlist_warn_fg = C["label_playlist_warn_fg"]
+            label_playlist_error_bg = C["label_playlist_error_bg"]
+            label_playlist_error_fg = C["label_playlist_error_fg"]
+            button_playlist_bg = C["button_playlist_bg"]
+            button_playlist_fg = C["button_playlist_fg"]
+            button_playlist_a_bg = C["button_playlist_a_bg"]
+            button_playlist_a_fg = C["button_playlist_a_fg"]
+            entry_playlist_bg = C["entry_playlist_bg"]
+            entry_playlist_fg = C["entry_playlist_fg"]
+            entry_playlist_ro_bg = C["entry_playlist_ro_bg"]
+            btn_close_bg = C["button_close_bg"]
+            btn_close_abg = C["button_close_a_bg"]
+            btn_close_fg = C["button_close_fg"]
+            btn_close_a_fg = C["button_close_a_fg"]
+
+            main_frame = tk.Frame(self.root, width=320, background=frame_playlist_bg)
+            main_header_frame = tk.Frame(main_frame, background=frame_playlist_bg)
+            main_log_frame = tk.Frame(main_frame, background=frame_playlist_bg)
 
             playlist_cover = tk.Label(
                 main_header_frame,
                 image=self.playlist_cover_img,
-                background=main_bg,
+                background=label_playlist_bg,
             )
             playlist_name = tk.Label(
                 main_header_frame,
                 text=f"row:{row} col:{col}",
                 font="Noto, 12",
-                background=main_bg,
+                background=label_playlist_name_bg,
+                foreground=label_playlist_name_fg,
                 width=25,
             )
 
             close_playlist = tk.Button(
                 main_header_frame,
                 image=self.close_playlist_img,
-                background="#404040",
+                cursor="hand2",
+                background=button_playlist_bg,
+                foreground=button_playlist_fg,
+                activebackground=button_playlist_a_bg,
+                activeforeground=button_playlist_a_fg,
                 command=lambda f=main_frame: self.close_main_frame(f),
             )
 
@@ -538,9 +544,9 @@ class MainWindow:
                 main_header_frame,
                 font="Noto, 12",
                 justify="center",
-                background=main_bg,
-                readonlybackground="#2A2A2A",
-                foreground="white",
+                background=entry_playlist_bg,
+                foreground=entry_playlist_fg,
+                readonlybackground=entry_playlist_ro_bg,
                 state="readonly",
             )
             playlist_keybind.bind(
@@ -551,7 +557,11 @@ class MainWindow:
             reload_database = tk.Button(
                 main_header_frame,
                 image=self.reload_database_img,
-                background="#404040",
+                cursor="hand2",
+                background=button_playlist_bg,
+                foreground=button_playlist_fg,
+                activebackground=button_playlist_a_bg,
+                activeforeground=button_playlist_a_fg,
                 command=lambda idx=len(self.frames): self._on_reload_requested(idx),
             )
 
@@ -559,7 +569,8 @@ class MainWindow:
                 main_log_frame,
                 text="log_artist placeholder",
                 font="Noto, 12",
-                background=main_bg,
+                background=label_playlist_log_bg,
+                foreground=label_playlist_log_fg,
                 width=8,
                 anchor="w",
             )
@@ -567,14 +578,16 @@ class MainWindow:
                 main_log_frame,
                 text="-",
                 font="Noto, 12",
-                background=main_bg,
+                background=label_playlist_log_bg,
+                foreground=label_playlist_log_fg,
                 anchor="w",
             )
             log_name = tk.Label(
                 main_log_frame,
                 text="log_name placeholder",
                 font="Noto, 12",
-                background=main_bg,
+                background=label_playlist_log_bg,
+                foreground=label_playlist_log_fg,
                 width=18,
                 anchor="w",
             )
@@ -582,15 +595,16 @@ class MainWindow:
                 main_log_frame,
                 text="|",
                 font="Noto, 12",
-                background=main_bg,
+                background=label_playlist_log_bg,
+                foreground=label_playlist_log_fg,
                 anchor="w",
             )
             log_log = tk.Label(
                 main_log_frame,
                 text="Waiting",
                 font="Noto, 12",
-                background="#006713",
-                foreground="white",
+                background=label_playlist_good_bg,
+                foreground=label_playlist_good_fg,
                 width=5,
                 anchor="w",
             )
@@ -827,3 +841,8 @@ class MainWindow:
         self.frame_positions.clear()
         self.playlist_name_labels.clear()
         self.frame_platforms.clear()
+        # Release cached per-thread SQLite connections held by the UI thread.
+        try:
+            DatabaseManager.close_thread_connections()
+        except Exception as e:
+            logger.warning("Error closing database connections: %s", e)

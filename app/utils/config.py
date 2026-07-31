@@ -54,17 +54,21 @@ DEFAULT_THEME = {
         "activebackground": "#390000",
         "activeforeground": "#FFFFFF"
     },
+    "button_save": {
+        "background": "#004304",
+        "foreground": "#D7D7D7",
+        "activebackground": "#006B07",
+        "activeforeground": "#FFFFFF"
+    },
     "entry_default": {
         "background": "#404040",
         "foreground": "#FFFFFF",
         "readonlybackground": "#2A2A2A",
-        "readonlyforeground": "#AEAEAE",
     },
     "entry_playlist": {
         "background": "#404040",
         "foreground": "#FFFFFF",
         "readonlybackground": "#2A2A2A",
-        "readonlyforeground": "#AEAEAE",
     },
 }
 
@@ -117,7 +121,7 @@ THEME_PRESETS = {
         "label_playlist": {"background": "#F2F2F2", "foreground": "#1A1A1A"},
         "label_playlist_name": {"background": "#F2F2F2", "foreground": "#333333"},
         "label_playlist_log": {"background": "#F2F2F2", "foreground": "#1A1A1A"},
-        "label_playlist_good": {"background": "#00A800", "foreground": "#FFFFFF"},
+        "label_playlist_good": {"background": "#252525", "foreground": "#FFFFFF"},
         "label_playlist_warning": {"background": "#C68100", "foreground": "#FFFFFF"},
         "label_playlist_error": {"background": "#C60000", "foreground": "#FFFFFF"},
         "checkbutton": {
@@ -150,17 +154,21 @@ THEME_PRESETS = {
             "activebackground": "#E7BABA",
             "activeforeground": "#000000",
         },
+        "button_save": {
+            "background": "#004304",
+            "foreground": "#D7D7D7",
+            "activebackground": "#006B07",
+            "activeforeground": "#FFFFFF"
+        },
         "entry_default": {
             "background": "#FFFFFF",
             "foreground": "#111111",
             "readonlybackground": "#F3F3F3",
-            "readonlyforeground": "#666666",
         },
         "entry_playlist": {
             "background": "#FFFFFF",
             "foreground": "#111111",
             "readonlybackground": "#F3F3F3",
-            "readonlyforeground": "#666666",
         },
     },
 }
@@ -177,10 +185,7 @@ def restore_theme_defaults() -> None:
 
 def apply_theme_preset(preset: str) -> None:
     preset = preset.lower()
-    # The default theme *is* the dark theme — no separate preset needed.
-    if preset == "dark":
-        restore_theme_defaults()
-        return
+
     ensure_theme_file()
     values = THEME_PRESETS.get(preset)
     if not values:

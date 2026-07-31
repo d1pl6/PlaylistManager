@@ -3,29 +3,22 @@ import webbrowser
 
 from _version import __version__
 from utils.window import center_window
-from utils.config import get_theme_value
-
-
-def _theme_value(section: str, option: str, default: str) -> str:
-    try:
-        return get_theme_value(section, option, default)
-    except Exception:
-        return default
+from utils.theme import C
 
 
 def show_update_dialog(parent, latest_version, download_url, body):
-    theme_win_bg = _theme_value("frame_main", "background", "#1A1A1A")
-    theme_frame_bg = _theme_value("frame_main", "background", "#2A2A2A")
-    theme_title_fg = _theme_value("label", "foreground", "white")
-    theme_subtitle_fg = _theme_value("label", "foreground", "#AAAAAA")
-    theme_text_bg = _theme_value("frame_main", "background", "#333333")
-    theme_text_fg = _theme_value("label", "foreground", "#CCCCCC")
-    theme_download_bg = _theme_value("button_main", "background", "#006713")
-    theme_download_abg = _theme_value("button_main", "activebackground", "#008A1A")
-    theme_download_fg = _theme_value("button_main", "foreground", "white")
-    theme_close_bg = _theme_value("button_header", "background", "#444444")
-    theme_close_abg = _theme_value("button_header", "activebackground", "#555555")
-    theme_close_fg = _theme_value("button_header", "foreground", "white")
+    theme_win_bg = C["frame_main_bg"]
+    theme_frame_bg = C["frame_main_bg"]
+    theme_title_fg = C["label_def_fg"]
+    theme_subtitle_fg = C["label_def_fg"]
+    theme_text_bg = C["frame_main_bg"]
+    theme_text_fg = C["label_def_fg"]
+    theme_download_bg = C["button_main_bg"]
+    theme_download_abg = C["button_main_a_bg"]
+    theme_download_fg = C["button_main_fg"]
+    theme_close_bg = C["button_head_bg"]
+    theme_close_abg = C["button_head_a_bg"]
+    theme_close_fg = C["button_head_fg"]
 
     win = tk.Toplevel(parent)
     win.title("Update Available")

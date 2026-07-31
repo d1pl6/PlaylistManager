@@ -173,7 +173,7 @@ class App:
         """
         if hasattr(self, "main_window") and self.main_window:
             self.main_window.kc.stop_receiver()
-            self.main_window.kc.stop_listener()
+            self.main_window.kc.stop_listener(wait=False)
             self.main_window.cleanup()
 
     def quit_app(self):
