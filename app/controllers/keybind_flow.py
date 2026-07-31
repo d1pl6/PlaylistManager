@@ -106,11 +106,12 @@ class KeybindFlowController:
             on_status("Sync")
             playlist_id = self._get_playlist_id(playlist_name)
             logger.debug(f"YouTube Music playlist ID: {playlist_id}")
-            if playlist_id:
-                self.yt_music.add_playlist_items(playlist_id, [video_id])
-                logger.info(f"Added {video_id} to YouTube Music playlist {playlist_id}")
-            else:
-                logger.warning(f"Could not find YouTube Music playlist '{playlist_name}'")
+            if playlist_id is None:
+                raise RuntimeError(
+                    f"Could not find YouTube Music playlist '{playlist_name}'"
+                )
+            self.yt_music.add_playlist_items(playlist_id, [video_id])
+            logger.info(f"Added {video_id} to YouTube Music playlist {playlist_id}")
 
             # Step 7: Then add to local database (so platform failure doesn't
             # leave us with a stale local entry that requires manual cleanup)
@@ -169,12 +170,9 @@ class KeybindFlowController:
         Raises:
             TimeoutError: If no URL received within timeout
         """
-        try:
-            url = self.url_receiver.get_received_url(timeout=timeout)
-            logger.debug(f"Received URL from receiver")
-            return url
-        except TimeoutError:
-            raise
+        url = self.url_receiver.get_received_url(timeout=timeout)
+        logger.debug(f"Received URL from receiver")
+        return url
 
     def _fetch_song_details(self, video_id: str) -> Dict:
         """
@@ -425,11 +423,16 @@ class SpotifyFlowController:
             # Step 1: Add to Spotify playlist first (platform API)
             on_status("Sync")
             playlist_id = self._get_playlist_id(playlist_name)
-            if playlist_id:
-                self.spotify_integration.add_tracks_to_playlist(playlist_id, [track_id])
-                logger.info(f"Added {track_id} to Spotify playlist {playlist_id}")
-            else:
-                logger.warning(f"Could not find Spotify playlist '{playlist_name}'")
+            if playlist_id is None:
+                raise RuntimeError(
+                    f"Could not find Spotify playlist '{playlist_name}'"
+                )
+            ok = self.spotify_integration.add_tracks_to_playlist(
+                playlist_id, [track_id]
+            )
+            if not ok:
+                raise RuntimeError(f"Spotify rejected adding '{title}'")
+            logger.info(f"Added {track_id} to Spotify playlist {playlist_id}")
 
             # Step 2: Then add to local database (platform failure won't
             # leave a stale local entry behind)

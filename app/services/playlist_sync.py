@@ -30,12 +30,7 @@ def _extract_thumbnail(data: dict) -> Optional[str]:
     Accepts either a ``thumbnails`` list of ``{"url": ...}`` dicts (the
     smallest by area wins) or a bare ``thumbnail`` URL string.
     """
-    thumbnails = data.get("thumbnails") or data.get("thumbnail")
-    if isinstance(thumbnails, list):
-        return ThumbnailService.get_smallest_thumbnail(thumbnails)
-    if isinstance(thumbnails, str):
-        return thumbnails
-    return None
+    return ThumbnailService.from_data(data)
 
 
 class PlaylistSyncService:

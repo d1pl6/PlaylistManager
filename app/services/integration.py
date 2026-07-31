@@ -110,11 +110,6 @@ class YouTubeMusicIntegration(BaseIntegration):
             logger.error(f"YouTube Music: failed to get playlist details: {e}")
             return {}
 
-    def get_song(self, video_id: str) -> dict:
-        if not self.yt_client:
-            return {}
-        return self.yt_client.get_song(video_id)
-
     def get_playlist_id(self, name: str) -> Optional[str]:
         if not self.yt_client:
             return None

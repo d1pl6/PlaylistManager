@@ -17,7 +17,11 @@ def _toggle_setting(section, var):
     ensure_settings_file()
     cfg = ConfigParser()
     cfg.read(str(_settings_path))
-    cfg[section] = {"is_true": "yes" if var.get() else "no"}
+    if section not in cfg:
+        # Only create the section if missing — don't wipe the other
+        # sections (a bare section assignment replaces them).
+        cfg[section] = {}
+    cfg[section]["is_true"] = "yes" if var.get() else "no"
     with open(_settings_path, "w", encoding="utf-8") as f:
         cfg.write(f)
 

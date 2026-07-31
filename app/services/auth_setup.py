@@ -8,7 +8,6 @@ layer only needs to call a function and handle the result.
 
 import json
 import logging
-import os
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -60,19 +59,18 @@ def save_spotify_credentials(
 ) -> None:
     """Write Spotify credentials to disk with secure permissions.
 
+    Delegates to :func:`integrations.music_spotify.music_spotify
+    .save_spotify_credentials_file` so the token-refresh path (which
+    lives on :class:`SpotifyAPI`) and the login UI write through the
+    same single writer.
+
     Raises ``OSError`` on write failure.
     """
-    creds = {
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "refresh_token": refresh_token,
-    }
-    AUTH_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(str(SPOTIFY_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, json.dumps(creds, indent=2).encode("utf-8"))
-    finally:
-        os.close(fd)
+    from integrations.music_spotify.music_spotify import (
+        save_spotify_credentials_file,
+    )
+
+    save_spotify_credentials_file(client_id, client_secret, refresh_token)
 
 
 def load_spotify_credentials() -> Dict[str, str]:

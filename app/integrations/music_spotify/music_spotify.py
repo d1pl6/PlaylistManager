@@ -39,6 +39,32 @@ def _ensure_auth_dir():
         _auth_dir_created = True
 
 
+def save_spotify_credentials_file(
+    client_id: str, client_secret: str, refresh_token: str
+) -> None:
+    """Write Spotify credentials to disk with secure permissions.
+
+    Single writer for the credential file — used both by the login UI
+    (via :mod:`services.auth_setup`) and by the token-refresh path in
+    :class:`SpotifyAPI`.
+
+    Raises ``OSError`` on write failure.
+    """
+    _ensure_auth_dir()
+    creds = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+    }
+    fd = os.open(
+        str(SPOTIFY_AUTH_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+    )
+    try:
+        os.write(fd, json.dumps(creds, indent=2).encode("utf-8"))
+    finally:
+        os.close(fd)
+
+
 class SpotifyAPI:
     def __init__(self, client_id: str, client_secret: str, refresh_token: str):
         self.client_id = client_id
@@ -227,18 +253,10 @@ class SpotifyAPI:
         }
 
     def _save_credentials(self):
-        _ensure_auth_dir()
         try:
-            creds = {
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "refresh_token": self.refresh_token,
-            }
-            fd = os.open(str(SPOTIFY_AUTH_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            try:
-                os.write(fd, json.dumps(creds, indent=2).encode("utf-8"))
-            finally:
-                os.close(fd)
+            save_spotify_credentials_file(
+                self.client_id, self.client_secret, self.refresh_token
+            )
         except Exception as e:
             logger.error(f"Failed to save Spotify credentials: {e}")
 

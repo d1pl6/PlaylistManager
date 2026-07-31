@@ -10,6 +10,8 @@ or teardown raises, the user is offered a choice between force-quitting
 import logging
 import tkinter as tk
 
+from utils.theme import C
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,7 +55,7 @@ class AppController:
 
         dialog = tk.Toplevel(self.app.root)
         dialog.title("Error")
-        dialog.configure(background="#252525")
+        dialog.configure(background=C["frame_main_bg"])
         dialog.transient(self.app.root)
         dialog.grab_set()
         dialog.resizable(False, False)
@@ -61,16 +63,16 @@ class AppController:
         tk.Label(
             dialog,
             text="An error occurred while closing PlaylistManager:",
-            background="#252525",
-            foreground="#EDEDED",
+            background=C["frame_main_bg"],
+            foreground=C["label_def_fg"],
             font=("Noto", 10),
         ).pack(padx=16, pady=(12, 0))
 
         tk.Label(
             dialog,
             text=str(error),
-            background="#252525",
-            foreground="#FF8080",
+            background=C["frame_main_bg"],
+            foreground=C["label_playlist_error_fg"],
             font=("Noto", 9),
             wraplength=360,
             justify="left",
@@ -86,9 +88,9 @@ class AppController:
             dialog,
             text="Force-quit",
             command=lambda: _choose(True),
-            background="#6C6C6C",
-            foreground="#FFFFFF",
-            activebackground="#868686",
+            background=C["button_main_bg"],
+            foreground=C["button_main_fg"],
+            activebackground=C["button_main_a_bg"],
             bd=0,
         ).pack(side="left", padx=(16, 4), pady=(0, 12))
 
@@ -96,9 +98,9 @@ class AppController:
             dialog,
             text="Cancel",
             command=lambda: _choose(False),
-            background="#3A3A3A",
-            foreground="#D7D7D7",
-            activebackground="#555555",
+            background=C["button_head_bg"],
+            foreground=C["button_head_fg"],
+            activebackground=C["button_head_a_bg"],
             bd=0,
         ).pack(side="left", padx=(4, 16), pady=(0, 12))
 

@@ -66,24 +66,28 @@ def _find_by_key(
 class PlaylistStore:
     @staticmethod
     def load_playlists():
-        """Return the cached playlist list, or read it from disk."""
+        """Return a copy of the playlist list, reading from disk if stale.
+
+        The copy (instead of the cached list itself) makes iteration safe:
+        writers only mutate their own copy under ``_lock`` and then publish
+        it via :meth:`_write`, so a concurrent write can never resize the
+        list a reader is iterating (which would otherwise raise
+        ``RuntimeError: list changed size during iteration``).
+        """
         global _playlist_cache, _cache_timestamp
 
         now = time.monotonic()
-        if _playlist_cache is not None and (now - _cache_timestamp) < _CACHE_TTL:
-            return _playlist_cache
-
-        if os.path.exists(playlists_json) and os.path.getsize(playlists_json) > 0:
-            try:
-                with open(playlists_json, "r", encoding="utf-8") as f:
-                    _playlist_cache = json.load(f)
-                    _cache_timestamp = now
-                    return _playlist_cache
-            except Exception as e:
-                logger.error(f"Failed to read playlists.json: {e}")
-        _playlist_cache = []
-        _cache_timestamp = now
-        return _playlist_cache
+        if _playlist_cache is None or (now - _cache_timestamp) >= _CACHE_TTL:
+            _playlist_cache = []
+            _cache_timestamp = now
+            if os.path.exists(playlists_json) and os.path.getsize(playlists_json) > 0:
+                try:
+                    with open(playlists_json, "r", encoding="utf-8") as f:
+                        _playlist_cache = json.load(f)
+                        _cache_timestamp = now
+                except Exception as e:
+                    logger.error(f"Failed to read playlists.json: {e}")
+        return list(_playlist_cache)
 
     @staticmethod
     def get_existing_names(platform: str = ""):

@@ -25,6 +25,7 @@ from utils.key_mapping import (
 )
 from controllers.keybind_registry import KeybindCallbacks, KeybindRegistry
 from services.song_manager import SongManager
+from utils.theme import C
 
 logger = logging.getLogger(__name__)
 
@@ -307,12 +308,12 @@ class KeybindController:
         touches tkinter widgets directly.
         """
         if self.keybind_thread is not None and self.keybind_thread.is_alive():
-            callbacks.on_status("Busy", "#AA8800")
+            callbacks.on_status("Busy", C["label_playlist_warn_bg"])
             logger.warning("Flow already in progress, ignoring keybind")
             return
 
         callbacks.on_entry_state("readonly")
-        callbacks.on_status("Loading...", "#4A5A00")
+        callbacks.on_status("Loading", C["label_playlist_warn_bg"])
         callbacks.on_song_info("", "")
 
         if not self._ensure_initialized(platform, callbacks):
@@ -321,15 +322,14 @@ class KeybindController:
 
         def on_status(msg):
             def _apply():
-                display_msg = msg[:5] if msg else "..."
-                callbacks.on_status(display_msg, "#4A5A00")
+                callbacks.on_status(msg, C["label_playlist_warn_bg"])
             if self._root is not None:
                 self._root.after(0, _apply)
 
         def on_error(error_msg):
             def _apply():
                 callbacks.on_reset("readonly")
-                callbacks.on_status("Error", "#A00000")
+                callbacks.on_status("Error", C["label_playlist_error_bg"])
             logger.error(f"Keybind flow error: {error_msg}")
             if self._root is not None:
                 self._root.after(0, _apply)
@@ -338,11 +338,11 @@ class KeybindController:
             def _apply():
                 status = result.get("status", "error")
                 if status == "added":
-                    callbacks.on_status("Added", "#006713")
+                    callbacks.on_status("Added", C["label_playlist_good_bg"])
                 elif status == "exists":
-                    callbacks.on_status("Exists", "#AA8800")
+                    callbacks.on_status("Exists", C["label_playlist_warn_bg"])
                 else:
-                    callbacks.on_status("Error", "#A00000")
+                    callbacks.on_status("Error", C["label_playlist_error_bg"])
 
                 song_data = result.get("song", {})
                 if song_data:
@@ -395,7 +395,7 @@ class KeybindController:
                 self.song_manager = SongManager()
             except Exception as e:
                 logger.error(f"Failed to create SongManager: {e}")
-                callbacks.on_status("Error", "#A00000")
+                callbacks.on_status("Error", C["label_playlist_error_bg"])
                 callbacks.on_entry_state("readonly")
                 return False
 
@@ -406,7 +406,7 @@ class KeybindController:
                 self.spotify_integration is None
                 or not self.spotify_integration.is_authenticated()
             ):
-                callbacks.on_status("Error", "#A00000")
+                callbacks.on_status("Error", C["label_playlist_error_bg"])
                 callbacks.on_entry_state("readonly")
                 logger.error("Spotify not authenticated.")
                 return False
@@ -423,7 +423,7 @@ class KeybindController:
         if self._keybind_flow is not None:
             return True
         if self.yt is None:
-            callbacks.on_status("Error", "#A00000")
+            callbacks.on_status("Error", C["label_playlist_error_bg"])
             callbacks.on_entry_state("readonly")
             logger.error("YouTube Music not authenticated.")
             return False
@@ -442,7 +442,7 @@ class KeybindController:
             return True
         except Exception as e:
             logger.error(f"Failed to initialize managers: {e}")
-            callbacks.on_status("Error", "#A00000")
+            callbacks.on_status("Error", C["label_playlist_error_bg"])
             callbacks.on_entry_state("readonly")
             return False
 

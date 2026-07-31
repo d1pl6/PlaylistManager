@@ -73,7 +73,14 @@ def get_terminal_command(work_dir: Path) -> List[str]:
     if system == "Windows":
         return ["cmd", "/k", f'cd /d "{work_dir}" && ytmusicapi browser']
     elif system == "Darwin":
-        return ["open", "-a", "Terminal", str(work_dir)]
+        # "open -a Terminal <dir>" opens Finder, not a terminal — drive
+        # Terminal.app via AppleScript instead so the command actually runs.
+        escaped_dir = str(work_dir).replace('"', '\\"')
+        return [
+            "osascript",
+            "-e",
+            f'tell app "Terminal" to do script "cd \\"{escaped_dir}\\" && ytmusicapi browser"',
+        ]
     else:
         term = find_linux_terminal()
         if not term:

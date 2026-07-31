@@ -3,10 +3,16 @@ Flask-based HTTP receiver for YouTube Music URLs from the browser extension.
 
 All Flask imports are **lazy** — they happen only when the receiver is
 actually started (at most ~30 s per keybind press).
+
+Security: the server is bound to localhost and issues a random per-run
+token that the extension must echo back in an ``X-PM-Token`` header.
+CORS is restricted to the YouTube Music origin, so an arbitrary webpage
+cannot read the token or POST a URL.
 """
 
 import logging
 import re
+import secrets
 import threading
 import time
 from typing import Optional
@@ -40,8 +46,8 @@ class URLReceiverManager:
 
     Protocol:
       1. Flow controller calls start() + set_waiting(True) when keybind is pressed.
-      2. Extension polls GET /status -> {"ready": true} while server is up.
-      3. Extension POSTs URL to /receive-url once.
+      2. Extension polls GET /status -> {"ready": true, "token": "<per-run token>"} while server is up.
+      3. Extension POSTs URL to /receive-url once, echoing the token in X-PM-Token.
       4. Flow controller calls set_waiting(False), retrieves URL from queue, stops server.
 
     The server is short-lived (up to ~30 s per keybind press) and binds to
@@ -65,6 +71,7 @@ class URLReceiverManager:
         self._server = None
         self._running = False
         self._waiting_for_url = False
+        self._token: Optional[str] = None
         self._state_lock = threading.Lock()
         self._rate_limiter = _RateLimiter(max_requests=10, window_seconds=60)
         # NOTE: _ensure_app() is NOT called here — Flask is imported lazily.
@@ -81,13 +88,19 @@ class URLReceiverManager:
         self._make_server = make_server
 
         app = Flask(__name__)
+        # Only the YT Music tab (extension content script) may talk to the
+        # receiver.  An arbitrary webpage must not be able to read /status
+        # (to steal the token) or POST a URL.
         CORS(
             app,
             resources={
                 r"/*": {
-                    "origins": "*",
+                    "origins": [
+                        "https://music.youtube.com",
+                        f"http://localhost:{self.port}",
+                    ],
                     "methods": ["GET", "POST", "OPTIONS"],
-                    "allow_headers": ["Content-Type"],
+                    "allow_headers": ["Content-Type", "X-PM-Token"],
                 }
             },
         )
@@ -95,13 +108,22 @@ class URLReceiverManager:
         @app.route("/status", methods=["GET"])
         def _status():
             """Extension polls this to know when to send a URL."""
-            return jsonify({"ready": self._waiting_for_url})
+            return jsonify(
+                {"ready": self._waiting_for_url, "token": self._token}
+            )
 
         @app.route("/receive-url", methods=["POST", "OPTIONS"])
         def _receive_url():
             """Endpoint to receive YouTube Music URLs."""
             if request.method == "OPTIONS":
                 return "", 200
+
+            # Every POST must prove it learned the per-run token from
+            # /status (a browser page can only do that via the CORS
+            # allowlist above; the extension content script runs on the
+            # YouTube Music origin, so it passes).
+            if not self._token or request.headers.get("X-PM-Token") != self._token:
+                return jsonify({"error": "Forbidden"}), 403
 
             if not self._rate_limiter.is_allowed():
                 return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
@@ -165,6 +187,10 @@ class URLReceiverManager:
 
         self._ensure_app()
 
+        # Fresh token per run — a token from a previous (finished) flow
+        # must not be accepted.
+        self._token = secrets.token_hex(16)
+
         try:
             self._server = self._make_server(
                 self.host, self.port, self.app, threaded=True
@@ -198,6 +224,7 @@ class URLReceiverManager:
 
         with self._state_lock:
             self._waiting_for_url = False
+            self._token = None
         try:
             if self._server:
                 self._server.shutdown()

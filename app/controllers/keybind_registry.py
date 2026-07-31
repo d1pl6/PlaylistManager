@@ -76,6 +76,15 @@ class KeybindRegistry:
         if not hotkey:
             return
         with self._lock:
+            existing = self._keybind_map.get(hotkey)
+            if existing is not None and existing["playlist_name"] != playlist_name:
+                # Two playlists can't share one hotkey — the new binding
+                # silently wins, which is confusing.  Make it visible.
+                logger.warning(
+                    "Hotkey '%s' is already bound to playlist '%s' — "
+                    "replacing its binding with '%s'",
+                    hotkey, existing["playlist_name"], playlist_name,
+                )
             self._keybind_map[hotkey] = {
                 "playlist_name": playlist_name,
                 "callbacks": callbacks,

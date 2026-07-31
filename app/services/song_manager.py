@@ -31,7 +31,13 @@ def _parse_duration(duration_str: str) -> int:
     if any(p < 0 for p in parts_int):
         logger.warning("Negative duration component in '%s', using 0", duration_str)
         return 0
-    if len(parts_int) == 3 and (parts_int[1] >= 60 or parts_int[2] >= 60):
+    if len(parts_int) == 2 and parts_int[1] >= 60:
+        # "M:SS" — a seconds value >= 60 means the string is malformed
+        # (e.g. "3:75" instead of "4:15"); the result is still computed.
+        logger.warning(
+            "Duration '%s' has seconds >=60, result may be wrong", duration_str
+        )
+    elif len(parts_int) == 3 and (parts_int[1] >= 60 or parts_int[2] >= 60):
         logger.warning(
             "Duration '%s' has minute/second values >=60, result may be wrong", duration_str
         )

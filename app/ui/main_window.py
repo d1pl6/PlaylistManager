@@ -91,7 +91,7 @@ class MainWindow:
         style.theme_use("clam")
 
         self.root.title("PlaylistManager")
-        self.root.configure(background="#1A1A1A", pady=5, padx=5)
+        self.root.configure(background=C["root_bg"], pady=5, padx=5)
         self.root.geometry("650x460")
         self.root.minsize(325, 150)
         self.root.maxsize(999999, 999999)
@@ -127,16 +127,23 @@ class MainWindow:
         load_theme()
         header_bg = C["frame_head_bg"]
         self.header_frame.configure(background=header_bg)
+        # Header children are all image buttons — repaint them with the
+        # header-button colours (not the frame colour they sit on).
         for widget in self.header_frame.winfo_children():
-            if isinstance(widget, tk.Frame):
-                widget.configure(background=header_bg)
+            if isinstance(widget, tk.Button):
+                widget.configure(
+                    background=C["button_head_bg"],
+                    activebackground=C["button_head_a_bg"],
+                )
 
+        frame_playlist_bg = C["frame_playlist_bg"]
         for frame in self.frames:
-            main_bg = C["frame_main_bg"]
-            frame.configure(background=main_bg)
+            # Frames are created with frame_playlist_bg; re-apply the same
+            # key so a theme change doesn't paint them with the window bg.
+            frame.configure(background=frame_playlist_bg)
             for child in frame.winfo_children():
                 try:
-                    child.configure(background=main_bg)
+                    child.configure(background=frame_playlist_bg)
                 except Exception:
                     pass
 
@@ -203,9 +210,19 @@ class MainWindow:
 
     def _show_platform_picker(self, platforms, callback) -> None:
         """Create a Toplevel to pick a platform (Issue #1, #12)."""
+        win_bg = C["frame_main_bg"]
+        label_fg = C["label_def_fg"]
+        btn_bg = C["button_main_bg"]
+        btn_fg = C["button_main_fg"]
+        btn_a_bg = C["button_main_a_bg"]
+        btn_a_fg = C["button_main_a_fg"]
+        cancel_bg = C["button_head_bg"]
+        cancel_fg = C["button_head_fg"]
+        cancel_a_bg = C["button_head_a_bg"]
+
         win = tk.Toplevel(self.root)
         win.title("Choose Platform")
-        win.configure(background="#2A2A2A")
+        win.configure(background=win_bg)
         win.transient(self.root)
         center_window(win)  # Issue #12 — was never centred
         win.grab_set()
@@ -213,8 +230,8 @@ class MainWindow:
         tk.Label(
             win,
             text="Select platform to fetch playlists from:",
-            background="#2A2A2A",
-            foreground="white",
+            background=win_bg,
+            foreground=label_fg,
             font="Noto, 11",
         ).pack(pady=10, padx=20)
 
@@ -222,8 +239,10 @@ class MainWindow:
             tk.Button(
                 win,
                 text=integration.display_name,
-                background="#404040",
-                foreground="white",
+                background=btn_bg,
+                foreground=btn_fg,
+                activebackground=btn_a_bg,
+                activeforeground=btn_a_fg,
                 font="Noto, 11",
                 width=30,
                 command=lambda i=integration: (win.destroy(), callback(i)),
@@ -232,8 +251,9 @@ class MainWindow:
         tk.Button(
             win,
             text="Cancel",
-            background="#0A0000",
-            foreground="white",
+            background=cancel_bg,
+            foreground=cancel_fg,
+            activebackground=cancel_a_bg,
             font="Noto, 10",
             command=win.destroy,
         ).pack(pady=10)
@@ -251,7 +271,7 @@ class MainWindow:
             ),
             on_cancel=on_cancel,
         )
-        dialog.show(playlists, integration)
+        dialog.show(playlists)
 
     def _show_integration_error(self) -> None:
         messagebox.showerror("Integration Error", INTEGRATION_ERROR_MSG)
@@ -276,7 +296,7 @@ class MainWindow:
 
             frame_idx = len(self.frames) - 1
             status_label = self.active_log_labels[frame_idx]["status"]
-            status_label.config(text="Sync", background="#5A4A00")
+            status_label.config(text="Sync", background=C["label_playlist_warn_bg"])
 
             if thumb_url:
                 self._set_playlist_cover(frame_idx, thumb_url)
@@ -288,7 +308,12 @@ class MainWindow:
     # ------------------------------------------------------------------
 
     def _set_playlist_cover(self, frame_idx: int, thumb_url: str) -> None:
-        """Fetch and apply a playlist thumbnail in a background thread."""
+        """Download a playlist thumbnail in a background thread.
+
+        Only the download + resize run off-thread (thread-safe); the
+        PhotoImage is created on the main thread by :meth:`_apply_cover`
+        because tkinter is not thread-safe.
+        """
         if frame_idx not in self.active_log_labels:
             return
         cover_label = self.active_log_labels[frame_idx].get("cover")
@@ -296,17 +321,22 @@ class MainWindow:
             return
 
         def fetch() -> None:
-            tk_img = ThumbnailService.fetch_thumbnail(thumb_url, size=(64, 64))
-            if tk_img:
-                self.root.after(0, lambda: self._apply_cover(frame_idx, tk_img))
+            img = ThumbnailService.fetch_image(thumb_url, size=(64, 64))
+            if img is not None:
+                self.root.after(0, lambda: self._apply_cover(frame_idx, img))
 
         threading.Thread(target=fetch, daemon=True).start()
 
-    def _apply_cover(self, frame_idx: int, tk_img) -> None:
+    def _apply_cover(self, frame_idx: int, img) -> None:
         if frame_idx not in self.active_log_labels:
             return
         cover_label = self.active_log_labels[frame_idx].get("cover")
         if not cover_label:
+            return
+        try:
+            tk_img = ThumbnailService.to_photoimage(img)  # main thread only
+        except Exception as e:
+            logger.error(f"Failed to create cover PhotoImage: {e}")
             return
         cover_label.configure(image=tk_img)
         self.frame_img_refs.setdefault(id(cover_label), []).append(tk_img)
@@ -372,11 +402,11 @@ class MainWindow:
             return
         status_label = self.active_log_labels[frame_idx]["status"]
         if count > 0:
-            status_label.config(text="OK", background="#006713")
+            status_label.config(text="OK", background=C["label_playlist_good_bg"])
         elif status_text == "Error":
-            status_label.config(text=status_text, background="#A00000")
+            status_label.config(text=status_text, background=C["label_playlist_error_bg"])
         else:
-            status_label.config(text=status_text, background="#006713")
+            status_label.config(text=status_text, background=C["label_playlist_good_bg"])
         self._update_log_labels_from_db(
             frame_idx, playlist_name, self.frame_platforms[frame_idx]
         )
@@ -420,7 +450,7 @@ class MainWindow:
 
         def on_reset(entry_state: str) -> None:
             labels["keybind_entry"].config(state=entry_state)
-            labels["status"].config(text="", background="SystemButtonFace")
+            labels["status"].config(text="", background=C["frame_playlist_bg"])
             labels["artist"].config(text="")
             labels["name"].config(text="")
 
@@ -738,7 +768,11 @@ class MainWindow:
 
         self._recording_frame_idx = frame_idx
         entry = self.active_log_labels[frame_idx]["keybind_entry"]
-        entry.config(state="normal", readonlybackground="#A00000", background="#404040")
+        entry.config(
+            state="normal",
+            readonlybackground=C["label_playlist_error_bg"],
+            background=C["entry_playlist_bg"],
+        )
         entry.delete(0, tk.END)
 
         def on_combo(combo: str) -> None:
@@ -748,7 +782,9 @@ class MainWindow:
 
         def on_stop() -> None:
             self._recording_frame_idx = None
-            entry.config(state="readonly", readonlybackground="#2A2A2A")
+            entry.config(
+                state="readonly", readonlybackground=C["entry_playlist_ro_bg"]
+            )
             entry.delete(0, tk.END)
 
         self.kc.start_recording(on_combo, on_stop=on_stop)
@@ -761,7 +797,9 @@ class MainWindow:
         combo = self.kc.stop_recording()
 
         entry = self.active_log_labels[frame_idx]["keybind_entry"]
-        entry.config(state="readonly", readonlybackground="#2A2A2A")
+        entry.config(
+            state="readonly", readonlybackground=C["entry_playlist_ro_bg"]
+        )
         entry.delete(0, tk.END)
 
         playlist_name = self.playlist_name_labels[frame_idx].cget("text")
@@ -804,7 +842,7 @@ class MainWindow:
             return
 
         status_label = self.active_log_labels[frame_idx]["status"]
-        status_label.config(text="Sync", background="#5A4A00")
+        status_label.config(text="Sync", background=C["label_playlist_warn_bg"])
 
         def on_done(
             name: str, count: int, status_text: str, thumb_url: str | None
@@ -818,6 +856,15 @@ class MainWindow:
                 thumb_url,
                 frame_idx,
             )
+
+        # The reload worker deletes the playlist DB file on disk.  Close the
+        # UI thread's cached connection to that DB first, otherwise the next
+        # add/read on the main thread would write to the orphaned inode and
+        # the new data would silently vanish.
+        try:
+            DatabaseManager.close_thread_connections()
+        except Exception as e:
+            logger.warning("Failed to close DB connections before reload: %s", e)
 
         self._sync_service.reload_database(
             playlist_name, platform, playlist_id, on_done

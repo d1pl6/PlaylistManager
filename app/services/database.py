@@ -170,16 +170,6 @@ class DatabaseManager:
                 logger.error("Error closing cached connection %s: %s", cache_key, e)
         DatabaseManager._tls._db_connections = {}
 
-    @staticmethod
-    def close_connection(conn: sqlite3.Connection) -> None:
-        """Close a database connection."""
-        try:
-            if conn:
-                conn.close()
-                logger.debug("Closed database connection")
-        except sqlite3.Error as e:
-            logger.error(f"Error closing database connection: {e}")
-
 
 def _set_pragmas(conn: sqlite3.Connection) -> None:
     """Set performance and safety pragmas on a connection.

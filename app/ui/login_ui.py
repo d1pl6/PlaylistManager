@@ -246,7 +246,10 @@ def _on_spotify(parent, on_success):
                 client_id_var.set("")
                 client_secret_var.set("")
                 refresh_token_var.set("")
-                status_label.config(text="Credentials deleted", foreground="#006713")
+                status_label.config(
+                    text="Credentials deleted",
+                    foreground=C["label_playlist_good_fg"],
+                )
                 if on_success:
                     on_success()
             else:
@@ -273,7 +276,8 @@ def _on_spotify(parent, on_success):
         btn_test.config(state="normal")
         if result.get("ok"):
             status_label.config(
-                text=f"OK: {result['display_name']}", foreground="#006713"
+                text=f"OK: {result['display_name']}",
+                foreground=C["label_playlist_good_fg"],
             )
         else:
             status_label.config(text=result.get("error", "Error"), foreground="red")

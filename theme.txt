@@ -34,6 +34,10 @@ button_playlist_bg
 button_playlist_fg
 button_playlist_a_bg
 button_playlist_a_fg
+button_save_bg
+button_save_fg
+button_save_a_bg
+button_save_a_fg
 button_close_bg
 button_close_fg
 button_close_a_bg
@@ -41,7 +45,6 @@ button_close_a_fg
 entry_default_bg
 entry_default_fg
 entry_default_ro_bg
-entry_default_ro_fg
 entry_playlist_bg
 entry_playlist_fg
 entry_playlist_ro_bg

@@ -8,7 +8,6 @@ instantiation.
 """
 
 import logging
-import os
 from pathlib import Path
 from types import MethodType
 from typing import Optional
@@ -26,9 +25,6 @@ BROWSER_FILE_FALLBACKS = [
     Path(__file__).parent.parent.parent / "browser.json",
     Path(__file__).parent / "browser.json",
 ]
-
-YOUTUBE_CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID")
-YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET")
 
 
 def _patched_get_library_playlists(self, limit: int | None = 25):

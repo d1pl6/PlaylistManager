@@ -1,4 +1,5 @@
 import logging
+import threading
 import tkinter as tk
 from configparser import ConfigParser
 from pathlib import Path
@@ -77,7 +78,9 @@ class App:
 
         # Migrate legacy playlists (without playlist_id) so the new
         # (platform, playlist_id) dedup key works for existing entries.
-        self._migrate_playlist_schema()
+        # The lookups call the platform APIs (network) — run them in the
+        # background so they never block first paint of the UI thread.
+        threading.Thread(target=self._migrate_playlist_schema, daemon=True).start()
 
         self.main_window = MainWindow(
             self.root,
