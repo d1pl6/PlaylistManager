@@ -247,8 +247,6 @@ class PlaylistStore:
         the entry is left untouched — the fallback logic in ``_find_by_key``
         will continue to work using ``(platform, name)``.
         """
-        from collections.abc import Callable  # inline to avoid import at module level
-
         if lookup_playlist_id is None:
             return
 

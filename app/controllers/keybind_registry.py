@@ -1,5 +1,5 @@
 """
-Hotkey registry — stores registered hotkey combos and matches them
+Keybind registry — stores registered keybind combos and matches them
 against the currently-pressed keys.
 
 This module has no knowledge of pynput or tkinter; it is pure data.
@@ -51,14 +51,14 @@ class KeybindCallbacks:
 # ---------------------------------------------------------------------------
 
 
-class HotkeyRegistry:
-    """Stores registered hotkey combos and matches them against pressed keys.
+class KeybindRegistry:
+    """Stores registered keybind combos and matches them against pressed keys.
 
     Thread-safe — all mutation and reads are guarded by a single lock.
     """
 
     def __init__(self):
-        self._hotkey_map: Dict[str, Dict] = {}
+        self._keybind_map: Dict[str, Dict] = {}
         self._lock = threading.Lock()
 
     def register(
@@ -68,7 +68,7 @@ class HotkeyRegistry:
         callbacks: KeybindCallbacks,
         platform: str,
     ):
-        """Register a hotkey + callbacks for *playlist_name*.
+        """Register a keybind + callbacks for *playlist_name*.
 
         Replaces any previous registration for the same playlist name.
         """
@@ -76,28 +76,28 @@ class HotkeyRegistry:
         if not hotkey:
             return
         with self._lock:
-            self._hotkey_map[hotkey] = {
+            self._keybind_map[hotkey] = {
                 "playlist_name": playlist_name,
                 "callbacks": callbacks,
                 "platform": platform,
                 "_parsed": parse_hotkey(hotkey),
             }
         logger.info(
-            "Registered hotkey '%s' for playlist '%s' (platform=%s)",
+            "Registered keybind '%s' for playlist '%s' (platform=%s)",
             hotkey, playlist_name, platform,
         )
 
     def unregister(self, playlist_name: str):
-        """Remove all hotkeys registered for *playlist_name*."""
+        """Remove all keybinds registered for *playlist_name*."""
         with self._lock:
             to_remove = [
                 k
-                for k, v in self._hotkey_map.items()
+                for k, v in self._keybind_map.items()
                 if v["playlist_name"] == playlist_name
             ]
             for k in to_remove:
-                del self._hotkey_map[k]
-                logger.info("Unregistered hotkey '%s' for playlist '%s'", k, playlist_name)
+                del self._keybind_map[k]
+                logger.info("Unregistered keybind '%s' for playlist '%s'", k, playlist_name)
 
     def match(self, pressed_keys: Set[str]) -> Optional[tuple]:
         """Return the best (specificity, hotkey_str, info) or *None*.
@@ -108,7 +108,7 @@ class HotkeyRegistry:
         """
         best = None  # (specificity, hotkey_str, info)
         with self._lock:
-            for hotkey_str, info in self._hotkey_map.items():
+            for hotkey_str, info in self._keybind_map.items():
                 expected = info["_parsed"]
                 if not expected:
                     continue

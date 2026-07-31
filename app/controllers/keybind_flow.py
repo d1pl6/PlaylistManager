@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import TYPE_CHECKING, Callable, Dict, Optional
-from constants import PLATFORM_SPOTIFY
+from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from services.song_manager import SongManager
 
 if TYPE_CHECKING:
@@ -88,7 +88,9 @@ class KeybindFlowController:
             # Step 5: Check if song exists
             on_status("Check")
             logger.debug(f"Checking if {video_id} exists in {playlist_name}")
-            exists = self.song_manager.song_exists(playlist_name, video_id)
+            exists = self.song_manager.song_exists(
+                playlist_name, video_id, platform=PLATFORM_YOUTUBE_MUSIC
+            )
             logger.debug(f"Song exists: {exists}")
             if exists:
                 on_success(
@@ -121,6 +123,7 @@ class KeybindFlowController:
                 song_data["duration"],
                 video_id,
                 song_data.get("thumbnail"),
+                platform=PLATFORM_YOUTUBE_MUSIC,
             )
             logger.debug(f"Added to local DB with ID: {song_id}")
 
@@ -409,7 +412,9 @@ class SpotifyFlowController:
             }
 
             on_status("Check")
-            if self.song_manager.song_exists_by_info(playlist_name, title, artists, duration):
+            if self.song_manager.song_exists_by_info(
+                playlist_name, title, artists, duration, platform=PLATFORM_SPOTIFY
+            ):
                 on_success({
                     "status": "exists",
                     "song": song_data,
@@ -430,7 +435,13 @@ class SpotifyFlowController:
             # leave a stale local entry behind)
             on_status("Add")
             song_id = self.song_manager.add_song_by_info(
-                playlist_name, title, artists, duration, track_id, thumbnail
+                playlist_name,
+                title,
+                artists,
+                duration,
+                track_id,
+                thumbnail,
+                platform=PLATFORM_SPOTIFY,
             )
 
             on_success({

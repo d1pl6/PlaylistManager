@@ -165,13 +165,22 @@ class App:
             logger.exception("Unhandled exception")
             raise
 
+    def cleanup(self):
+        """Best-effort teardown of listeners, receiver, and UI widgets.
+
+        Called by :class:`AppController` before quitting.  Raises the
+        first error so the controller can offer Force-quit / Cancel.
+        """
+        if hasattr(self, "main_window") and self.main_window:
+            self.main_window.kc.stop_receiver()
+            self.main_window.kc.stop_listener()
+            self.main_window.cleanup()
+
     def quit_app(self):
         logger.info("Stopping app")
         try:
-            if hasattr(self, "main_window") and self.main_window:
-                self.main_window.kc.stop_receiver()
-                self.main_window.kc.stop_listener()
-                self.main_window.cleanup()
-        finally:
             self.root.quit()
             self.root.destroy()
+        except Exception:
+            logger.exception("Failed to close the root window")
+            raise

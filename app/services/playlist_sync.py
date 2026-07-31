@@ -10,7 +10,10 @@ import logging
 import threading
 from typing import Callable, Optional
 
+from services.database import DatabaseManager
+from services.playlist_store import PlaylistStore
 from services.song_manager import SongManager
+from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +97,6 @@ class PlaylistSyncService:
 
         def _run() -> None:
             try:
-                from services.database import DatabaseManager
                 db_path = DatabaseManager.get_playlist_db_path_static(
                     playlist_name, platform
                 )
@@ -106,7 +108,6 @@ class PlaylistSyncService:
                 thumbnails = details.get("thumbnails") or details.get("thumbnail")
                 thumb_url: Optional[str] = None
                 if isinstance(thumbnails, list):
-                    from utils.thumbnail import ThumbnailService
                     thumb_url = ThumbnailService.get_smallest_thumbnail(thumbnails)
                 elif isinstance(thumbnails, str):
                     thumb_url = thumbnails
@@ -122,7 +123,6 @@ class PlaylistSyncService:
                 )
 
                 if thumb_url:
-                    from services.playlist_store import PlaylistStore
                     PlaylistStore.update_thumbnail(
                         playlist_name, platform, thumb_url
                     )

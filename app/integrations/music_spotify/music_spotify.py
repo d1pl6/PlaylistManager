@@ -277,6 +277,23 @@ class SpotifyAuthManager:
             self.api = None
             return False
 
+    @staticmethod
+    def verify_credentials(
+        client_id: str, client_secret: str, refresh_token: str
+    ) -> Optional[Dict]:
+        """Validate credentials against the Spotify API.
+
+        Creates a temporary :class:`SpotifyAPI` client and calls ``/v1/me``
+        so the caller doesn't have to construct the API wrapper itself.
+        Returns the parsed response dict, or None if the request failed.
+        """
+        api = SpotifyAPI(
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=refresh_token,
+        )
+        return api.get_me()
+
     def is_authenticated(self) -> bool:
         return self.api is not None
 

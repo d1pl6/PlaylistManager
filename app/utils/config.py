@@ -163,61 +163,6 @@ THEME_PRESETS = {
             "readonlyforeground": "#666666",
         },
     },
-    "dark": {
-        "root_background": {"background": "#1A1A1A"},
-        "frame_header": {"background": "#101010"},
-        "frame_main": {"background": "#252525"},
-        "frame_playlist": {"background": "#252525"},
-        "label_default": {"background": "#252525", "foreground": "#EDEDED"},
-        "label_playlist": {"background": "#2f2f2f", "foreground": "#EDEDED"},
-        "label_playlist_name": {"background": "#2f2f2f", "foreground": "#DCDCDC"},
-        "label_playlist_log": {"background": "#2f2f2f", "foreground": "#EDEDED"},
-        "label_playlist_good": {"background": "#00c600", "foreground": "#EDEDED"},
-        "label_playlist_warning": {"background": "#c68100", "foreground": "#EDEDED"},
-        "label_playlist_error": {"background": "#c60000", "foreground": "#EDEDED"},
-        "checkbutton": {
-            "background": "#303030",
-            "foreground": "#DADADA",
-            "selectcolor": "#505050",
-            "activebackground": "#404040",
-            "activeforeground": "#FFFFFF",
-        },
-        "button_header": {
-            "background": "#6C6C6C",
-            "foreground": "#FFFFFF",
-            "activebackground": "#868686",
-        },
-        "button_main": {
-            "background": "#3A3A3A",
-            "foreground": "#D7D7D7",
-            "activebackground": "#555555",
-            "activeforeground": "#FFFFFF",
-        },
-        "button_playlist": {
-            "background": "#3A3A3A",
-            "foreground": "#D7D7D7",
-            "activebackground": "#555555",
-            "activeforeground": "#FFFFFF",
-        },
-        "button_close": {
-            "background": "#160000",
-            "foreground": "#FFFFFF",
-            "activebackground": "#390000",
-            "activeforeground": "#FFFFFF"
-        },
-        "entry_default": {
-            "background": "#404040",
-            "foreground": "#FFFFFF",
-            "readonlybackground": "#2A2A2A",
-            "readonlyforeground": "#AEAEAE",
-        },
-        "entry_playlist": {
-            "background": "#404040",
-            "foreground": "#FFFFFF",
-            "readonlybackground": "#2A2A2A",
-            "readonlyforeground": "#AEAEAE",
-        },
-    },
 }
 
 
@@ -231,8 +176,13 @@ def restore_theme_defaults() -> None:
 
 
 def apply_theme_preset(preset: str) -> None:
+    preset = preset.lower()
+    # The default theme *is* the dark theme — no separate preset needed.
+    if preset == "dark":
+        restore_theme_defaults()
+        return
     ensure_theme_file()
-    values = THEME_PRESETS.get(preset.lower())
+    values = THEME_PRESETS.get(preset)
     if not values:
         return
     cfg = ConfigParser()

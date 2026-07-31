@@ -24,6 +24,7 @@ cfg/
 !.vscode/extensions.json
 .history/*
 youtube-music-extension/
+.cortexkit/
 
 album_img.png
 close.png

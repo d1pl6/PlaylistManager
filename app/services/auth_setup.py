@@ -111,18 +111,19 @@ def verify_spotify_credentials(
 ) -> Dict[str, Any]:
     """Test if Spotify credentials are valid by calling ``/v1/me``.
 
+    Delegates to :meth:`SpotifyAuthManager.verify_credentials` so the
+    credential-verification knowledge lives on the auth manager, not in
+    this service.
+
     Returns a dict with keys ``ok`` (bool) and either ``display_name``
     or ``error``.
     """
     try:
-        from integrations.music_spotify.music_spotify import SpotifyAPI
+        from integrations.music_spotify.music_spotify import SpotifyAuthManager
 
-        api = SpotifyAPI(
-            client_id=client_id,
-            client_secret=client_secret,
-            refresh_token=refresh_token,
+        me = SpotifyAuthManager.verify_credentials(
+            client_id, client_secret, refresh_token
         )
-        me = api.get_me()
         if me and me.get("display_name"):
             return {"ok": True, "display_name": me["display_name"]}
         return {"ok": False, "error": "Authentication failed"}

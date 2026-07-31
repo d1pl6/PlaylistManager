@@ -13,7 +13,7 @@ from pathlib import Path
 from tkinter import ttk, messagebox
 
 from constants import PLATFORM_YOUTUBE_MUSIC
-from controllers.hotkey_registry import KeybindCallbacks
+from controllers.keybind_registry import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
@@ -339,9 +339,17 @@ class MainWindow:
     # Database / log label helpers
     # ------------------------------------------------------------------
 
-    def _update_log_labels_from_db(self, frame_idx: int, playlist_name: str) -> None:
+    def _update_log_labels_from_db(
+        self, frame_idx: int, playlist_name: str, platform: str
+    ) -> None:
+        """Refresh the artist / song-name labels from the playlist DB.
+
+        Reads the most recently added song so the frame shows real data
+        (instead of the initial placeholders) as soon as an import or
+        reload has populated the database.
+        """
         sm = SongManager()
-        latest = sm.get_latest_song(playlist_name)
+        latest = sm.get_latest_song(playlist_name, platform=platform)
         if not latest:
             return
         labels = self.active_log_labels.get(frame_idx)
@@ -361,7 +369,9 @@ class MainWindow:
     ) -> None:
         """Start importing tracks in a background thread (Issue #1)."""
         def on_done(name: str, count: int, status_text: str) -> None:
-            self.root.after(0, self._on_import_done, name, count, status_text)
+            self.root.after(
+                0, self._on_import_done, name, count, status_text, frame_idx
+            )
 
         self._sync_service.import_tracks(
             playlist_name, platform, playlist_id, on_done
@@ -374,9 +384,14 @@ class MainWindow:
         return None
 
     def _on_import_done(
-        self, playlist_name: str, count: int, status_text: str
+        self,
+        playlist_name: str,
+        count: int,
+        status_text: str,
+        frame_idx: int | None = None,
     ) -> None:
-        frame_idx = self._find_frame_index_by_name(playlist_name)
+        if frame_idx is None:
+            frame_idx = self._find_frame_index_by_name(playlist_name)
         if frame_idx is None or frame_idx not in self.active_log_labels:
             return
         status_label = self.active_log_labels[frame_idx]["status"]
@@ -386,14 +401,22 @@ class MainWindow:
             status_label.config(text=status_text, background="#A00000")
         else:
             status_label.config(text=status_text, background="#006713")
-        self._update_log_labels_from_db(frame_idx, playlist_name)
+        self._update_log_labels_from_db(
+            frame_idx, playlist_name, self.frame_platforms[frame_idx]
+        )
         logger.info("Import finished for '%s': %s", playlist_name, status_text)
 
     def _on_reload_done(
-        self, playlist_name: str, count: int, status_text: str, thumb_url: str | None
+        self,
+        playlist_name: str,
+        count: int,
+        status_text: str,
+        thumb_url: str | None,
+        frame_idx: int | None = None,
     ) -> None:
-        self._on_import_done(playlist_name, count, status_text)
-        frame_idx = self._find_frame_index_by_name(playlist_name)
+        self._on_import_done(playlist_name, count, status_text, frame_idx)
+        if frame_idx is None:
+            frame_idx = self._find_frame_index_by_name(playlist_name)
         if frame_idx is not None and thumb_url:
             self._set_playlist_cover(frame_idx, thumb_url)
 
@@ -457,7 +480,7 @@ class MainWindow:
                             platform=platform,
                         )
 
-                    self._update_log_labels_from_db(i, name)
+                    self._update_log_labels_from_db(i, name, platform)
 
                     thumb_url = playlist.get("thumbnail_url", "")
                     if thumb_url:
@@ -781,7 +804,13 @@ class MainWindow:
             name: str, count: int, status_text: str, thumb_url: str | None
         ) -> None:
             self.root.after(
-                0, self._on_reload_done, name, count, status_text, thumb_url
+                0,
+                self._on_reload_done,
+                name,
+                count,
+                status_text,
+                thumb_url,
+                frame_idx,
             )
 
         self._sync_service.reload_database(

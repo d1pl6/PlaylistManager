@@ -2,17 +2,15 @@ import logging
 import tkinter as tk
 from configparser import ConfigParser
 
+from ui.settings_theme_ui import show_theme_dialog
 from utils.config import (
     ensure_settings_file,
     get_theme_value,
     SETTINGS_PATH as _settings_path,
 )
+from utils.window import center_window, resize_window
 
 logger = logging.getLogger(__name__)
-
-
-from utils.window import center_window, resize_window
-from ui.settings_theme_ui import show_theme_dialog
 
 
 def _toggle_setting(section, var):

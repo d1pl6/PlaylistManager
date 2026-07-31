@@ -7,7 +7,7 @@ Responsibilities (after the A4 split):
   3. Flow controller lazy-initialisation and dispatch
   4. Listener lifecycle (global hotkey vs local tk bindings)
 
-Delegates hotkey storage/matching to :class:`HotkeyRegistry` and key
+Delegates keybind storage/matching to :class:`KeybindRegistry` and key
 normalisation to :mod:`utils.key_mapping`.
 """
 
@@ -23,7 +23,7 @@ from utils.key_mapping import (
     normalize_tk_key,
     read_global_listener_setting,
 )
-from controllers.hotkey_registry import KeybindCallbacks, HotkeyRegistry
+from controllers.keybind_registry import KeybindCallbacks, KeybindRegistry
 from services.song_manager import SongManager
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class KeybindController:
         self._url_receiver = None
 
         # Registry
-        self.registry = HotkeyRegistry()
+        self.registry = KeybindRegistry()
 
         # Listener / key state
         self._pressed_keys: Set[str] = set()

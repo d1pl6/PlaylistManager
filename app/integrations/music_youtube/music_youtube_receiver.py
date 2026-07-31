@@ -12,6 +12,8 @@ import time
 from typing import Optional
 from queue import Queue, Empty
 
+from constants import FLASK_RECEIVER_PORT
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +50,12 @@ class URLReceiverManager:
 
     YT_MUSIC_URL_PATTERN = r"https://music\.youtube\.com/watch\?v=([\w-]+)"
 
-    def __init__(self, host: str = "localhost", port: int = 5000, timeout: int = 30):
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = FLASK_RECEIVER_PORT,
+        timeout: int = 30,
+    ):
         self.host = host
         self.port = port
         self.timeout = timeout
