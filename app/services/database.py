@@ -35,6 +35,39 @@ class DatabaseManager:
         )
         return db_dir / f"{safe_name}.db"
 
+    @staticmethod
+    def delete_playlist_db(playlist_name: str, platform: str) -> None:
+        """Delete a playlist database and its WAL sidecar files.
+
+        Removes ``<name>.db`` together with ``<name>.db-wal`` and
+        ``<name>.db-shm``, which SQLite leaves behind when a connection
+        is still (or was recently) open in WAL mode.  Any connection
+        cached for this database in the current thread is closed first
+        so it cannot recreate the files.  Errors are logged and ignored
+        so callers can treat this as best-effort cleanup.
+        """
+        db_path = DatabaseManager.get_playlist_db_path_static(
+            playlist_name, platform
+        )
+
+        connections = DatabaseManager._get_thread_connections()
+        cached = connections.pop(f"{playlist_name}:{platform}", None)
+        if cached is not None:
+            try:
+                cached.close()
+            except sqlite3.Error as e:
+                logger.debug(
+                    "Error closing cached connection for %s: %s", playlist_name, e
+                )
+
+        for path in (db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
+            try:
+                if path.exists():
+                    path.unlink()
+                    logger.info("Deleted database file %s", path)
+            except OSError as e:
+                logger.debug("Failed deleting %s: %s", path, e)
+
     def get_playlist_db_path(self, playlist_name: str, platform: str = PLATFORM_YOUTUBE_MUSIC) -> Path:
         """Get the database file path for a playlist.
 

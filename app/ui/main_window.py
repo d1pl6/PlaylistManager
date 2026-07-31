@@ -667,15 +667,7 @@ class MainWindow:
                 del self.frame_img_refs[frame]
 
             PlaylistStore.delete_playlist(playlist_name, platform=platform)
-            try:
-                db_path = DatabaseManager.get_playlist_db_path_static(
-                    playlist_name, platform
-                )
-                if db_path.exists():
-                    db_path.unlink()
-                    logger.info("Deleted database file %s for '%s'", db_path, playlist_name)
-            except Exception as e:
-                logger.debug("Failed deleting DB for %s: %s", playlist_name, e)
+            DatabaseManager.delete_playlist_db(playlist_name, platform)
 
             frame.grid_forget()
             frame.destroy()

@@ -4,6 +4,8 @@
 
 [/] Theme change
 
+[ ] Closing app takes too long
+
 [ ] Show last N added songs in playlist and option in settings:
 
 album img	| name		| add to playlist img

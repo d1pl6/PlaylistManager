@@ -10,6 +10,7 @@ import logging
 import threading
 from typing import Callable, Optional
 
+from constants import PLATFORM_YOUTUBE_MUSIC
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
 from services.song_manager import SongManager
@@ -21,6 +22,20 @@ logger = logging.getLogger(__name__)
 # (playlist_name, inserted_count, status_text[, thumbnail_url])
 OnDoneCallback = Callable[[str, int, str], None]
 OnReloadDoneCallback = Callable[[str, int, str, Optional[str]], None]
+
+
+def _extract_thumbnail(data: dict) -> Optional[str]:
+    """Extract a thumbnail URL from an API response dict.
+
+    Accepts either a ``thumbnails`` list of ``{"url": ...}`` dicts (the
+    smallest by area wins) or a bare ``thumbnail`` URL string.
+    """
+    thumbnails = data.get("thumbnails") or data.get("thumbnail")
+    if isinstance(thumbnails, list):
+        return ThumbnailService.get_smallest_thumbnail(thumbnails)
+    if isinstance(thumbnails, str):
+        return thumbnails
+    return None
 
 
 class PlaylistSyncService:
@@ -97,35 +112,47 @@ class PlaylistSyncService:
 
         def _run() -> None:
             try:
-                db_path = DatabaseManager.get_playlist_db_path_static(
-                    playlist_name, platform
-                )
-                if db_path.exists():
-                    db_path.unlink()
-                    logger.info("Deleted database for '%s'", playlist_name)
+                DatabaseManager.delete_playlist_db(playlist_name, platform)
+                logger.info("Deleted database for '%s'", playlist_name)
 
                 details = integration.get_playlist_details(playlist_id)
-                thumbnails = details.get("thumbnails") or details.get("thumbnail")
-                thumb_url: Optional[str] = None
-                if isinstance(thumbnails, list):
-                    thumb_url = ThumbnailService.get_smallest_thumbnail(thumbnails)
-                elif isinstance(thumbnails, str):
-                    thumb_url = thumbnails
+                thumb_url = _extract_thumbnail(details)
+
+                # Only the YouTube integration distinguishes custom
+                # uploaded playlist images from auto-derived ones.  The
+                # library listing is the same source the add flow uses
+                # and reliably surfaces custom images, so prefer it.
+                if platform == PLATFORM_YOUTUBE_MUSIC:
+                    try:
+                        for p in integration.get_library_playlists():
+                            if p.get("playlistId") != playlist_id:
+                                continue
+                            lib_url = _extract_thumbnail(p)
+                            if lib_url:
+                                thumb_url = lib_url
+                            break
+                    except Exception as e:
+                        logger.debug(
+                            "Thumbnail library lookup failed for '%s': %s",
+                            playlist_name,
+                            e,
+                        )
 
                 tracks = integration.get_playlist_tracks(playlist_id)
+
+                # Persist the thumbnail regardless of the track import —
+                # an empty playlist must still get its cover refreshed.
+                if thumb_url:
+                    PlaylistStore.update_thumbnail(playlist_name, platform, thumb_url)
+
                 if not tracks:
-                    on_done(playlist_name, 0, "No tracks", None)
+                    on_done(playlist_name, 0, "No tracks", thumb_url)
                     return
 
                 sm = SongManager()
                 inserted = sm.add_songs_bulk(
                     playlist_name, tracks, platform=platform
                 )
-
-                if thumb_url:
-                    PlaylistStore.update_thumbnail(
-                        playlist_name, platform, thumb_url
-                    )
 
                 on_done(playlist_name, inserted, f"{inserted} new", thumb_url)
 
