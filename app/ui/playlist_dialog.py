@@ -88,9 +88,6 @@ class PlaylistDialog:
 
         for playlist in playlists:
             playlist_id = playlist.get("playlistId", "")
-            # Library entries carry either a bare "thumbnail" URL
-            # (Spotify) or a "thumbnails" list (YouTube Music) — no
-            # extra get_playlist_details round-trip needed.
             thumb_url = ThumbnailService.from_data(playlist)
             playlist_name = playlist.get("title", "Unknown Playlist")
 
@@ -142,7 +139,7 @@ class PlaylistDialog:
 
     def _apply_thumb(self, button: tk.Button, img) -> None:
         try:
-            photo = ThumbnailService.to_photoimage(img)  # main thread only
+            photo = ThumbnailService.to_photoimage(img)
         except Exception as e:
             logger.error(f"Failed to create dialog thumbnail: {e}")
             return

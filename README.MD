@@ -3,9 +3,7 @@ Add songs that you're currently listening to your chosen playlists or liked trac
 ![screenshot1](https://github.com/d1pl6/PlaylistManager/blob/dev/assets/screenshot1.png)
 
 # About
-I couldn't find something similar so I did it. First PlaylistManager used TypeScript and Electron, but I didn't like 5 billion RAM usage so I asked AI to rewrite it on Python and ended up doing everything from 0.
-
-I'll rewrite it so no auto-generated code will be in the code. Q: When? A: Uhhhhhhhhhhhh.....
+I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage. Since i'm not using streaming platforms much, i'm using ai to create same app but on pyton.
 
 # Features
 - Easily add songs to playlists across multiple platforms
@@ -15,13 +13,20 @@ I'll rewrite it so no auto-generated code will be in the code. Q: When? A: Uhhhh
 Requires Python 3.10+
 
 ```
-git clone https://github.com/d1pl6/PlaylistManager.git
+git clone https://github.com/d1pl6/PlaylistManager.git && cd PlaylistManager
 ```
-or download zip
+Or Code > Download ZIP
 
 ### Windows / Mac OS
 ```
-pip install pillow requests python-dotenv platformdirs flask flask-cors cryptography pynput
+# to install basic dependencies
+pip install .
+
+# to install all dependencies including optional
+pip install ".[all]"
+
+# to install basic & specify optional dependencies
+pip install ".[youtubemusic]"
 ```
 
 ### Linux
@@ -39,18 +44,37 @@ pip install ytmusicapi
 
 # Usage
 ```
-cd PlaylistManager
-python app/main.py
-```
+python -m main
 
+# Or
+python main.py
+```
 Add `--debug` for verbose logging.
+
+2. Click on `Login` button (top left corner)
+3. See [INTEGRATIONS](INTEGRATIONS.MD) for detailed steps for your platform
+4. Click on `Add Playlist` button (`+`) and wait for a while
+5. Choose playlist
+6. Wait database creation (might take longer if you have a lot of songs in playlist)
+7. Create keybind (click on 2nd line after playlist name)
+
+See [INTEGRATIONS](INTEGRATIONS.MD) if your platform requires optional dependencies
 
 # Integrations
 For now only available
 - YouTube Music
-- Spotify
+- Spotify (not tested)
 
 See [INTEGRATIONS.MD](INTEGRATIONS.MD)
 
 # License
 PlaylistManager is licensed under the GNU-GPL-2.0-or-later. If you did not get a copy, please see <https://www.gnu.org/licenses/>.
+
+# Q & A
+Q: Why AI?
+
+A: I hate programming.
+
+Q: Will _my patform_ will be added?
+
+A: See [TODO](TODO.MD), if it doesn't exist there - open `Platform integration request` on `Issue`s page.

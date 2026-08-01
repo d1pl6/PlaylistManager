@@ -58,7 +58,6 @@ class MainWindow:
         self.kc = keybind_controller
         self.ac = app_controller
 
-        # ----- state ---------------------------------------------------
         self.frames: list[tk.Frame] = []
         self.frame_positions: list[tuple[int, int]] = []
         self.playlist_name_labels: list[tk.Label] = []
@@ -69,10 +68,8 @@ class MainWindow:
         self._choose_open = False
         self._recording_frame_idx: int | None = None
 
-        # Cache the auto-resize setting at startup (Issue #11).
         self._auto_resize_enabled = self._read_auto_resize_setting()
 
-        # ----- services ------------------------------------------------
         self._sync_service = PlaylistSyncService(integrations)
 
         # ----- controller ----------------------------------------------
@@ -91,7 +88,7 @@ class MainWindow:
         style.theme_use("clam")
 
         self.root.title("PlaylistManager")
-        self.root.configure(background=C["root_bg"], pady=5, padx=5)
+        self.root.configure(background=C["root_bg"])
         self.root.geometry("650x460")
         self.root.minsize(325, 150)
         self.root.maxsize(999999, 999999)
@@ -111,7 +108,7 @@ class MainWindow:
         self.root.grid_columnconfigure(1, weight=1)
 
         header_bg = C["frame_head_bg"]
-        self.header_frame = tk.Frame(self.root, background=header_bg)
+        self.header_frame = tk.Frame(self.root, background=header_bg, pady=5, padx=5)
         self.header_frame.bind("<B1-Motion>", self.on_drag)
 
         self._create_widgets()
@@ -127,8 +124,6 @@ class MainWindow:
         load_theme()
         header_bg = C["frame_head_bg"]
         self.header_frame.configure(background=header_bg)
-        # Header children are all image buttons — repaint them with the
-        # header-button colours (not the frame colour they sit on).
         for widget in self.header_frame.winfo_children():
             if isinstance(widget, tk.Button):
                 widget.configure(
@@ -138,8 +133,6 @@ class MainWindow:
 
         frame_playlist_bg = C["frame_playlist_bg"]
         for frame in self.frames:
-            # Frames are created with frame_playlist_bg; re-apply the same
-            # key so a theme change doesn't paint them with the window bg.
             frame.configure(background=frame_playlist_bg)
             for child in frame.winfo_children():
                 try:
@@ -209,7 +202,7 @@ class MainWindow:
         self._playlist_controller.open_playlist_dialog()
 
     def _show_platform_picker(self, platforms, callback) -> None:
-        """Create a Toplevel to pick a platform (Issue #1, #12)."""
+        """Create a Toplevel to pick a platform."""
         win_bg = C["frame_main_bg"]
         label_fg = C["label_def_fg"]
         btn_bg = C["button_main_bg"]
@@ -224,7 +217,7 @@ class MainWindow:
         win.title("Choose Platform")
         win.configure(background=win_bg)
         win.transient(self.root)
-        center_window(win)  # Issue #12 — was never centred
+        center_window(win)
         win.grab_set()
 
         tk.Label(
@@ -259,7 +252,7 @@ class MainWindow:
         ).pack(pady=10)
 
     def _show_playlist_dialog(self, playlists, integration, on_select, on_cancel) -> None:
-        """Create the playlist selection dialog (Issue #1)."""
+        """Create the playlist selection dialog."""
         self._choose_open = True
         self.btn_add_playlist.configure(state="disabled", image=self.loading_img)
         self._hide_main_content()
@@ -285,7 +278,7 @@ class MainWindow:
     def _on_add_playlist_frame(
         self, playlist_name: str, platform: str, playlist_id: str, thumb_url: str | None
     ) -> None:
-        """Create a new frame for the selected playlist (Issue #1)."""
+        """Create a new frame for the selected playlist."""
         self.btn_add_playlist.configure(state="normal", image=self.add_playlist_img)
         self._show_main_content()
         self.create_main_frame(1)
@@ -334,7 +327,7 @@ class MainWindow:
         if not cover_label:
             return
         try:
-            tk_img = ThumbnailService.to_photoimage(img)  # main thread only
+            tk_img = ThumbnailService.to_photoimage(img)
         except Exception as e:
             logger.error(f"Failed to create cover PhotoImage: {e}")
             return
@@ -351,8 +344,7 @@ class MainWindow:
         """Refresh the artist / song-name labels from the playlist DB.
 
         Reads the most recently added song so the frame shows real data
-        (instead of the initial placeholders) as soon as an import or
-        reload has populated the database.
+        as soon as an import or reload has populated the database.
         """
         sm = SongManager()
         latest = sm.get_latest_song(playlist_name, platform=platform)
@@ -373,7 +365,7 @@ class MainWindow:
     def _import_playlist_tracks(
         self, playlist_name: str, platform: str, playlist_id: str, frame_idx: int
     ) -> None:
-        """Start importing tracks in a background thread (Issue #1)."""
+        """Start importing tracks in a background thread."""
         def on_done(name: str, count: int, status_text: str) -> None:
             self.root.after(
                 0, self._on_import_done, name, count, status_text, frame_idx
@@ -427,7 +419,7 @@ class MainWindow:
             self._set_playlist_cover(frame_idx, thumb_url)
 
     # ------------------------------------------------------------------
-    # Setup (called once after __init__)
+    # Keybind setup (called once after __init__)
     # ------------------------------------------------------------------
 
     def _make_keybind_callbacks(self, frame_idx: int) -> KeybindCallbacks:
@@ -727,7 +719,7 @@ class MainWindow:
 
     @staticmethod
     def _read_auto_resize_setting() -> bool:
-        """Read the auto-resize setting once (Issue #11)."""
+        """Read the auto-resize setting once."""
         try:
             ensure_settings_file()
             cfg = ConfigParser()
@@ -737,7 +729,7 @@ class MainWindow:
             return False
 
     def _auto_resize(self) -> None:
-        """Resize the window to fit playlist frames (uses cached setting)."""
+        """Resize the window to fit playlist frames."""
         if not self._auto_resize_enabled:
             return
         try:
@@ -755,7 +747,7 @@ class MainWindow:
         logger.debug("Reordered frames after deletion")
 
     # ------------------------------------------------------------------
-    # Keybind recording (kept in MainWindow — tightly bound to widgets)
+    # Keybind recording
     # ------------------------------------------------------------------
 
     def _start_recording(self, frame_idx: int) -> str:
@@ -856,11 +848,6 @@ class MainWindow:
                 thumb_url,
                 frame_idx,
             )
-
-        # The reload worker deletes the playlist DB file on disk.  Close the
-        # UI thread's cached connection to that DB first, otherwise the next
-        # add/read on the main thread would write to the orphaned inode and
-        # the new data would silently vanish.
         try:
             DatabaseManager.close_thread_connections()
         except Exception as e:
