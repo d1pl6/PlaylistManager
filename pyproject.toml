@@ -33,7 +33,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-youtube = ["ytmusicapi"]
+youtubemusic = ["ytmusicapi"]
+all = [
+    "ytmusicapi",
+]
 
 [project.urls]
 Homepage = "https://github.com/d1pl6/PlaylistManager"

@@ -1,6 +1,19 @@
+"""
+Playlist selection dialog (scrollable list of playlists with covers).
+
+Thumbnails are downloaded in background threads and applied on the main
+thread via ``parent.after()`` — tkinter must never be touched from a
+worker thread (and blocking network calls must never run on the UI
+thread).
+"""
+
+import logging
+import threading
 import tkinter as tk
 from tkinter import ttk
-import logging
+
+from utils.theme import C
+from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
 
@@ -14,39 +27,50 @@ class PlaylistDialog:
         self.canvas = None
         self.img_refs = []
 
-    def show(self, playlists, integration):
-        self.choose_frame = tk.Frame(self.parent, background="#2A2A2A")
+    def show(self, playlists):
+        dialog_bg = C["frame_main_bg"]
+        label_fg = C["label_def_fg"]
+        btn_bg = C["button_playlist_bg"]
+        btn_fg = C["button_playlist_fg"]
+        btn_a_bg = C["button_playlist_a_bg"]
+        btn_a_fg = C["button_playlist_a_fg"]
+        close_bg = C["button_head_bg"]
+        close_fg = C["button_head_fg"]
+        close_a_bg = C["button_head_a_bg"]
+
+        self.choose_frame = tk.Frame(self.parent, background=dialog_bg)
         self.choose_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
 
-        title_frame = tk.Frame(self.choose_frame, background="#2A2A2A")
+        title_frame = tk.Frame(self.choose_frame, background=dialog_bg)
         title_frame.pack(pady=5)
 
         tk.Label(
             title_frame,
             text="Select a Playlist below",
-            background="#2A2A2A",
-            foreground="white",
+            background=dialog_bg,
+            foreground=label_fg,
             font="Noto, 12",
         ).pack(side="left", anchor="w")
 
         tk.Button(
             title_frame,
             text="Close",
-            background="#2A2A2A",
-            foreground="white",
+            background=close_bg,
+            foreground=close_fg,
+            activebackground=close_a_bg,
             font="Noto, 12",
             command=self.cancel,
         ).pack(side="right", anchor="e")
 
         self.canvas = tk.Canvas(
-            self.choose_frame, background="#2A2A2A", highlightthickness=0
+            self.choose_frame, background=dialog_bg, highlightthickness=0
         )
         scrollbar = ttk.Scrollbar(
             self.choose_frame, orient="vertical", command=self.canvas.yview
         )
         scrollable_frame = tk.Frame(
             self.canvas,
-            background="#2A2A2A",
+            background=dialog_bg,
             cursor="hand2",
             border=1,
             relief="solid",
@@ -62,37 +86,18 @@ class PlaylistDialog:
         self.canvas.configure(yscrollcommand=scrollbar.set)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
-        self._scrollable_frame = scrollable_frame
-
         for playlist in playlists:
             playlist_id = playlist.get("playlistId", "")
-            thumb_url = playlist.get("thumbnail")
-            if not thumb_url:
-                try:
-                    details = integration.get_playlist_details(playlist_id, limit=1)
-                    thumbnails = details.get("thumbnails") or details.get("thumbnail")
-                    if isinstance(thumbnails, list):
-                        thumb_url = integration.get_smallest_thumbnail(thumbnails)
-                    elif isinstance(thumbnails, str):
-                        thumb_url = thumbnails
-                except Exception as e:
-                    logger.error(f"Failed to fetch playlist details: {e}")
-
-            tk_image = None
-            if thumb_url:
-                try:
-                    tk_image = integration.fetch_thumbnail(thumb_url)
-                    if tk_image:
-                        self.img_refs.append(tk_image)
-                except Exception as e:
-                    logger.error(f"Failed to fetch thumbnail: {e}")
-
+            thumb_url = ThumbnailService.from_data(playlist)
             playlist_name = playlist.get("title", "Unknown Playlist")
+
             btn = tk.Button(
                 scrollable_frame,
-                image=tk_image or "",
-                background="#404040",
-                foreground="white",
+                image="",
+                background=btn_bg,
+                foreground=btn_fg,
+                activebackground=btn_a_bg,
+                activeforeground=btn_a_fg,
                 width=40,
                 command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
             )
@@ -100,12 +105,17 @@ class PlaylistDialog:
             tk.Button(
                 scrollable_frame,
                 text=playlist_name,
-                background="#404040",
-                foreground="white",
+                background=btn_bg,
+                foreground=btn_fg,
+                activebackground=btn_a_bg,
+                activeforeground=btn_a_fg,
                 font="Noto, 11",
                 width=40,
                 command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
             ).pack(pady=5)
+
+            if thumb_url:
+                self._load_thumb_async(btn, thumb_url)
 
         self.canvas.pack(side="left", fill="both", expand=True, padx=10, pady=10)
         scrollbar.pack(side="right", fill="y")
@@ -117,6 +127,24 @@ class PlaylistDialog:
             child.bind("<MouseWheel>", self._on_mouse_wheel)
             child.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
             child.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
+
+    def _load_thumb_async(self, button: tk.Button, thumb_url: str) -> None:
+        """Download the cover in a worker; apply the PhotoImage on the main thread."""
+        def _run() -> None:
+            img = ThumbnailService.fetch_image(thumb_url, size=(40, 40))
+            if img is not None:
+                self.parent.after(0, lambda: self._apply_thumb(button, img))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _apply_thumb(self, button: tk.Button, img) -> None:
+        try:
+            photo = ThumbnailService.to_photoimage(img)
+        except Exception as e:
+            logger.error(f"Failed to create dialog thumbnail: {e}")
+            return
+        self.img_refs.append(photo)
+        button.configure(image=photo)
 
     def _on_playlist_click(self, playlist_name, playlist_id, thumb_url=None):
         self.close()

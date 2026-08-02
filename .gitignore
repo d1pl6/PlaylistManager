@@ -5,6 +5,10 @@ sample.json
 tree.txt
 requirements.txt
 *.pyc
+AGENTS.md
+opencode.jsonc
+.gitignore
+plan.md
 
 auth/
 __pycache__/
@@ -19,18 +23,11 @@ cfg/
 !.vscode/launch.json
 !.vscode/extensions.json
 .history/*
-
-
-test.py
-fonts.py
-amain_window.py
-test-fonts.txt
-keybind.json
-
+youtube-music-extension/
+.cortexkit/
 
 album_img.png
 close.png
 closeWindow.png
 hide.png
-login.png
 logout.png

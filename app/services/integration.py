@@ -1,12 +1,15 @@
-import io
+"""
+Integration registry and platform-specific integration wrappers.
+
+Concrete integration classes receive their auth manager as a constructor
+argument rather than importing it at module level, so this file has zero
+import-time side effects and does not pull in optional dependencies.
+"""
+
 import logging
 from typing import Dict, List, Optional
 
-import requests
-from PIL import Image, ImageTk
-
-from integrations.music_youtube.music_youtube import youtube_auth
-from integrations.music_spotify.music_spotify import spotify_auth
+from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 
 logger = logging.getLogger(__name__)
 
@@ -30,30 +33,21 @@ class BaseIntegration:
     def get_playlist_details(self, playlist_id: str, limit: int = 1) -> dict:
         raise NotImplementedError
 
-    @staticmethod
-    def get_smallest_thumbnail(thumbnails: Optional[List[Dict]]) -> Optional[str]:
-        if not thumbnails:
-            return None
-        return min(
-            thumbnails, key=lambda t: t.get("width") or t.get("height", 0)
-        ).get("url")
+    def get_playlist_id(self, name: str) -> Optional[str]:
+        """Look up a playlist's platform ID by name.
 
-    @staticmethod
-    def fetch_thumbnail(thumb_url: Optional[str], size=(40, 40)) -> Optional[object]:
-        if not thumb_url:
-            return None
-        if thumb_url.lower().startswith("http://"):
-            thumb_url = "https://" + thumb_url[7:]
-        if not thumb_url.lower().startswith("https://"):
-            logger.warning(f"Rejected non-HTTPS thumbnail URL: {thumb_url}")
-            return None
-        try:
-            resp = requests.get(thumb_url, timeout=10)
-            img = Image.open(io.BytesIO(resp.content)).resize(size)
-            return ImageTk.PhotoImage(img)
-        except Exception as e:
-            logger.error(f"Failed to fetch thumbnail: {e}")
-            return None
+        Returns *None* when the playlist cannot be found or the
+        platform does not support name-based lookups.
+        """
+        return None
+
+    def get_playlist_tracks(self, playlist_id: str) -> list:
+        """Fetch all tracks for a playlist.
+
+        Returns an empty list when the playlist doesn't exist or the
+        platform returns an error.
+        """
+        return []
 
 
 class IntegrationRegistry:
@@ -76,14 +70,16 @@ class IntegrationRegistry:
 
 
 class YouTubeMusicIntegration(BaseIntegration):
-    id = "youtube_music"
+    id = PLATFORM_YOUTUBE_MUSIC
     display_name = "YouTube Music"
 
-    def __init__(self):
-        self._auth = youtube_auth
+    def __init__(self, auth_manager=None):
+        self._auth = auth_manager
         self.yt_client = None
 
     def authenticate(self) -> bool:
+        if self._auth is None:
+            return False
         if self._auth.setup_auth():
             self.yt_client = self._auth.get_yt_music()
             return True
@@ -114,11 +110,6 @@ class YouTubeMusicIntegration(BaseIntegration):
             logger.error(f"YouTube Music: failed to get playlist details: {e}")
             return {}
 
-    def get_song(self, video_id: str) -> dict:
-        if not self.yt_client:
-            return {}
-        return self.yt_client.get_song(video_id)
-
     def get_playlist_id(self, name: str) -> Optional[str]:
         if not self.yt_client:
             return None
@@ -144,14 +135,16 @@ class YouTubeMusicIntegration(BaseIntegration):
 
 
 class SpotifyIntegration(BaseIntegration):
-    id = "spotify"
+    id = PLATFORM_SPOTIFY
     display_name = "Spotify"
 
-    def __init__(self):
-        self._auth = spotify_auth
+    def __init__(self, auth_manager=None):
+        self._auth = auth_manager
         self.spotify_api = None
 
     def authenticate(self) -> bool:
+        if self._auth is None:
+            return False
         if self._auth.setup_auth():
             self.spotify_api = self._auth.get_api()
             return True
@@ -211,3 +204,18 @@ class SpotifyIntegration(BaseIntegration):
         if not self.spotify_api:
             return None
         return self.spotify_api.get_currently_playing()
+
+    def get_playlist_id(self, name: str) -> Optional[str]:
+        """Look up a Spotify playlist ID by name."""
+        if not self.spotify_api:
+            return None
+        return self.spotify_api.get_playlist_id_by_name(name)
+
+    def get_playlist_id_by_name(self, name: str) -> Optional[str]:
+        """Alias for :meth:`get_playlist_id` — retained for backward compat."""
+        return self.get_playlist_id(name)
+
+    def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]) -> bool:
+        if not self.spotify_api:
+            return False
+        return self.spotify_api.add_tracks_to_playlist(playlist_id, track_ids)

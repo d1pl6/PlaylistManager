@@ -1,18 +1,23 @@
+"""
+YouTube Music auth manager and ytmusicapi wrapper.
+
+All ytmusicapi imports are **lazy** — the module can be imported without
+``ytmusicapi`` installed (it is an optional dependency).  The filesystem
+side effect ``AUTH_FOLDER.mkdir()`` is deferred to ``YouTubeAuthManager``
+instantiation.
+"""
+
 import logging
 from pathlib import Path
 from types import MethodType
 from typing import Optional
-from ytmusicapi import YTMusic
-from ytmusicapi.continuations import get_continuations
-from ytmusicapi.parsers.browsing import GRID, parse_content_list, parse_playlist
-from ytmusicapi.parsers.library import get_library_contents
-import os
+
 from platformdirs import user_config_dir
 
 logger = logging.getLogger(__name__)
 
 AUTH_FOLDER = Path(user_config_dir("playlistmanager")) / "auth"
-AUTH_FOLDER.mkdir(parents=True, exist_ok=True, mode=0o700)
+# NOTE: AUTH_FOLDER.mkdir() is deferred to YouTubeAuthManager.__init__()
 
 BROWSER_FILE = AUTH_FOLDER / "browser.json"
 # Additional lookup locations for browser.json
@@ -21,12 +26,13 @@ BROWSER_FILE_FALLBACKS = [
     Path(__file__).parent / "browser.json",
 ]
 
-YOUTUBE_CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID")
-YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET")
-
 
 def _patched_get_library_playlists(self, limit: int | None = 25):
     """Fallback playlist fetch for broken ytmusicapi get_library_playlists."""
+    from ytmusicapi.continuations import get_continuations
+    from ytmusicapi.parsers.browsing import GRID, parse_content_list, parse_playlist
+    from ytmusicapi.parsers.library import get_library_contents
+
     self._check_auth()
     browse_ids = ["FEmusic_library_playlists", "FEmusic_liked_playlists"]
     last_exception = None
@@ -40,7 +46,13 @@ def _patched_get_library_playlists(self, limit: int | None = 25):
             if results is None:
                 return []
 
-            playlists = parse_content_list(results["items"][1:], parse_playlist)
+            # Filter items: skip the first entry if it looks like a header
+            # (no playlistId) rather than unconditionally slicing [1:].
+            items = results.get("items", [])
+            if items and not _is_likely_playlist_item(items[0]):
+                items = items[1:]
+
+            playlists = parse_content_list(items, parse_playlist)
             if "continuations" in results:
                 remaining_limit = None if limit is None else (limit - len(playlists))
                 request_func = lambda additionalParams: self._send_request(
@@ -67,12 +79,20 @@ def _patched_get_library_playlists(self, limit: int | None = 25):
     return []
 
 
-def _patch_yt_music_library_playlists(yt=None):
+def _is_likely_playlist_item(item: dict) -> bool:
+    """Heuristic: a playlist item typically has a playlistId or a title."""
+    return bool(item.get("playlistId")) or bool(item.get("title"))
+
+
+def _patch_yt_music_library_playlists(yt):
+    """Instance-level patch: replace get_library_playlists on a YTMusic instance.
+
+    Class-level patching is avoided to prevent global side effects on the
+    YTMusic class. Every YTMusic instance should be patched individually
+    after creation via this function.
+    """
     try:
-        if yt is None:
-            YTMusic.get_library_playlists = _patched_get_library_playlists
-        else:
-            yt.get_library_playlists = MethodType(_patched_get_library_playlists, yt)
+        yt.get_library_playlists = MethodType(_patched_get_library_playlists, yt)
         logger.debug(
             "Patched YTMusic.get_library_playlists with fallback implementation"
         )
@@ -80,15 +100,10 @@ def _patch_yt_music_library_playlists(yt=None):
         logger.warning(f"Failed to patch YTMusic.get_library_playlists: {exc}")
 
 
-# Patch the class method globally so any YTMusic instance uses the fallback.
-_patch_yt_music_library_playlists()
-
-
 class YouTubeAuthManager:
-
     def __init__(self):
         AUTH_FOLDER.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.yt_music: Optional[YTMusic] = None
+        self.yt_music = None  # set by setup_auth(); type: YTMusic | None
 
     def _find_browser_file(self) -> Optional[Path]:
         candidates = [BROWSER_FILE, *BROWSER_FILE_FALLBACKS]
@@ -98,6 +113,8 @@ class YouTubeAuthManager:
         return None
 
     def _setup_browser_auth(self, browser_file: Path) -> bool:
+        from ytmusicapi import YTMusic
+
         try:
             self.yt_music = YTMusic(str(browser_file))
             _patch_yt_music_library_playlists(self.yt_music)
@@ -123,7 +140,7 @@ class YouTubeAuthManager:
     def is_authenticated(self) -> bool:
         return self.yt_music is not None
 
-    def get_yt_music(self) -> YTMusic:
+    def get_yt_music(self):
         if not self.is_authenticated():
             raise RuntimeError(
                 "Not authenticated. Call setup_auth() first. "

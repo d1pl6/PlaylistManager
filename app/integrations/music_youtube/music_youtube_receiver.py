@@ -1,15 +1,24 @@
+"""
+Flask-based HTTP receiver for YouTube Music URLs from the browser extension.
+
+All Flask imports are **lazy** — they happen only when the receiver is
+actually started (at most ~30 s per keybind press).
+
+Security: the server is bound to localhost and issues a random per-run
+token that the extension must echo back in an ``X-PM-Token`` header.
+CORS is restricted to the YouTube Music origin, so an arbitrary webpage
+cannot read the token or POST a URL.
+"""
+
 import logging
-import os
 import re
-import ssl
-import tempfile
+import secrets
 import threading
 import time
 from typing import Optional
 from queue import Queue, Empty
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from werkzeug.serving import make_server
+
+from constants import FLASK_RECEIVER_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -33,96 +42,88 @@ class _RateLimiter:
 
 class URLReceiverManager:
     """
-    Manages a Flask server for receiving YouTube Music URLs via HTTPS.
-    Runs in a daemon thread and uses a thread-safe queue for communication.
+    Manages a Flask server for receiving YouTube Music URLs from a browser extension.
+
+    Protocol:
+      1. Flow controller calls start() + set_waiting(True) when keybind is pressed.
+      2. Extension polls GET /status -> {"ready": true, "token": "<per-run token>"} while server is up.
+      3. Extension POSTs URL to /receive-url once, echoing the token in X-PM-Token.
+      4. Flow controller calls set_waiting(False), retrieves URL from queue, stops server.
+
+    The server is short-lived (up to ~30 s per keybind press) and binds to
+    localhost only, so plain HTTP is acceptable.
     """
 
-    # YouTube Music URL pattern
     YT_MUSIC_URL_PATTERN = r"https://music\.youtube\.com/watch\?v=([\w-]+)"
 
-    def __init__(self, host: str = "localhost", port: int = 5000, timeout: int = 30):
-        """
-        Initialize the URL receiver manager.
-
-        Args:
-            host: Host to bind Flask server to
-            port: Port to bind Flask server to
-            timeout: Seconds to wait for URL before timing out
-        """
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = FLASK_RECEIVER_PORT,
+        timeout: int = 30,
+    ):
         self.host = host
         self.port = port
         self.timeout = timeout
         self.url_queue: Queue = Queue()
-        self.app = Flask(__name__)
+        self.app = None   # created lazily by _ensure_app()
         self.thread: Optional[threading.Thread] = None
         self._server = None
         self._running = False
+        self._waiting_for_url = False
+        self._token: Optional[str] = None
+        self._state_lock = threading.Lock()
         self._rate_limiter = _RateLimiter(max_requests=10, window_seconds=60)
-        self._ssl_context = None
-        self._setup_flask()
+        # NOTE: _ensure_app() is NOT called here — Flask is imported lazily.
 
-    def _create_ssl_context(self) -> ssl.SSLContext:
-        """Create a self-signed SSL context for local HTTPS."""
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        certfile = os.path.join(tempfile.gettempdir(), "playlistmanager_receiver.pem")
-        keyfile = os.path.join(tempfile.gettempdir(), "playlistmanager_receiver_key.pem")
-        if not os.path.exists(certfile) or not os.path.exists(keyfile):
-            from cryptography import x509
-            from cryptography.x509.oid import NameOID
-            from cryptography.hazmat.primitives import hashes, serialization
-            from cryptography.hazmat.primitives.asymmetric import rsa
-            import datetime
+    def _ensure_app(self):
+        """Lazy initialisation of the Flask application and routes."""
+        if self.app is not None:
+            return
 
-            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-            subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
-            cert = (
-                x509.CertificateBuilder()
-                .subject_name(subject)
-                .issuer_name(issuer)
-                .public_key(key.public_key())
-                .serial_number(x509.random_serial_number())
-                .not_valid_before(datetime.datetime.utcnow())
-                .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=365))
-                .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
-                .sign(key, hashes.SHA256())
-            )
-            cert_pem = cert.public_bytes(serialization.Encoding.PEM)
-            key_pem = key.private_bytes(
-                serialization.Encoding.PEM,
-                serialization.PrivateFormat.TraditionalOpenSSL,
-                serialization.NoEncryption(),
-            )
-            fd = os.open(certfile, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            try:
-                os.write(fd, cert_pem)
-            finally:
-                os.close(fd)
-            fd = os.open(keyfile, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            try:
-                os.write(fd, key_pem)
-            finally:
-                os.close(fd)
-        ctx.load_cert_chain(certfile, keyfile)
-        return ctx
+        from flask import Flask, request, jsonify
+        from flask_cors import CORS
+        from werkzeug.serving import make_server
 
-    def _setup_flask(self):
-        """Setup Flask app and routes."""
+        self._make_server = make_server
+
+        app = Flask(__name__)
+        # Only the YT Music tab (extension content script) may talk to the
+        # receiver.  An arbitrary webpage must not be able to read /status
+        # (to steal the token) or POST a URL.
         CORS(
-            self.app,
+            app,
             resources={
                 r"/*": {
-                    "origins": "*",
+                    "origins": [
+                        "https://music.youtube.com",
+                        f"http://localhost:{self.port}",
+                    ],
                     "methods": ["GET", "POST", "OPTIONS"],
-                    "allow_headers": ["Content-Type"],
+                    "allow_headers": ["Content-Type", "X-PM-Token"],
                 }
             },
         )
 
-        @self.app.route("/receive-url", methods=["POST", "OPTIONS"])
-        def receive_url():
+        @app.route("/status", methods=["GET"])
+        def _status():
+            """Extension polls this to know when to send a URL."""
+            return jsonify(
+                {"ready": self._waiting_for_url, "token": self._token}
+            )
+
+        @app.route("/receive-url", methods=["POST", "OPTIONS"])
+        def _receive_url():
             """Endpoint to receive YouTube Music URLs."""
             if request.method == "OPTIONS":
                 return "", 200
+
+            # Every POST must prove it learned the per-run token from
+            # /status (a browser page can only do that via the CORS
+            # allowlist above; the extension content script runs on the
+            # YouTube Music origin, so it passes).
+            if not self._token or request.headers.get("X-PM-Token") != self._token:
+                return jsonify({"error": "Forbidden"}), 403
 
             if not self._rate_limiter.is_allowed():
                 return jsonify({"error": "Rate limit exceeded. Try again later."}), 429
@@ -134,15 +135,14 @@ class URLReceiverManager:
                 if not url:
                     return jsonify({"error": "No URL provided"}), 400
 
-                # Validate YouTube Music URL
-                if not self._validate_youtube_url(url):
+                video_id = self._extract_video_id(url)
+                if video_id is None:
                     return jsonify({"error": "Invalid YouTube Music URL"}), 400
 
-                # Extract video ID
-                video_id = self._extract_video_id(url)
+                with self._state_lock:
+                    self._waiting_for_url = False
+                    self.url_queue.put(url)
 
-                # Put URL in queue for main app to retrieve
-                self.url_queue.put(url)
                 logger.debug(f"Received valid YouTube Music URL: {video_id}")
 
                 return (
@@ -160,48 +160,41 @@ class URLReceiverManager:
                 logger.error(f"Error in receive_url endpoint: {e}")
                 return jsonify({"error": "Internal server error"}), 500
 
-    @staticmethod
-    def _validate_youtube_url(url: str) -> bool:
-        """
-        Validate if URL is a valid YouTube Music URL.
-
-        Args:
-            url: URL to validate
-
-        Returns:
-            True if valid, False otherwise
-        """
-        return re.match(URLReceiverManager.YT_MUSIC_URL_PATTERN, url) is not None
+        self.app = app
 
     @staticmethod
-    def _extract_video_id(url: str) -> str:
-        """
-        Extract video ID from YouTube Music URL.
+    def _extract_video_id(url: str) -> str | None:
+        """Validate and extract the video ID from a YouTube Music URL.
 
-        Args:
-            url: YouTube Music URL
-
-        Returns:
-            Video ID or empty string if not found
+        Returns the video ID string, or None if the URL is not a valid
+        YouTube Music watch URL.
         """
-        match = re.search(URLReceiverManager.YT_MUSIC_URL_PATTERN, url)
-        if match:
-            return match.group(1)
-        return ""
+        match = re.match(URLReceiverManager.YT_MUSIC_URL_PATTERN, url)
+        if not match:
+            return None
+        return match.group(1)
+
+    def set_waiting(self, waiting: bool) -> None:
+        """Control whether the /status endpoint reports ready."""
+        with self._state_lock:
+            self._waiting_for_url = waiting
 
     def start(self) -> Optional[threading.Thread]:
-        """
-        Start the Flask server in a daemon thread.
-
-        Returns:
-            The daemon thread
-        """
+        """Start the Flask server in a daemon thread."""
         if self._running:
             logger.warning("URLReceiverManager is already running")
             return self.thread
 
+        self._ensure_app()
+
+        # Fresh token per run — a token from a previous (finished) flow
+        # must not be accepted.
+        self._token = secrets.token_hex(16)
+
         try:
-            self._server = make_server(self.host, self.port, self.app, threaded=True, ssl_context=self._ssl_context)
+            self._server = self._make_server(
+                self.host, self.port, self.app, threaded=True
+            )
             server = self._server
             self._running = True
 
@@ -227,9 +220,11 @@ class URLReceiverManager:
     def stop(self) -> None:
         """Stop the Flask server gracefully."""
         if not self._running:
-            logger.warning("URLReceiverManager is not running")
             return
 
+        with self._state_lock:
+            self._waiting_for_url = False
+            self._token = None
         try:
             if self._server:
                 self._server.shutdown()
@@ -240,29 +235,24 @@ class URLReceiverManager:
             logger.error(f"Error stopping URL receiver: {e}")
 
     def get_received_url(self, timeout: Optional[int] = None) -> str:
-        """
-        Get the received URL from the queue.
+        """Get the received URL from the queue.
 
         Args:
-            timeout: Seconds to wait for URL. Uses self.timeout if not specified.
-
-        Returns:
-            The received URL
+            timeout: Seconds to wait. Uses self.timeout if not specified.
 
         Raises:
-            TimeoutError: If no URL received within timeout period
+            TimeoutError: If no URL received within timeout period.
         """
         if timeout is None:
             timeout = self.timeout
 
         try:
             url = self.url_queue.get(timeout=timeout)
-            logger.debug(f"Retrieved URL from queue")
+            logger.debug("Retrieved URL from queue")
             return url
         except Empty:
             logger.warning(f"Timeout waiting for URL after {timeout} seconds")
             raise TimeoutError(f"No URL received within {timeout} seconds")
 
     def is_running(self) -> bool:
-        """Check if the Flask server is running."""
         return self._running

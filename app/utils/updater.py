@@ -19,7 +19,7 @@ def check(callback=None):
     """Check for updates on GitHub in a background thread.
 
     Args:
-        callback: Optional callable(available: bool, latest_version: str | None, download_url: str | None, body: str | None)
+        callback: Optional callable(available: bool, latest_version: str | None, download_url: str | None, body: str | None, error: str | None)
     """
 
     def _check():
@@ -32,7 +32,7 @@ def check(callback=None):
             if not enabled:
                 logger.debug("Update check is disabled in settings")
                 if callback:
-                    callback(False)
+                    callback(False, None, None, None, None)
                 return
 
             resp = requests.get(API_URL, timeout=10)
@@ -43,9 +43,24 @@ def check(callback=None):
             download_url = data.get("html_url", "")
             body = data.get("body", "")
 
-            def parse_version(v: str):
-                parts = re.split(r"[._\-]", v)
-                return [int(x) for x in parts if x.isdigit()] or [0]
+            def parse_version(v: str) -> tuple:
+                """Return a comparable tuple from a version string.
+
+                Normalises to (major, minor, patch, is_pre_release) so
+                "1.0.1" > "1.0" and pre-releases like "1.0.1-beta1"
+                sort below their stable release.
+                """
+                parts = re.split(r"[._\-]", v.strip().lstrip("vV"))
+                nums = []
+                pre_release = False
+                for p in parts:
+                    if p.isdigit():
+                        nums.append(int(p))
+                    else:
+                        pre_release = True  # suffix: -beta, .rc1, etc.
+                        break
+                nums = (nums + [0, 0, 0])[:3]
+                return (nums[0], nums[1], nums[2], -1 if pre_release else 0)
 
             available = parse_version(latest_tag) > parse_version(__version__)
 
@@ -58,17 +73,17 @@ def check(callback=None):
 
             if callback:
                 callback(
-                    available, latest_tag or None, download_url or None, body or None
+                    available, latest_tag or None, download_url or None, body or None, None
                 )
 
         except requests.RequestException as e:
             logger.warning("Update check failed: %s", e)
             if callback:
-                callback(False, error=f"Could not reach update server.\n{e}")
+                callback(False, None, None, None, f"Could not reach update server.\n{e}")
         except Exception as e:
             logger.warning("Update check failed: %s", e)
             if callback:
-                callback(False, error=f"Update check failed.\n{e}")
+                callback(False, None, None, None, f"Update check failed.\n{e}")
 
     thread = threading.Thread(target=_check, daemon=True)
     thread.start()

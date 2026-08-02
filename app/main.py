@@ -1,7 +1,18 @@
+"""
+Entry point (legacy).  ``python app/main.py`` still works, but
+``python main.py`` or ``python -m app`` is preferred.
+
+Kept for backward compatibility — will be removed in a future release.
+"""
+
 import sys
 import argparse
 import logging
-from app import App  # type: ignore
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from app import App
 
 
 def parse_args():
