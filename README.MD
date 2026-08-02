@@ -10,9 +10,11 @@ I couldn't find something similar so i did it. First it used Electron, but i did
 - Pluggable integration system for adding more platforms
 
 # Install
+<<<<<<< HEAD
 
+=======
+>>>>>>> 44bc27081e5a2ae86b4fa76ec6bceda4b39c4cde
 Requires Python 3.10+
-
 ```
 git clone https://github.com/d1pl6/PlaylistManager.git && cd PlaylistManager
 ```
