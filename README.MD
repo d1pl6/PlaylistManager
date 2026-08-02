@@ -2,8 +2,6 @@ Add songs that you're currently listening to your chosen playlists or liked trac
 
 ![screenshot1](https://github.com/d1pl6/PlaylistManager/blob/dev/assets/screenshot1.png)
 
-![videoshowcase](https://github.com/d1pl6/PlaylistManager/blob/dev/assets/showcase_compressed_by_DZgas.mp4)
-
 # About
 I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage. Since i'm not using streaming platforms much, i'm using ai to create same app but on pyton.
 
@@ -12,9 +10,7 @@ I couldn't find something similar so i did it. First it used Electron, but i did
 - Pluggable integration system for adding more platforms
 
 # Install
-
 Requires Python 3.10+
-
 ```
 git clone https://github.com/d1pl6/PlaylistManager.git && cd PlaylistManager
 ```
