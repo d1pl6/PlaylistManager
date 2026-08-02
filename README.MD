@@ -10,6 +10,8 @@ I couldn't find something similar so i did it. First it used Electron, but i did
 - Pluggable integration system for adding more platforms
 
 # Install
+Video guide available [here](assets/showcase_compressed_by_DZgas.mp4)
+
 Requires Python 3.10+
 
 ```
