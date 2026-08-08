@@ -24,13 +24,10 @@ classifiers = [
 dependencies = [
     "pillow",
     "requests",
-    "python-dotenv",
     "platformdirs",
     "flask",
     "flask-cors",
-    "cryptography",
     "pynput",
-    "pystray",
 ]
 
 [project.optional-dependencies]

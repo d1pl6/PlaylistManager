@@ -29,16 +29,17 @@ pip install ".[youtubemusic,tray]"
 ```
 
 ## Linux
-It's not recommended to install dependencies through `pip` because it can break system packages.
+> [!TIP]
+> It's not recommended to install dependencies through `pip` because it can break system packages.
 
 ### Arch
 ```
-pacman -S tk python-pillow python-requests python-dotenv python-platformdirs python-flask python-flask-cors python-cryptography python-pynput
+pacman -S tk python-pillow python-requests python-platformdirs python-flask python-flask-cors python-pynput
 ```
 
 ### Debian / Ubuntu
 ```
-apt install -y python3-tk python3-pil python3-requests python3-dotenv python3-platformdirs python3-flask python3-flask-cors python3-cryptography python3-pynput
+apt install -y python3-tk python3-pil python3-requests python3-platformdirs python3-flask python3-flask-cors python3-pynput
 ```
 
 ### Optional dependencies
@@ -69,6 +70,9 @@ apt install -y python3-ytmusicapi
 # Tray
 apt install -y python3-pystray
 ```
+
+> [!NOTE]
+> `python3-ytmusicapi` and `python3-pystray` are only packaged for Debian *sid/testing* and recent Ubuntu releases (universe). On Debian stable or older Ubuntu, use `pip install ytmusicapi pystray` (or `pip install ".[all]"`) instead.
 
 > [!NOTE]
 > **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
