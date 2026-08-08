@@ -71,7 +71,7 @@ apt install -y python3-pystray
 ```
 
 > [!NOTE]
->  the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
+> **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
 
 # Usage
 ```
