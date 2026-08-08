@@ -16,7 +16,7 @@ git clone https://github.com/d1pl6/PlaylistManager.git && cd PlaylistManager
 ```
 Or Code > Download ZIP
 
-### Windows / Mac OS
+## Windows / Mac OS
 ```
 # to install basic dependencies
 pip install .
@@ -25,40 +25,53 @@ pip install .
 pip install ".[all]"
 
 # to install basic & specify optional dependencies
-pip install ".[youtubemusic]"
+pip install ".[youtubemusic,tray]"
 ```
 
-### Linux
+## Linux
 It's not recommended to install dependencies through `pip` because it can break system packages.
 
-#### Arch
+### Arch
 ```
-pacman -S tk python-pillow python-requests python-dotenv python-platformdirs python-flask python-flask-cors python-cryptography python-pynput python-pystray
+pacman -S tk python-pillow python-requests python-dotenv python-platformdirs python-flask python-flask-cors python-cryptography python-pynput
 ```
 
-#### Integrations (optional)
+### Debian / Ubuntu
 ```
+apt install -y python3-tk python3-pil python3-requests python3-dotenv python3-platformdirs python3-flask python3-flask-cors python3-cryptography python3-pynput
+```
+
+### Optional dependencies
+#### Integrations
+**Windows / macOS**:
+```
+# Integrations
 pip install ytmusicapi
+
+# Tray
+pip install pystray
+```
+**Linux**:
+
+Arch
+```
+# Integrations
+pacman -S python-ytmusicapi
+
+# Tray
+pacman -S python-pystray
+```
+Debian / Ubuntu
+```
+# Integrations
+apt install -y python3-ytmusicapi
+
+# Tray
+apt install -y python3-pystray
 ```
 
-### System tray (optional)
-The app shows a system tray icon (Open app / Quit) and can hide to the
-tray on minimize ("Hide in tray on minimize?" in Settings). The tray
-degrades gracefully where a backend is missing — the app just runs
-without an icon.
-
-- **Windows / macOS**: nothing extra — `pystray` is enough.
-- **Linux (full menu — AppIndicator backend)**: Arch/Artix
-  `pacman -S libayatana-appindicator` (or `libappindicator-gtk3`;
-  Debian/Ubuntu `python3-gi gir1.2-ayatanaappindicator3-0.1`).
-  With the AppIndicator backend the menu opens on any click ("Open
-  PlaylistManager" is the first item).
-- **Linux (minimal — Xorg fallback)**: nothing extra needed. The icon
-  appears and left-click opens the app, but there is **no right-click
-  menu** — install the appindicator package above to get the
-  Open/Quit menu.
-- **Wayland**: the AppIndicator backend is the only one that works; on
-  GNOME enable the AppIndicator/KStatusNotifierItem extension.
+> [!NOTE]
+>  the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
 
 # Usage
 ```

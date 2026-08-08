@@ -35,8 +35,10 @@ dependencies = [
 
 [project.optional-dependencies]
 youtubemusic = ["ytmusicapi"]
+tray = ["pystray"]
 all = [
     "ytmusicapi",
+    "pystray",
 ]
 
 [project.urls]
