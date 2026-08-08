@@ -53,6 +53,15 @@ class AppController:
         """Show a Force-quit / Cancel dialog; return True to force-quit."""
         result = {"force": False}
 
+        # If the main window is withdrawn (hidden to tray) the error
+        # dialog, being transient to it, can hide behind the tray icon —
+        # make the root visible again so the dialog has a parent on screen.
+        try:
+            if self.app.root.state() != "normal":
+                self.app.root.deiconify()
+        except tk.TclError:
+            pass
+
         dialog = tk.Toplevel(self.app.root)
         dialog.title("Error")
         dialog.configure(background=C["frame_main_bg"])

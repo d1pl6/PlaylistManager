@@ -69,6 +69,12 @@ class MainWindow:
         self._recording_frame_idx: int | None = None
 
         self._auto_resize_enabled = self._read_auto_resize_setting()
+        self._hide_to_tray = self._read_hide_to_tray_setting()
+        self._was_maximized = False
+
+        # Set by App._start_tray() once the window exists; None when no
+        # tray backend is available.
+        self.tray_service = None
 
         self._sync_service = PlaylistSyncService(integrations)
 
@@ -114,6 +120,7 @@ class MainWindow:
         self._create_widgets()
         self.header_frame.bind("<Button-1>", self.start_drag)
         self.root.bind("<Button-1>", self._on_root_click, add="+")
+        self.root.bind("<Unmap>", self._on_unmap)
         self.root.protocol("WM_DELETE_WINDOW", self.ac.quit_app)
 
     # ------------------------------------------------------------------
@@ -181,7 +188,10 @@ class MainWindow:
             background=btn_header_bg,
             activebackground=btn_header_abg,
             command=lambda: show_settings_dialog(
-                self.root, keybind_controller=self.kc, on_theme_change=self.apply_theme
+                self.root,
+                keybind_controller=self.kc,
+                on_theme_change=self.apply_theme,
+                tray_available=self.tray_service,
             ),
         )
 
@@ -498,6 +508,50 @@ class MainWindow:
         self.root.geometry(f"+{x}+{y}")
 
     # ------------------------------------------------------------------
+    # Hide to tray / restore from tray
+    # ------------------------------------------------------------------
+
+    def _on_unmap(self, event) -> None:
+        """Hide the window to the tray when minimized (if enabled).
+
+        ``<Unmap>`` fires for reasons other than minimize (our own
+        ``withdraw()``, WM restarts), so the decision is deferred one
+        tick and gated on ``state() == "iconic"`` — that distinguishes a
+        real minimize from ``withdraw()`` (state ``withdrawn``), which
+        prevents recursion.
+        """
+        if event.widget is not self.root:
+            return
+
+        def _maybe_hide():
+            tray_ok = (
+                self.tray_service is not None and self.tray_service.available
+            )
+            try:
+                if tray_ok and self._hide_to_tray and self.root.state() == "iconic":
+                    self.root.withdraw()
+            except tk.TclError:
+                pass  # root destroyed while the callback was queued
+
+        # Let the WM settle the state before deciding (X11 race).
+        self.root.after(0, _maybe_hide)
+
+    def show_from_tray(self) -> None:
+        """Restore/raise the main window (tray "Open app" + default click)."""
+        try:
+            if not self.root.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        if self.root.state() in ("iconic", "withdrawn"):
+            was_maximized = self._was_maximized
+            self.root.deiconify()
+            if was_maximized:
+                self.root.after(100, self._reapply_maximize)
+        self.root.lift()
+        self.root.focus_force()
+
+    # ------------------------------------------------------------------
     # Frame creation / layout
     # ------------------------------------------------------------------
 
@@ -725,6 +779,17 @@ class MainWindow:
             cfg = ConfigParser()
             cfg.read(str(_settings_path))
             return cfg.getboolean("auto_resize", "is_true", fallback=False)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _read_hide_to_tray_setting() -> bool:
+        """Read the hide-to-tray setting once."""
+        try:
+            ensure_settings_file()
+            cfg = ConfigParser()
+            cfg.read(str(_settings_path))
+            return cfg.getboolean("hide_to_tray", "is_true", fallback=False)
         except Exception:
             return False
 

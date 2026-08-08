@@ -30,6 +30,7 @@ dependencies = [
     "flask-cors",
     "cryptography",
     "pynput",
+    "pystray",
 ]
 
 [project.optional-dependencies]
