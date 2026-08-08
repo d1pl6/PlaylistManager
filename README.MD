@@ -78,6 +78,8 @@ apt install -y python3-pystray
 > **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
 
 # Usage
+> [!NOTE]
+> **Wayland**: applications cannot grab global keyboard events (the compositor owns input - a security design decision), so pynput hotkeys only capture XWayland apps there. Bind compositor shortcuts to the CLI instead - see [Command line](#command-line).
 ```
 python -m main
 
@@ -95,6 +97,63 @@ Add `--debug` for verbose logging.
 
 See [INTEGRATIONS](INTEGRATIONS.MD) if your platform requires optional dependencies
 
+# Command line
+Add the currently-playing song to playlists from a terminal.
+
+```
+python -m app add 1,2,3            # playlists #1, #2 and #3
+python -m app add 1-3              # range
+python -m app add "Chill Mix"      # by name
+python -m app add 1,"Chill Mix",3  # mixed numbers and names
+python -m app add --list           # show the numbered playlist list
+python -m app -a 1                 # option style, same as `add 1`
+python -m app --list               # option-style listing
+```
+
+- A playlist name that is pure digits (e.g. `"123"`) is always read as an order number,
+  and names containing commas cannot be addressed by name - use `--list` numbers for those.
+- Exit codes: `0` if at least one playlist was updated, `1` on fatal errors (bad auth,
+  nothing playing, URL timeout), `2` on bad input (malformed/out-of-range/unknown targets).
+
+## Global command (for compositor shortcuts)
+`python -m app ...` only works from the repo root. To bind the command from anywhere
+(i3 / sway / hyprland / KDE / GNOME shortcuts), install a global `playlistmanager` command.
+The simplest way - a symlink (the app resolves its own real location, so any checkout
+path works; nothing machine-specific is hardcoded in the code):
+
+```sh
+chmod +x /path/to/playlistmanager/main.py
+ln -s /path/to/playlistmanager/main.py ~/.local/bin/playlistmanager
+```
+
+or a small wrapper (no symlink indirection):
+
+```sh
+#!/bin/sh
+exec python3 /path/to/playlistmanager/main.py "$@"
+```
+
+(`~/.local/bin` is on PATH on most Linux setups; otherwise use `/usr/local/bin`.)
+Then bind e.g.:
+
+i3 / Sway
+
+`bindsym $mod+Shift+a exec playlistmanager add 1`
+
+Hyprland
+
+`bind = MODSHIFT, A, exec, playlistmanager add 1`
+
+KDE Plasma
+
+`System Settings → Shortcuts → Custom Shortcut → Command/URL`
+
+GNOME
+
+`Settings → Keyboard → Custom Shortcuts → Command`
+
+`playlistmanager add 1` / `playlistmanager -a 1` / `playlistmanager --add 1` can be used.
+
 # Integrations
 For now only available
 - YouTube Music
@@ -110,6 +169,6 @@ Q: Why AI?
 
 A: I hate programming.
 
-Q: Will _my patform_ will be added?
+Q: Will _patform_ will be added?
 
 A: See [TODO](TODO.MD), if it doesn't exist there - open `Platform integration request` on `Issue`s page.

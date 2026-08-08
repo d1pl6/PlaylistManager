@@ -53,6 +53,8 @@ class KeybindFlowController:
         on_status: Callable[[str], None],
         on_error: Callable[[str], None],
         on_success: Callable[[Dict], None],
+        url: Optional[str] = None,
+        song_data: Optional[Dict] = None,
     ) -> None:
         """
         Execute the complete keybind workflow.
@@ -62,16 +64,26 @@ class KeybindFlowController:
             on_status: Callback for status updates
             on_error: Callback for errors
             on_success: Callback for success with result dict
+            url: Pre-captured song URL. When given, the receiver server start
+                and URL wait are skipped (used by the CLI batch mode, which
+                captures one URL and reuses it for several playlists).
+            song_data: Pre-fetched song details. When given, the ytmusicapi
+                fetch is skipped (the CLI fetches once and shares the result).
+
+        Note: the platform-first invariant is preserved in every mode — the song
+        is added to the platform API before the local database, and a platform
+        failure never leaves a "successful" local entry behind.
         """
         try:
-            # Start Flask server
-            on_status("Starting")
-            self._start_server()
+            if url is None:
+                # Start Flask server
+                on_status("Starting")
+                self._start_server()
 
-            # Wait for URL
-            on_status("Waiting")
-            self.url_receiver.set_waiting(True)
-            url = self._get_url_from_receiver()
+                # Wait for URL
+                on_status("Waiting")
+                self.url_receiver.set_waiting(True)
+                url = self._get_url_from_receiver()
 
             # Validate URL
             on_status("Valid")
@@ -80,9 +92,10 @@ class KeybindFlowController:
             if video_id is None:
                 raise ValueError("Failed to extract video ID from URL")
 
-            # Fetch song details
-            on_status("Fetch")
-            song_data = self._fetch_song_details(video_id)
+            # Fetch song details (skipped when the caller already fetched them)
+            if song_data is None:
+                on_status("Fetch")
+                song_data = self.fetch_song_details(video_id)
             logger.debug(f"Song data: {song_data}")
 
             # Check if song exists
@@ -174,9 +187,12 @@ class KeybindFlowController:
         logger.debug(f"Received URL from receiver")
         return url
 
-    def _fetch_song_details(self, video_id: str) -> Dict:
+    def fetch_song_details(self, video_id: str) -> Dict:
         """
         Fetch song details using ytmusicapi.
+
+        Public so the CLI can fetch once and pass the result to several
+        playlists via ``execute_flow(..., song_data=...)``.
 
         Artist resolution priority:
           1. get_song_related() - structured artist data from the related response
