@@ -26,7 +26,7 @@ def _toggle_setting(section, var):
         cfg.write(f)
 
 
-def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, tray_available=None):
+def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, tray_available=None, on_tray_toggle=None):
     """Show the settings dialog.
 
     Args:
@@ -37,6 +37,8 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         tray_available: optional TrayService (or any object with an
             ``available`` attribute); when falsy/absent the hide-to-tray
             checkbutton is disabled.
+        on_tray_toggle: optional callback applied live with the new
+            hide-to-tray state (bool) when the checkbox changes.
     """
     theme_win_bg = C["frame_main_bg"]
     theme_header_bg = C["frame_head_bg"]
@@ -148,6 +150,11 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         variable=global_var,
     ).pack(fill="both")
 
+    def _on_tray_toggle():
+        _toggle_setting("hide_to_tray", tray_var)
+        if on_tray_toggle is not None:
+            on_tray_toggle(tray_var.get() == 1)
+
     tray_ck = tk.Checkbutton(
         win,
         text="Hide in tray on minimize?",
@@ -157,7 +164,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         activebackground=theme_check_abg,
         activeforeground=theme_check_afg,
         font=("Noto", 10),
-        command=lambda: _toggle_setting("hide_to_tray", tray_var),
+        command=_on_tray_toggle,
         variable=tray_var,
     )
     tray_ck.pack(fill="both")

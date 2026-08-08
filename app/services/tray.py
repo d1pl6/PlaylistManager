@@ -1,12 +1,9 @@
 """System tray support (pystray wrapper).
 
 TrayService is backend plumbing — no tkinter imports, knows nothing
-about widgets.  It wraps :class:`pystray.Icon` and exposes:
-
-* :attr:`available` — whether a tray icon could be constructed at all
-  (missing dependency, headless display, backend failure → False).
-* :attr:`menu_supported` — whether the active backend renders a menu
-  (everything except the Linux ``xorg`` fallback).
+about widgets.  It wraps :class:`pystray.Icon` and exposes
+:attr:`available` — whether a tray icon could be constructed at all
+(missing dependency, headless display, backend failure → False).
 
 Callbacks passed to :meth:`start` fire on the tray backend thread; the
 caller must marshal them to the tkinter main thread via
@@ -77,7 +74,10 @@ class TrayService:
         try:
             from PIL import Image
             if image is None:
-                image = Image.open(APP_IMAGE_PATH)
+                # copy() decodes the image so the file can be closed
+                # without leaving pystray holding an open handle.
+                with Image.open(APP_IMAGE_PATH) as img_file:
+                    image = img_file.copy()
             self._icon = pystray.Icon("playlistmanager", image, title, menu=None)
         except Exception as e:
             logger.warning("Tray unavailable: %s", e)
@@ -86,10 +86,6 @@ class TrayService:
     @property
     def available(self) -> bool:
         return self._icon is not None
-
-    @property
-    def menu_supported(self) -> bool:
-        return self.available and bool(pystray.Icon.HAS_MENU)
 
     def start(self, on_open, on_quit):
         """Build the menu and start the icon on a background thread.
@@ -116,9 +112,8 @@ class TrayService:
         )
         if pystray.Icon.HAS_MENU:
             items.append(_MenuItem("Quit", lambda icon, item: on_quit()))
-        self._icon.menu = _Menu(*items) if items else None
-        if self._icon.menu is None and not _has_default_action():
-            logger.info("Tray has no usable actions on this backend")
+        # The Open item is always present, so the menu is never empty.
+        self._icon.menu = _Menu(*items)
         if _is_gtk_backend():
             # See _is_gtk_backend — the Gtk family needs its own running
             # GLib mainloop; run it in a daemon thread.

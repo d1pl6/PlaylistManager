@@ -165,18 +165,25 @@ class App:
         """Start the system tray icon (best effort).
 
         Both callbacks hop through ``root.after(0, ...)`` because the tray
-        backend thread must never touch tkinter directly.  ``mainloop()``
-        is running at this point, so ``after`` is safe.
+        backend thread must never touch tkinter directly.  ``after`` may
+        be called before ``mainloop()`` starts — timers simply queue and
+        fire once the loop runs.
         """
         tray = TrayService()
         if not tray.available:
             logger.info("Tray unavailable — hide-to-tray disabled")
             self.main_window.tray_service = None
             return
-        tray.start(
-            on_open=lambda: self.root.after(0, self.main_window.show_from_tray),
-            on_quit=lambda: self.root.after(0, self.ac.quit_app),
-        )
+        try:
+            tray.start(
+                on_open=lambda: self.root.after(0, self.main_window.show_from_tray),
+                on_quit=lambda: self.root.after(0, self.ac.quit_app),
+            )
+        except Exception:
+            # Best-effort feature — a backend quirk must not kill the app.
+            logger.exception("Tray failed to start — hide-to-tray disabled")
+            self.main_window.tray_service = None
+            return
         self._tray_service = tray
         self.main_window.tray_service = tray
 
