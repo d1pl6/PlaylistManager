@@ -17,7 +17,7 @@ _KEY_MAP = {
     keyboard.Key.ctrl_r: "ctrl",
     keyboard.Key.alt_l: "alt",
     keyboard.Key.alt_r: "alt",
-    # Note: AltGr deliberately omitted — it is a distinct modifier on European
+    # Note: AltGr deliberately omitted - it is a distinct modifier on European
     # layouts and should NOT be conflated with Alt.
     keyboard.Key.shift: "shift",
     keyboard.Key.shift_l: "shift",

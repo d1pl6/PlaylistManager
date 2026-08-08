@@ -28,7 +28,7 @@ SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_API_BASE = "https://api.spotify.com/v1"
 SCOPES = "user-read-currently-playing playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private"
 
-# Lazy AUTH_FOLDER initialisation — created on first method call that needs it.
+# Lazy AUTH_FOLDER initialisation - created on first method call.
 _auth_dir_created = False
 
 
@@ -44,7 +44,7 @@ def save_spotify_credentials_file(
 ) -> None:
     """Write Spotify credentials to disk with secure permissions.
 
-    Single writer for the credential file — used both by the login UI
+    Single writer for the credential file - used both by the login UI
     (via :mod:`services.auth_setup`) and by the token-refresh path in
     :class:`SpotifyAPI`.
 
@@ -195,7 +195,6 @@ class SpotifyAPI:
         return tracks
 
     def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]) -> bool:
-        # Spotify API limits to 100 tracks per request
         chunk_size = 100
         success = True
         for chunk_start in range(0, len(track_ids), chunk_size):

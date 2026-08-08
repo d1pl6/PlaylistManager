@@ -1,8 +1,8 @@
 """System tray support (pystray wrapper).
 
-TrayService is backend plumbing — no tkinter imports, knows nothing
+TrayService is backend plumbing - no tkinter imports, knows nothing
 about widgets.  It wraps :class:`pystray.Icon` and exposes
-:attr:`available` — whether a tray icon could be constructed at all
+:attr:`available` - whether a tray icon could be constructed at all
 (missing dependency, headless display, backend failure → False).
 
 Callbacks passed to :meth:`start` fire on the tray backend thread; the
@@ -62,14 +62,14 @@ def _is_gtk_backend() -> bool:
 class TrayService:
     """System tray icon (pystray).  Not available -> .available is False.
 
-    Callbacks fire on the tray backend thread — the caller must marshal
+    Callbacks fire on the tray backend thread - the caller must marshal
     them to the tkinter main thread via root.after(0, ...).
     """
 
     def __init__(self, title="PlaylistManager", image=None):
         self._icon = None
         if not _PYSTRAY_OK:
-            logger.debug("pystray not installed — tray disabled")
+            logger.debug("pystray not installed - tray disabled")
             return
         try:
             from PIL import Image
@@ -115,7 +115,7 @@ class TrayService:
         # The Open item is always present, so the menu is never empty.
         self._icon.menu = _Menu(*items)
         if _is_gtk_backend():
-            # See _is_gtk_backend — the Gtk family needs its own running
+            # See _is_gtk_backend - the Gtk family needs its own running
             # GLib mainloop; run it in a daemon thread.
             threading.Thread(target=self._icon.run, daemon=True).start()
         else:

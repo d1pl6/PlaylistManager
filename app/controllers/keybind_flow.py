@@ -64,28 +64,28 @@ class KeybindFlowController:
             on_success: Callback for success with result dict
         """
         try:
-            # Step 1: Start Flask server
+            # Start Flask server
             on_status("Starting")
             self._start_server()
 
-            # Step 2: Wait for URL
+            # Wait for URL
             on_status("Waiting")
             self.url_receiver.set_waiting(True)
             url = self._get_url_from_receiver()
 
-            # Step 3: Validate URL
+            # Validate URL
             on_status("Valid")
             from integrations.music_youtube.music_youtube_receiver import URLReceiverManager as _RM
             video_id = _RM._extract_video_id(url)
             if video_id is None:
                 raise ValueError("Failed to extract video ID from URL")
 
-            # Step 4: Fetch song details
+            # Fetch song details
             on_status("Fetch")
             song_data = self._fetch_song_details(video_id)
             logger.debug(f"Song data: {song_data}")
 
-            # Step 5: Check if song exists
+            # Check if song exists
             on_status("Check")
             logger.debug(f"Checking if {video_id} exists in {playlist_name}")
             exists = self.song_manager.song_exists(
@@ -102,7 +102,7 @@ class KeybindFlowController:
                 )
                 return
 
-            # Step 6: Add to YouTube Music playlist first (platform API)
+            # Add to YouTube Music playlist first (platform API)
             on_status("Sync")
             playlist_id = self._get_playlist_id(playlist_name)
             logger.debug(f"YouTube Music playlist ID: {playlist_id}")
@@ -113,7 +113,7 @@ class KeybindFlowController:
             self.yt_music.add_playlist_items(playlist_id, [video_id])
             logger.info(f"Added {video_id} to YouTube Music playlist {playlist_id}")
 
-            # Step 7: Then add to local database (so platform failure doesn't
+            # Add to local database (so platform failure doesn't
             # leave us with a stale local entry that requires manual cleanup)
             on_status("Add")
             logger.debug("Adding song to local database")
@@ -179,8 +179,8 @@ class KeybindFlowController:
         Fetch song details using ytmusicapi.
 
         Artist resolution priority:
-          1. get_song_related() — structured artist data from the related response
-          2. videoDetails.author split on common separators (e.g. " — Topic")
+          1. get_song_related() - structured artist data from the related response
+          2. videoDetails.author split on common separators (e.g. " - Topic")
           3. subtitle from related[0] contents
           4. channel name / "Unknown Artist"
 
@@ -205,15 +205,12 @@ class KeybindFlowController:
             video_details = song_info.get("videoDetails", {})
             title = video_details.get("title", "Unknown")
 
-            # --- Artist resolution ---
             artists = self._resolve_artists(video_id, song_info, video_details)
 
-            # --- Duration ---
             duration = video_details.get("lengthSeconds", 0)
             if isinstance(duration, str):
                 duration = int(duration)
 
-            # --- Thumbnail ---
             thumbnails = (
                 video_details.get("thumbnail", {})
                 .get("thumbnails", [])
@@ -248,10 +245,9 @@ class KeybindFlowController:
         if artists:
             return artists
 
-        # Priority 2: videoDetails.author — may include channel suffix
+        # Priority 2: videoDetails.author - may include channel suffix
         author = video_details.get("author", "")
         if author:
-            # Strip common YouTube Music suffixes like " — Topic", " - Topic"
             cleaned = _strip_channel_suffix(author)
             if cleaned:
                 return [cleaned]
@@ -343,12 +339,12 @@ class KeybindFlowController:
 def _strip_channel_suffix(name: str) -> str:
     """Remove common YouTube Music channel suffixes from an artist name.
 
-    Handles patterns like "Taylor Swift — Topic", "Artist Name - Topic",
-    "Various Artists — Topic" etc.
+    Handles patterns like "Taylor Swift - Topic", "Artist Name - Topic",
+    "Various Artists - Topic" etc.
     """
 
-    # Strip " — Topic", " - Topic", "– Topic" and similar variants
-    cleaned = re.sub(r"\s*[—–-]\s*Topic\s*$", "", name, flags=re.IGNORECASE).strip()
+    # Strip " - Topic", " - Topic", "– Topic" and similar variants
+    cleaned = re.sub(r"\s*[-–-]\s*Topic\s*$", "", name, flags=re.IGNORECASE).strip()
     return cleaned
 
 
@@ -420,7 +416,7 @@ class SpotifyFlowController:
                 })
                 return
 
-            # Step 1: Add to Spotify playlist first (platform API)
+            # Add to Spotify playlist first (platform API)
             on_status("Sync")
             playlist_id = self._get_playlist_id(playlist_name)
             if playlist_id is None:
@@ -434,7 +430,7 @@ class SpotifyFlowController:
                 raise RuntimeError(f"Spotify rejected adding '{title}'")
             logger.info(f"Added {track_id} to Spotify playlist {playlist_id}")
 
-            # Step 2: Then add to local database (platform failure won't
+            # Add to local database (platform failure won't
             # leave a stale local entry behind)
             on_status("Add")
             song_id = self.song_manager.add_song_by_info(

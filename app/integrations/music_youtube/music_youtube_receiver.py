@@ -1,7 +1,7 @@
 """
 Flask-based HTTP receiver for YouTube Music URLs from the browser extension.
 
-All Flask imports are **lazy** — they happen only when the receiver is
+All Flask imports are **lazy** - they happen only when the receiver is
 actually started (at most ~30 s per keybind press).
 
 Security: the server is bound to localhost and issues a random per-run
@@ -66,7 +66,7 @@ class URLReceiverManager:
         self.port = port
         self.timeout = timeout
         self.url_queue: Queue = Queue()
-        self.app = None   # created lazily by _ensure_app()
+        self.app = None
         self.thread: Optional[threading.Thread] = None
         self._server = None
         self._running = False
@@ -74,7 +74,7 @@ class URLReceiverManager:
         self._token: Optional[str] = None
         self._state_lock = threading.Lock()
         self._rate_limiter = _RateLimiter(max_requests=10, window_seconds=60)
-        # NOTE: _ensure_app() is NOT called here — Flask is imported lazily.
+        # NOTE: _ensure_app() is NOT called here - Flask is imported lazily.
 
     def _ensure_app(self):
         """Lazy initialisation of the Flask application and routes."""
@@ -187,7 +187,7 @@ class URLReceiverManager:
 
         self._ensure_app()
 
-        # Fresh token per run — a token from a previous (finished) flow
+        # Fresh token per run - a token from a previous (finished) flow
         # must not be accepted.
         self._token = secrets.token_hex(16)
 

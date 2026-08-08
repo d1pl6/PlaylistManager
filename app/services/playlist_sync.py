@@ -52,7 +52,7 @@ class PlaylistSyncService:
     ) -> None:
         """Import tracks into the local database in a daemon thread.
 
-        *on_done* is called from the worker thread — the caller is
+        *on_done* is called from the worker thread - the caller is
         responsible for routing it back to the main thread (e.g. via
         ``root.after()``) if it touches tkinter widgets.
         """
@@ -135,7 +135,7 @@ class PlaylistSyncService:
 
                 tracks = integration.get_playlist_tracks(playlist_id)
 
-                # Persist the thumbnail regardless of the track import —
+                # Persist the thumbnail regardless of the track import -
                 # an empty playlist must still get its cover refreshed.
                 if thumb_url:
                     PlaylistStore.update_thumbnail(playlist_name, platform, thumb_url)

@@ -39,11 +39,11 @@ def _find_by_key(
 
     Lookup priority (first match wins):
 
-    1. ``(platform, playlist_id)`` — primary key, used when *playlist_id* is
+    1. ``(platform, playlist_id)`` - primary key, used when *playlist_id* is
        non-empty.
-    2. ``(platform, name)`` — legacy fallback for entries stored before the
+    2. ``(platform, name)`` - legacy fallback for entries stored before the
        *playlist_id* field existed.
-    3. ``name`` alone — legacy catch-all (no platform filter).
+    3. ``name`` alone - legacy catch-all (no platform filter).
     """
     if playlist_id and platform:
         for p in playlists:
@@ -164,7 +164,7 @@ class PlaylistStore:
                 existing["playlist_id"] = playlist_id
                 if thumbnail_url:
                     existing["thumbnail_url"] = thumbnail_url
-                # hotkey is intentionally preserved — do not overwrite.
+                # hotkey is intentionally preserved - do not overwrite.
                 logger.info(
                     "Updated playlist '%s' (platform=%s, id=%s)",
                     name, platform, playlist_id or "<legacy>",
@@ -248,7 +248,7 @@ class PlaylistStore:
         that queries the appropriate integration API.
 
         If no callback is supplied (or the callback returns an empty string),
-        the entry is left untouched — the fallback logic in ``_find_by_key``
+        the entry is left untouched - the fallback logic in ``_find_by_key``
         will continue to work using ``(platform, name)``.
         """
         if lookup_playlist_id is None:
@@ -259,7 +259,7 @@ class PlaylistStore:
             changed = False
             for p in playlists:
                 if p.get("playlist_id"):
-                    continue  # already has a valid id
+                    continue
                 platform = p.get("platform", "")
                 name = p.get("name", "")
                 if not platform or not name:
@@ -293,7 +293,7 @@ class PlaylistStore:
         global _playlist_cache, _cache_timestamp
         try:
             # Write to a temporary file, then atomically replace the real one.
-            # This prevents partial/corrupt writes on crash (issue #2).
+            # This prevents partial/corrupt writes on crash.
             temp = playlists_json.with_suffix(".json.tmp")
             with open(temp, "w", encoding="utf-8") as f:
                 json.dump(playlists, f, ensure_ascii=False, indent=2)

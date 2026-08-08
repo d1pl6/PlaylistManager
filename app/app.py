@@ -49,7 +49,7 @@ class App:
                 logger.warning("YouTube Music not configured (no browser.json)")
         except ImportError:
             logger.info(
-                "ytmusicapi not installed — YouTube Music integration disabled"
+                "ytmusicapi not installed - YouTube Music integration disabled"
             )
 
         self.integrations = IntegrationRegistry()
@@ -80,7 +80,7 @@ class App:
 
         # Migrate legacy playlists (without playlist_id) so the new
         # (platform, playlist_id) dedup key works for existing entries.
-        # The lookups call the platform APIs (network) — run them in the
+        # The lookups call the platform APIs (network) - run them in the
         # background so they never block first paint of the UI thread.
         threading.Thread(target=self._migrate_playlist_schema, daemon=True).start()
 
@@ -166,12 +166,12 @@ class App:
 
         Both callbacks hop through ``root.after(0, ...)`` because the tray
         backend thread must never touch tkinter directly.  ``after`` may
-        be called before ``mainloop()`` starts — timers simply queue and
+        be called before ``mainloop()`` starts - timers simply queue and
         fire once the loop runs.
         """
         tray = TrayService()
         if not tray.available:
-            logger.info("Tray unavailable — hide-to-tray disabled")
+            logger.info("Tray unavailable - hide-to-tray disabled")
             self.main_window.tray_service = None
             return
         try:
@@ -180,8 +180,8 @@ class App:
                 on_quit=lambda: self.root.after(0, self.ac.quit_app),
             )
         except Exception:
-            # Best-effort feature — a backend quirk must not kill the app.
-            logger.exception("Tray failed to start — hide-to-tray disabled")
+            # Best-effort feature - a backend quirk must not kill the app.
+            logger.exception("Tray failed to start - hide-to-tray disabled")
             self.main_window.tray_service = None
             return
         self._tray_service = tray
@@ -205,7 +205,7 @@ class App:
         """
         # Stop the tray first so no tray callback can fire against a
         # destroyed root.  Icon.stop() is non-blocking (unlike the pynput
-        # listener) — no join quirk.
+        # listener) - no join quirk.
         tray = getattr(self, "_tray_service", None)
         if tray is not None:
             tray.stop()

@@ -8,8 +8,9 @@ from services.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
-
-# ── Duration parsing ─────────────────────────────────────────────────────────
+# ------------------------------------------------------------------
+# Duration parsing
+# ------------------------------------------------------------------
 
 def _parse_duration(duration_str: str) -> int:
     """Parse a duration string like '3:45' or '1:02:30' to seconds.
@@ -32,7 +33,7 @@ def _parse_duration(duration_str: str) -> int:
         logger.warning("Negative duration component in '%s', using 0", duration_str)
         return 0
     if len(parts_int) == 2 and parts_int[1] >= 60:
-        # "M:SS" — a seconds value >= 60 means the string is malformed
+        # "M:SS" - a seconds value >= 60 means the string is malformed
         # (e.g. "3:75" instead of "4:15"); the result is still computed.
         logger.warning(
             "Duration '%s' has seconds >=60, result may be wrong", duration_str
@@ -46,8 +47,9 @@ def _parse_duration(duration_str: str) -> int:
         seconds = seconds * 60 + p
     return seconds
 
-
-# ── Platform track extractors for bulk insert ──────────────────────────────
+# ------------------------------------------------------------------
+# Platform track extractors for bulk insert
+# ------------------------------------------------------------------
 
 def _extract_youtube_track(track: dict) -> Optional[tuple]:
     """Extract fields from a ytmusicapi track dict.
@@ -110,8 +112,9 @@ _TRACK_EXTRACTORS: dict[str, Callable[[dict], Optional[tuple]]] = {
     PLATFORM_SPOTIFY: _extract_spotify_track,
 }
 
-
-# ── Thumbnail picking ──────────────────────────────────────────────────────
+# ------------------------------------------------------------------
+# Thumbnail picking
+# ------------------------------------------------------------------
 
 def _pick_thumbnail(thumbnails: list) -> Optional[str]:
     """Pick the most appropriate thumbnail URL from a platform thumbnail list.
@@ -125,25 +128,25 @@ def _pick_thumbnail(thumbnails: list) -> Optional[str]:
     # that will be downscaled to 64×64 anyway).
     candidates = [t for t in thumbnails if t.get("width", 0) >= 64]
     if not candidates:
-        # Nothing meets the threshold — take the smallest available.
+        # Nothing meets the threshold - take the smallest available.
         picked = min(thumbnails, key=lambda t: (t.get("width", 0), t.get("height", 0)))
     else:
         picked = min(candidates, key=lambda t: (t.get("width", 0), t.get("height", 0)))
     return picked.get("url")
 
 
-# ── Normalisation helpers ──────────────────────────────────────────────────
-
+# Normalisation helper
 def _normalize_text(text: str) -> str:
     return text.strip().lower()
 
-
-# ── SongManager ────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------
+# SongManager
+# ------------------------------------------------------------------
 
 class SongManager:
     """Manages song CRUD operations for playlists.
 
-    Thread-safe singleton — the single instance (and its ``db_manager``)
+    Thread-safe singleton - the single instance (and its ``db_manager``)
     are created once under a class-level lock so that concurrent calls
     from background sync threads never produce a second ``DatabaseManager``.
     """
@@ -155,7 +158,7 @@ class SongManager:
         if cls._instance is None:
             cls._instance_lock.acquire()
             try:
-                if cls._instance is None:          # double-check after acquire
+                if cls._instance is None:
                     inst = super().__new__(cls)
                     inst.db_manager = DatabaseManager()
                     cls._instance = inst
@@ -164,8 +167,6 @@ class SongManager:
         return cls._instance
 
     def __init__(self):
-        # Prevent re-init on singleton instance — db_manager was already
-        # set up in __new__.
         if hasattr(self, '_init_done'):
             return
         self._init_done = True
@@ -204,7 +205,7 @@ class SongManager:
         platform: str,
     ) -> int:
         """
-        Core bulk insert — shared by YouTube Music and Spotify.
+        Core bulk insert - shared by YouTube Music and Spotify.
 
         Args:
             playlist_name: Name of the playlist
@@ -390,7 +391,7 @@ class SongManager:
                 conn.commit()
 
                 if cursor.rowcount == 0:
-                    # Song already exists — look up existing ID
+                    # Song already exists - look up existing ID
                     cursor.execute("SELECT id FROM songs WHERE track_id = ?", (track_id,))
                     row = cursor.fetchone()
                     if row is None:

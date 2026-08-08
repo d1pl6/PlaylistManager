@@ -1,5 +1,5 @@
 """
-PlaylistManager — entry point.
+PlaylistManager - entry point.
 
 Usage:
   python main.py              # launch GUI

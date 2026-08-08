@@ -1,5 +1,5 @@
 """
-App-level controller — quit and auth-refresh entry points for the UI.
+App-level controller - quit and auth-refresh entry points for the UI.
 
 Quit orchestration lives here so the tkinter layer (MainWindow buttons,
 WM_DELETE_WINDOW) never reaches into :class:`App` internals.  If cleanup
@@ -40,7 +40,7 @@ class AppController:
             logger.exception("Failed to close the app: %s", e)
             if not self._confirm_force_quit(e):
                 return
-            # Last resort — tear the window down directly.
+            # Last resort - tear the window down directly.
             try:
                 self.app.root.destroy()
             except Exception:
@@ -54,7 +54,7 @@ class AppController:
         result = {"force": False}
 
         # If the main window is withdrawn (hidden to tray) the error
-        # dialog, being transient to it, can hide behind the tray icon —
+        # dialog, being transient to it, can hide behind the tray icon -
         # make the root visible again so the dialog has a parent on screen.
         try:
             if self.app.root.state() != "normal":

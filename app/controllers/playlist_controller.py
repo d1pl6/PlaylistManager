@@ -21,13 +21,13 @@ class PlaylistController:
 
     Callbacks received from the UI layer:
 
-    * ``on_show_platform_picker(platforms)`` — user must pick a platform
-    * ``on_show_playlist_dialog(playlists, integration)`` — show the
+    * ``on_show_platform_picker(platforms)`` - user must pick a platform
+    * ``on_show_playlist_dialog(playlists, integration)`` - show the
       playlist selection dialog
-    * ``on_add_playlist_frame(name, platform, playlist_id, thumb_url)`` —
+    * ``on_add_playlist_frame(name, platform, playlist_id, thumb_url)`` -
       a playlist was selected and persisted; the UI should add a frame
-    * ``on_dialog_cancel()`` — restore UI after cancellation
-    * ``on_show_error()`` — show the generic integration-error dialog
+    * ``on_dialog_cancel()`` - restore UI after cancellation
+    * ``on_show_error()`` - show the generic integration-error dialog
     """
 
     def __init__(
@@ -105,7 +105,7 @@ class PlaylistController:
             self._cancel_and_show_error()
             return
 
-        # Exclude playlists already in the store — check both name and
+        # Exclude playlists already in the store - check both name and
         # playlist_id so renames don't cause duplicates.
         existing_names = PlaylistStore.get_existing_names(platform=integration.id)
         existing_ids = PlaylistStore.get_existing_ids_by_platform(integration.id)
@@ -130,7 +130,7 @@ class PlaylistController:
         playlist_id: str = "",
         thumb_url: Optional[str] = None,
     ) -> None:
-        """A playlist was chosen — persist and notify the UI."""
+        """A playlist was chosen - persist and notify the UI."""
         PlaylistStore.add_playlist(
             playlist_name,
             platform=platform,

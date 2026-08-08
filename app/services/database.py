@@ -71,7 +71,7 @@ class DatabaseManager:
     def get_playlist_db_path(self, playlist_name: str, platform: str = PLATFORM_YOUTUBE_MUSIC) -> Path:
         """Get the database file path for a playlist.
 
-        *platform* is required — callers always know which platform the
+        *platform* is required - callers always know which platform the
         playlist belongs to.  The old fallback-to-PlaylistStore lookup
         (which created a circular dependency) has been removed.
         """
@@ -178,7 +178,7 @@ def _set_pragmas(conn: sqlite3.Connection) -> None:
     is more resilient on removable filesystems (exFAT).  synchronous=NORMAL
     paired with WAL gives a good safety/performance balance.
 
-    These are safe to call on every connection — WAL mode is persistent
+    These are safe to call on every connection - WAL mode is persistent
     in the database file so the second call is a no-op.
     """
     try:

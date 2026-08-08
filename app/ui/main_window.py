@@ -520,7 +520,7 @@ class MainWindow:
 
         ``<Unmap>`` fires for reasons other than minimize (our own
         ``withdraw()``, WM restarts), so the decision is deferred and
-        gated on ``state() == "iconic"`` — that distinguishes a real
+        gated on ``state() == "iconic"`` - that distinguishes a real
         minimize from ``withdraw()`` (state ``withdrawn``), which
         prevents recursion.  The WM may take a few event-loop ticks to
         flip the state, so the gate is re-checked for a short while
@@ -537,15 +537,15 @@ class MainWindow:
             try:
                 state = self.root.state()
             except tk.TclError:
-                return  # root destroyed while the callback was queued
+                return
             if not tray_ok or not self._hide_to_tray:
                 return
             if state == "iconic":
                 self.root.withdraw()
             elif state == "withdrawn":
-                return  # already hidden (our own withdraw) — done
+                return
             elif attempts > 0:
-                # WM hasn't settled the minimize yet — try again shortly.
+                # WM hasn't settled the minimize yet - try again shortly.
                 self._hide_after_id = self.root.after(
                     50, lambda: _maybe_hide(attempts - 1)
                 )
@@ -565,7 +565,7 @@ class MainWindow:
             try:
                 self.root.after_cancel(self._hide_after_id)
             except tk.TclError:
-                pass  # root destroyed while the callback was queued
+                pass
             self._hide_after_id = None
 
     def set_hide_to_tray(self, enabled: bool) -> None:
