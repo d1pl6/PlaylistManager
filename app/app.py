@@ -14,6 +14,7 @@ from services.integration import (
     YouTubeMusicIntegration,
 )
 from services.playlist_store import PlaylistStore
+from services.tray import TrayService
 from ui.main_window import MainWindow
 from ui.updater_ui import show_update_dialog
 from utils.window import center_window
@@ -75,6 +76,7 @@ class App:
 
         keybind_controller = KeybindController(yt_client, spotify_integration=sp_integration)
         app_controller = AppController(self)
+        self.ac = app_controller
 
         # Migrate legacy playlists (without playlist_id) so the new
         # (platform, playlist_id) dedup key works for existing entries.
@@ -159,10 +161,37 @@ class App:
 
         updater.check(on_result)
 
+    def _start_tray(self):
+        """Start the system tray icon (best effort).
+
+        Both callbacks hop through ``root.after(0, ...)`` because the tray
+        backend thread must never touch tkinter directly.  ``after`` may
+        be called before ``mainloop()`` starts — timers simply queue and
+        fire once the loop runs.
+        """
+        tray = TrayService()
+        if not tray.available:
+            logger.info("Tray unavailable — hide-to-tray disabled")
+            self.main_window.tray_service = None
+            return
+        try:
+            tray.start(
+                on_open=lambda: self.root.after(0, self.main_window.show_from_tray),
+                on_quit=lambda: self.root.after(0, self.ac.quit_app),
+            )
+        except Exception:
+            # Best-effort feature — a backend quirk must not kill the app.
+            logger.exception("Tray failed to start — hide-to-tray disabled")
+            self.main_window.tray_service = None
+            return
+        self._tray_service = tray
+        self.main_window.tray_service = tray
+
     def run(self):
         logger.info("Starting app")
         try:
             self.main_window.setup()
+            self._start_tray()
             self.root.mainloop()
         except Exception:
             logger.exception("Unhandled exception")
@@ -174,6 +203,12 @@ class App:
         Called by :class:`AppController` before quitting.  Raises the
         first error so the controller can offer Force-quit / Cancel.
         """
+        # Stop the tray first so no tray callback can fire against a
+        # destroyed root.  Icon.stop() is non-blocking (unlike the pynput
+        # listener) — no join quirk.
+        tray = getattr(self, "_tray_service", None)
+        if tray is not None:
+            tray.stop()
         if hasattr(self, "main_window") and self.main_window:
             self.main_window.kc.stop_receiver()
             self.main_window.kc.stop_listener(wait=False)

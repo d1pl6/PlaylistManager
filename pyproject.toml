@@ -24,18 +24,18 @@ classifiers = [
 dependencies = [
     "pillow",
     "requests",
-    "python-dotenv",
     "platformdirs",
     "flask",
     "flask-cors",
-    "cryptography",
     "pynput",
 ]
 
 [project.optional-dependencies]
 youtubemusic = ["ytmusicapi"]
+tray = ["pystray"]
 all = [
     "ytmusicapi",
+    "pystray",
 ]
 
 [project.urls]

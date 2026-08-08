@@ -16,7 +16,7 @@ git clone https://github.com/d1pl6/PlaylistManager.git && cd PlaylistManager
 ```
 Or Code > Download ZIP
 
-### Windows / Mac OS
+## Windows / Mac OS
 ```
 # to install basic dependencies
 pip install .
@@ -25,21 +25,57 @@ pip install .
 pip install ".[all]"
 
 # to install basic & specify optional dependencies
-pip install ".[youtubemusic]"
+pip install ".[youtubemusic,tray]"
 ```
 
-### Linux
-It's not recommended to install dependencies through `pip` because it can break system packages.
+## Linux
+> [!TIP]
+> It's not recommended to install dependencies through `pip` because it can break system packages.
 
-#### Arch
+### Arch
 ```
-pacman -S tk python-pillow python-requests python-dotenv python-platformdirs python-flask python-flask-cors python-cryptography python-pynput
+pacman -S tk python-pillow python-requests python-platformdirs python-flask python-flask-cors python-pynput
 ```
 
-#### Integrations (optional)
+### Debian / Ubuntu
 ```
+apt install -y python3-tk python3-pil python3-requests python3-platformdirs python3-flask python3-flask-cors python3-pynput
+```
+
+### Optional dependencies
+#### Integrations
+**Windows / macOS**:
+```
+# Integrations
 pip install ytmusicapi
+
+# Tray
+pip install pystray
 ```
+**Linux**:
+
+Arch
+```
+# Integrations
+pacman -S python-ytmusicapi
+
+# Tray
+pacman -S python-pystray
+```
+Debian / Ubuntu
+```
+# Integrations
+apt install -y python3-ytmusicapi
+
+# Tray
+apt install -y python3-pystray
+```
+
+> [!NOTE]
+> `python3-ytmusicapi` and `python3-pystray` are only packaged for Debian *sid/testing* and recent Ubuntu releases (universe). On Debian stable or older Ubuntu, use `pip install ytmusicapi pystray` (or `pip install ".[all]"`) instead.
+
+> [!NOTE]
+> **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
 
 # Usage
 ```

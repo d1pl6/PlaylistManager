@@ -4,10 +4,9 @@
 
 [x] Theme change
 
-[ ] Closing app takes too long
-    One note for later: on this system the pynput listener thread stays a zombie after stop() even with time to unwind — it holds an X record context until process exit. That's inherent to the pynput/Xlib combo and harmless for a quitting app; if you ever switch global listeners without quitting in a long-running session, it's worth a comment in the pynput issue tracker as a known quirk.
+[x] Tray & Hide in tray
 
-[ ] Tray & Hide in tray
+[ ] Wayland support
 
 [ ] Show last N added songs in playlist and option in settings:
 

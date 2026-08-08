@@ -26,7 +26,20 @@ def _toggle_setting(section, var):
         cfg.write(f)
 
 
-def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None):
+def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, tray_available=None, on_tray_toggle=None):
+    """Show the settings dialog.
+
+    Args:
+        parent: tkinter parent window.
+        keybind_controller: optional KeybindController for the global
+            listener toggle.
+        on_theme_change: optional callback re-applying the theme.
+        tray_available: optional TrayService (or any object with an
+            ``available`` attribute); when falsy/absent the hide-to-tray
+            checkbutton is disabled.
+        on_tray_toggle: optional callback applied live with the new
+            hide-to-tray state (bool) when the checkbox changes.
+    """
     theme_win_bg = C["frame_main_bg"]
     theme_header_bg = C["frame_head_bg"]
     theme_label_bg = C["label_def_bg"]
@@ -59,17 +72,20 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None):
         center_var_value = 1 if cfg.getboolean("center_windows", "is_true", fallback=True) else 0
         resize_var_value = 1 if cfg.getboolean("auto_resize", "is_true", fallback=False) else 0
         global_var_value = 1 if cfg.getboolean("global_listener", "is_true", fallback=True) else 0
+        tray_var_value = 1 if cfg.getboolean("hide_to_tray", "is_true", fallback=False) else 0
     except Exception as e:
         logger.error("Error loading config, defaulting to yes: %s", e)
         update_var_value = 1
         center_var_value = 1
         resize_var_value = 0
         global_var_value = 1
+        tray_var_value = 0
 
     update_var = tk.IntVar(value=update_var_value)
     center_var = tk.IntVar(value=center_var_value)
     resize_var = tk.IntVar(value=resize_var_value)
     global_var = tk.IntVar(value=global_var_value)
+    tray_var = tk.IntVar(value=tray_var_value)
 
     tk.Checkbutton(
         win,
@@ -133,6 +149,28 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None):
         command=_on_global_toggle,
         variable=global_var,
     ).pack(fill="both")
+
+    def _on_tray_toggle():
+        _toggle_setting("hide_to_tray", tray_var)
+        if on_tray_toggle is not None:
+            on_tray_toggle(tray_var.get() == 1)
+
+    tray_ck = tk.Checkbutton(
+        win,
+        text="Hide in tray on minimize?",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        selectcolor=theme_check_select,
+        activebackground=theme_check_abg,
+        activeforeground=theme_check_afg,
+        font=("Noto", 10),
+        command=_on_tray_toggle,
+        variable=tray_var,
+    )
+    tray_ck.pack(fill="both")
+    # Disable when no tray backend is available.
+    if not getattr(tray_available, "available", False):
+        tray_ck.configure(state="disabled")
 
     tk.Button(
         win,
