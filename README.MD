@@ -79,7 +79,7 @@ apt install -y python3-pystray
 
 # Usage
 > [!NOTE]
-> **Wayland**: applications cannot grab global keyboard events (the compositor owns input - a security design decision), so pynput hotkeys only capture XWayland apps there. Bind compositor shortcuts to the CLI instead - see [Command line](#command-line).
+> **Wayland**: applications cannot grab global keyboard events (the compositor owns input - a security design decision), so pynput hotkeys only capture XWayland apps. Bind compositor shortcuts to the CLI instead - see [Command line](#command-line).
 ```
 python -m main
 
@@ -95,29 +95,71 @@ Add `--debug` for verbose logging.
 6. Wait database creation (might take longer if you have a lot of songs in playlist)
 7. Create keybind (click on 2nd line after playlist name)
 
-See [INTEGRATIONS](INTEGRATIONS.MD) if your platform requires optional dependencies
-
 # Command line
-Add the currently-playing song to playlists from a terminal.
+Authentication (`--login` / `--logout`) - the headless equivalent of the GUI login tiles:
 
 ```
-python -m app add 1,2,3            # playlists #1, #2 and #3
-python -m app add 1-3              # range
-python -m app add "Chill Mix"      # by name
-python -m app add 1,"Chill Mix",3  # mixed numbers and names
-python -m app add --list           # show the numbered playlist list
-python -m app -a 1                 # option style, same as `add 1`
-python -m app --list               # option-style listing
+python -m app --login youtube_music                                   # open auth folder + terminal ('ytmusicapi browser')
+python -m app --login spotify --client-id <ID> --client-secret <SECRET> --refresh-token <TOKEN>
+python -m app --logout youtube_music      # delete browser.json + registry entries + db/youtube_music/
+python -m app --logout spotify            # delete spotify.json + registry entries + db/spotify/
 ```
 
+- `--login youtube_music` opens the auth folder and a terminal for the `ytmusicapi browser`
+  flow; manual instructions are printed when no terminal emulator is installed. `--login
+  spotify` needs the three credential options - they are written, verified against the
+  Spotify API, and rolled back (deleted) on verification failure.
+- `--logout` is **local-only** and idempotent: it deletes the platform's credential file(s),
+  unregisters all of its playlists from the registry and removes the local song databases
+  under `db/<platform>/`. Nothing is revoked on the platform itself; re-running it with
+  nothing left prints "no credentials found" and exits 0. After re-login, re-add playlists
+  with `-p add <URL>`.
+- Credentials passed on the command line may appear in your shell history - fine on a
+  personal machine, so don't share your creen during login.
+- Unknown platform names exit with code 2.
+
+Playlist management (`-p` / `--playlist`, verbs: `add`, `del`/`delete`, `ref`/`refresh`):
+
+```
+python -m app -p add "https://music.youtube.com/playlist?list=PL..."
+python -m app -p add "https://open.spotify.com/playlist/<id>"
+python -m app -p del 1,"Chill Mix"          # remove locally (registry + DB)
+python -m app -p del "https://open.spotify.com/playlist/<id>"   # by URL
+python -m app -p delete all                 # remove every playlist
+python -m app -p ref 2,3                    # re-import all tracks from the platform
+python -m app -p refresh all                # refresh every playlist
+```
+
+- `-p add` registers the playlist from its URL (title fetched from the platform, tracks
+  imported automatically) and updates an existing entry in place (hotkey preserved).
+  The `del` command is local-only: it removes the registry entry and the local song
+  database, never the playlist on the platform. `ref` deletes and re-imports the local
+  database, refreshing the thumbnail too.
+- Spotify URLs: `https://open.spotify.com/playlist/<id>[...]` or `spotify:playlist:<id>`.
+  YouTube/YouTube Music URLs: `.../playlist?list=<id>` on music.youtube.com or youtube.com.
+  Song URLs (`.../watch?v=...`) are rejected with a hint - use `-a` for the current song.
 - A playlist name that is pure digits (e.g. `"123"`) is always read as an order number,
-  and names containing commas cannot be addressed by name - use `--list` numbers for those.
-- Exit codes: `0` if at least one playlist was updated, `1` on fatal errors (bad auth,
-  nothing playing, URL timeout), `2` on bad input (malformed/out-of-range/unknown targets).
+  and names containing commas cannot be addressed by name - use `--list` numbers or the
+  playlist URL for those.
+- Exit codes: `0` if every requested operation succeeded, `1` on runtime failures (bad
+  auth, playlist not found on the platform, import/refresh errors), `2` on bad input
+  (malformed/out-of-range/unknown targets, unrecognized URLs or verbs).
+- `-p` consumes the rest of the command line: put it after any other options.
+
+Song add:
+
+```
+python -m app -a 1,2,3            # playlists #1, #2 and #3
+python -m app -a 1-3              # range
+python -m app --add-song "Chill Mix"   # by name
+python -m app -a 1,"Chill Mix",3  # mixed numbers and names
+python -m app --list              # show the numbered playlist list
+```
 
 ## Global command (for compositor shortcuts)
 `python -m app ...` only works from the repo root. To bind the command from anywhere
-(i3 / sway / hyprland / KDE / GNOME shortcuts), install a global `playlistmanager` command.
+(i3 / hyprland / etc), install a global `playlistmanager` command.
+
 The simplest way - a symlink (the app resolves its own real location, so any checkout
 path works; nothing machine-specific is hardcoded in the code):
 
@@ -138,11 +180,11 @@ Then bind e.g.:
 
 i3 / Sway
 
-`bindsym $mod+Shift+a exec playlistmanager add 1`
+`bindsym $mod+Shift+a exec playlistmanager -a 1`
 
 Hyprland
 
-`bind = MODSHIFT, A, exec, playlistmanager add 1`
+`bind = MODSHIFT, A, exec, playlistmanager -a 1`
 
 KDE Plasma
 
@@ -152,7 +194,7 @@ GNOME
 
 `Settings → Keyboard → Custom Shortcuts → Command`
 
-`playlistmanager add 1` / `playlistmanager -a 1` / `playlistmanager --add 1` can be used.
+`playlistmanager --add-song 1` / `playlistmanager -a 1` can be used.
 
 # Integrations
 For now only available

@@ -238,6 +238,29 @@ class PlaylistStore:
                 )
 
     @staticmethod
+    def delete_playlists_for_platform(platform: str) -> int:
+        """Remove every registry entry for *platform*.
+
+        Returns the number of entries removed.  Entries without a platform
+        field are treated as :data:`PLATFORM_YOUTUBE_MUSIC` (the legacy
+        default, matching :meth:`get_existing_names`).
+        """
+        with _lock:
+            playlists = PlaylistStore.load_playlists()
+            kept = [
+                p
+                for p in playlists
+                if p.get("platform", PLATFORM_YOUTUBE_MUSIC) != platform
+            ]
+            removed = len(playlists) - len(kept)
+            if removed:
+                logger.info(
+                    "Removed %d playlist(s) for platform %s", removed, platform
+                )
+                PlaylistStore._write(kept)
+            return removed
+
+    @staticmethod
     def migrate_schema(
         lookup_playlist_id: "Callable[[str, str], str] | None" = None,
     ):

@@ -10,16 +10,18 @@ import json
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from platformdirs import user_config_dir
 
+from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from utils.platform import get_terminal_command, open_directory
 
 logger = logging.getLogger(__name__)
 
 AUTH_DIR = Path(user_config_dir("playlistmanager")) / "auth"
 SPOTIFY_FILE = AUTH_DIR / "spotify.json"
+BROWSER_FILE = AUTH_DIR / "browser.json"
 
 # ---------------------------------------------------------------------------
 # YouTube Music
@@ -139,3 +141,40 @@ def save_and_verify_spotify_credentials(
     """
     save_spotify_credentials(client_id, client_secret, refresh_token)
     return verify_spotify_credentials(client_id, client_secret, refresh_token)
+
+
+# ---------------------------------------------------------------------------
+# Multi-platform credential deletion (CLI --logout)
+# ---------------------------------------------------------------------------
+
+# platform -> primary credential file(s) deleted on logout.
+# Deliberately only the auth-dir file - NOT the repo fallback browser.json
+# copies (decision cli.md 15.12.2: CLI and GUI logins are never used
+# simultaneously, so a stale fallback copy is not a practical concern).
+PLATFORM_CREDENTIAL_FILES = {
+    PLATFORM_YOUTUBE_MUSIC: [BROWSER_FILE],
+    PLATFORM_SPOTIFY: [SPOTIFY_FILE],
+}
+
+
+def delete_platform_credentials(platform: str) -> Tuple[List[Path], List[Path]]:
+    """Delete every credential file listed for *platform*.
+
+    Returns ``(deleted, missing)`` - the files that were removed and the
+    ones that did not exist.  Raises ``OSError`` on the first failed
+    unlink so callers can report the error.
+
+    Adding a future platform: add its identifier to
+    ``constants.KNOWN_PLATFORMS`` and its credential file(s) to
+    :data:`PLATFORM_CREDENTIAL_FILES`.
+    """
+    deleted: List[Path] = []
+    missing: List[Path] = []
+    for path in PLATFORM_CREDENTIAL_FILES.get(platform, []):
+        if path.exists():
+            path.unlink()
+            logger.info("Deleted credentials: %s", path)
+            deleted.append(path)
+        else:
+            missing.append(path)
+    return deleted, missing

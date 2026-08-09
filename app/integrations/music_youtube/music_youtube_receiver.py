@@ -175,9 +175,24 @@ class URLReceiverManager:
         return match.group(1)
 
     def set_waiting(self, waiting: bool) -> None:
-        """Control whether the /status endpoint reports ready."""
+        """Control whether the /status endpoint reports ready.
+
+        Each transition to waiting starts a new flow: issue a fresh per-run
+        token so the extension can distinguish a new keybind press from the
+        previous (finished) one even when this server instance was reused
+        (e.g. the previous flow's shutdown was still in flight and start()
+        skipped regenerating it). Also drain any URL a previous flow left
+        in the queue so a stale song cannot be consumed by the next flow.
+        """
         with self._state_lock:
             self._waiting_for_url = waiting
+            if waiting:
+                self._token = secrets.token_hex(16)
+                while True:
+                    try:
+                        self.url_queue.get_nowait()
+                    except Empty:
+                        break
 
     def start(self) -> Optional[threading.Thread]:
         """Start the Flask server in a daemon thread."""

@@ -12,7 +12,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from cli import run_add, run_list
+from cli import (
+    run_add,
+    run_add_url,
+    run_del,
+    run_list,
+    run_login,
+    run_logout,
+    run_refresh,
+)
 
 
 def parse_args():
@@ -21,26 +29,42 @@ def parse_args():
         description="PlaylistManager - add the currently-playing song to your playlists.",
     )
     p.add_argument("--debug", action="store_true", help="verbose logging")
-
-    sub = p.add_subparsers(dest="command")
-    add_p = sub.add_parser("add", help="add the currently-playing song to playlist(s)")
-    add_p.add_argument(
-        "targets",
-        nargs="?",
-        help='playlist order numbers and/or names, e.g. "1,2,3", "1-3", "1,\\"Chill Mix\\""',
-    )
-    add_p.add_argument(
-        "-l", "--list", dest="list_only", action="store_true",
-        help="print numbered playlists and exit",
-    )
-
     p.add_argument(
-        "-a", "--add", dest="add_targets", metavar="PLAYLISTS",
-        help="add the currently-playing song to playlist(s) (option style, same as 'add')",
+        "-a", "--add-song", dest="add_song_targets", metavar="PLAYLISTS",
+        help='add the currently-playing song to playlist(s), e.g. "1,2,3", "1-3"',
+    )
+    p.add_argument(
+        "-p", "--playlist", dest="playlist_args", nargs="+",
+        metavar="ACTION [TARGETS]...",
+        help='playlist management: "add <URL>", "del <TARGETS>", "ref <TARGETS>" '
+             '(del/ref accept numbers, names and playlist URLs; "all" targets every '
+             "playlist; delete/refresh are aliases)",
     )
     p.add_argument(
         "-l", "--list", dest="list_only", action="store_true",
         help="print numbered playlists and exit",
+    )
+    p.add_argument(
+        "--login", dest="login_platform", metavar="PLATFORM",
+        help='log in to a platform: "youtube_music" or "spotify" '
+             "(spotify also needs --client-id/--client-secret/--refresh-token)",
+    )
+    p.add_argument(
+        "--logout", dest="logout_platform", metavar="PLATFORM",
+        help="log out of a platform: delete its credentials, registry "
+             "entries and local databases",
+    )
+    p.add_argument(
+        "--client-id", dest="client_id", metavar="ID",
+        help="Spotify client ID (with --login spotify)",
+    )
+    p.add_argument(
+        "--client-secret", dest="client_secret", metavar="SECRET",
+        help="Spotify client secret (with --login spotify)",
+    )
+    p.add_argument(
+        "--refresh-token", dest="refresh_token", metavar="TOKEN",
+        help="Spotify refresh token (with --login spotify)",
     )
     return p.parse_args()
 
@@ -74,10 +98,34 @@ def main():
 
     if args.list_only:
         sys.exit(run_list())
-    if args.command == "add":
-        sys.exit(run_add(args.targets or ""))
-    if args.add_targets is not None:
-        sys.exit(run_add(args.add_targets))
+    if args.login_platform is not None:
+        sys.exit(
+            run_login(
+                args.login_platform,
+                args.client_id,
+                args.client_secret,
+                args.refresh_token,
+            )
+        )
+    if args.logout_platform is not None:
+        sys.exit(run_logout(args.logout_platform))
+    if args.add_song_targets is not None:
+        sys.exit(run_add(args.add_song_targets))
+    if args.playlist_args is not None:
+        verb = args.playlist_args[0].lower()
+        rest = ",".join(args.playlist_args[1:])
+        if verb == "add":
+            sys.exit(run_add_url(rest))
+        if verb in ("del", "delete"):
+            sys.exit(run_del(rest))
+        if verb in ("ref", "refresh"):
+            sys.exit(run_refresh(rest))
+        print(
+            f"error: unknown playlist action '{verb}' "
+            "(use add, del/delete, ref/refresh)",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     App = _import_app()
     app = App(args)

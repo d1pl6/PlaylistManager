@@ -5,9 +5,11 @@ PlaylistManager - entry point.
 Usage:
   python main.py              # launch GUI
   python main.py --debug      # verbose logging
-  python main.py add 1,2,3    # CLI: add current song to playlists #1, #2, #3
-  python main.py -a 1         # CLI: same, option style
+  python main.py -a 1,2,3     # CLI: add current song to playlists #1, #2, #3
+  python main.py -p add "URL" # CLI: register a playlist from its URL
   python main.py --list       # CLI: print numbered playlists
+  python main.py --login youtube_music   # CLI: authenticate a platform
+  python main.py --logout spotify        # CLI: delete platform credentials + DBs
   python -m app               # equivalent alternative
 """
 

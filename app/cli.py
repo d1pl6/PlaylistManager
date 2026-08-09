@@ -1,11 +1,18 @@
 """
-Headless CLI: add the currently-playing song to playlists from the terminal.
+Headless CLI: add the currently-playing song to playlists and manage the
+playlist registry from the terminal.
 
 Entry points (all equivalent):
-    python -m app add 1,2,3
-    python -m app add 1-3 "Chill Mix"
-    python -m app -a 1,2 --add "Chill Mix"
+    python -m app -a 1,2,3
+    python -m app --add-song "Chill Mix"
+    python -m app -p add "https://music.youtube.com/playlist?list=PL..."
+    python -m app -p del 1,"Chill Mix"
+    python -m app -p ref 1,"Chill Mix"
     python -m app --list
+    python -m app --login youtube_music
+    python -m app --login spotify --client-id X --client-secret Y --refresh-token Z
+    python -m app --logout youtube_music
+    python -m app --logout spotify
 
 Designed for compositor-owned shortcuts (i3 / sway / hyprland / KDE / GNOME
 binds) — the Wayland-safe replacement for pynput global hotkeys (plan.md W1,
@@ -24,9 +31,18 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
-from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
+from constants import (
+    KNOWN_PLATFORMS,
+    PLATFORM_SPOTIFY,
+    PLATFORM_YOUTUBE_MUSIC,
+)
+from services import auth_setup
+from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
+from services.playlist_sync import PlaylistSyncService
+from services.playlist_url import parse_playlist_url
 from services.song_manager import SongManager
+from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +58,14 @@ class UsageError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def _parse_token(token: str) -> Tuple[str, object]:
+def _parse_token(token: str, allow_urls: bool = False) -> Tuple[str, object]:
     """
     Classify one comma-separated token.
 
     Returns ("number", int) for pure digits, ("range", (start, end)) for
-    "N-M", ("name", str) otherwise. Numeric-looking playlist names are always
-    treated as order numbers (documented in README).
+    "N-M", ("url", (platform, playlist_id)) for a playlist URL when
+    *allow_urls* is true, ("name", str) otherwise. Numeric-looking playlist
+    names are always treated as order numbers (documented in README).
     """
     token = token.strip()
     if re.fullmatch(r"\d+", token):
@@ -59,25 +76,39 @@ def _parse_token(token: str) -> Tuple[str, object]:
         if start > end:
             raise UsageError(f"Invalid range '{token}': start is greater than end")
         return "range", (start, end)
+    if allow_urls and (
+        token.startswith("http://")
+        or token.startswith("https://")
+        or token.startswith("spotify:")
+    ):
+        try:
+            return "url", parse_playlist_url(token)
+        except ValueError as e:
+            raise UsageError(str(e))
     return "name", token
 
 
 def resolve_targets(
-    spec: str, playlists: List[dict]
+    spec: str, playlists: List[dict], allow_urls: bool = False
 ) -> List[Tuple[int, dict]]:
     """
-    Resolve an add-spec ("1,2,3", "1-3", names, or a mix) to playlist entries.
+    Resolve a playlist spec ("1,2,3", "1-3", names, or a mix) to entries.
 
     Returns a list of (registry_number, entry) — registry_number is the 1-based
     display order the user sees in the GUI (what ``--list`` prints). Repeated
     targets are silently deduped by (platform, playlist_id), first occurrence
     kept.
 
+    *allow_urls* enables URL tokens, resolved against the registry by
+    (platform, playlist_id) — used by the del/ref commands. The song-add path
+    leaves it False so a URL there falls through to name lookup and fails
+    with "not found".
+
     Raises UsageError on malformed, out-of-range, unknown or ambiguous input.
     """
     if not spec.strip():
         raise UsageError(
-            "No playlists given — e.g. 'add 1,2,3' or 'add \"Chill Mix\"'"
+            "No playlists given - e.g. '1,2,3', '1-3', or '\"Chill Mix\"'"
         )
     total = len(playlists)
     resolved: List[Tuple[int, dict]] = []
@@ -91,7 +122,7 @@ def resolve_targets(
         resolved.append((number, entry))
 
     for token in spec.split(","):
-        kind, value = _parse_token(token)
+        kind, value = _parse_token(token, allow_urls=allow_urls)
         if kind == "number":
             if not 1 <= value <= total:
                 raise UsageError(
@@ -106,6 +137,21 @@ def resolve_targets(
                 )
             for number in range(start, end + 1):
                 add(playlists[number - 1], number)
+        elif kind == "url":
+            platform, playlist_id = value
+            matches = [
+                p
+                for p in playlists
+                if p.get("platform") == platform
+                and p.get("playlist_id") == playlist_id
+            ]
+            if not matches:
+                raise UsageError(
+                    "Playlist URL not in the registry - add it first with "
+                    "'playlistmanager -p add <URL>'"
+                )
+            entry = matches[0]
+            add(entry, playlists.index(entry) + 1)
         else:
             name = value
             matches = [p for p in playlists if p.get("name") == name]
@@ -132,6 +178,15 @@ def resolve_targets(
             entry = matches[0]
             add(entry, playlists.index(entry) + 1)
     return resolved
+
+
+def resolve_targets_for(
+    spec: str, playlists: List[dict]
+) -> List[Tuple[int, dict]]:
+    """Resolve a del/ref spec: the ``all`` keyword, URLs, or a normal spec."""
+    if spec.strip().lower() == "all":
+        return [(i + 1, p) for i, p in enumerate(playlists)]
+    return resolve_targets(spec, playlists, allow_urls=True)
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +225,39 @@ def _init_spotify():
     return None
 
 
+def _auth_error(platform: str) -> str:
+    """Message for an unconfigured platform, matching the song-add path."""
+    if platform == PLATFORM_YOUTUBE_MUSIC:
+        return (
+            "YouTube Music not configured - run the GUI auth setup first "
+            "(ytmusicapi must be installed)"
+        )
+    return f"{platform} not configured - run the GUI auth setup first"
+
+
+def _build_integrations():
+    """Return an IntegrationRegistry with the authenticated integrations.
+
+    Mirrors App.__init__ (app.py:33-75) headlessly: no tkinter, no
+    messageboxes. Integrations without credentials stay registered with no
+    client so PlaylistSyncService can still report a per-platform error.
+    """
+    from services.integration import IntegrationRegistry, YouTubeMusicIntegration
+
+    registry = IntegrationRegistry()
+
+    yt_client = _init_yt_music()
+    yt_integration = YouTubeMusicIntegration()
+    yt_integration.yt_client = yt_client
+    registry.register(yt_integration)
+
+    sp_integration = _init_spotify()
+    if sp_integration is not None:
+        registry.register(sp_integration)
+
+    return registry
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -180,7 +268,8 @@ def run_list() -> int:
     playlists = PlaylistStore.load_playlists()
     if not playlists:
         print(
-            "No playlists configured. Add playlists from the GUI first.",
+            "No playlists configured. Add one with "
+            "'playlistmanager -p add <URL>' or from the GUI.",
             file=sys.stderr,
         )
         return 2
@@ -194,7 +283,8 @@ def run_add(spec: str) -> int:
     playlists = PlaylistStore.load_playlists()
     if not playlists:
         print(
-            "No playlists configured. Add playlists from the GUI first.",
+            "No playlists configured. Add one with "
+            "'playlistmanager -p add <URL>' or from the GUI.",
             file=sys.stderr,
         )
         return 2
@@ -270,6 +360,277 @@ def run_add(spec: str) -> int:
             failures += 1
 
     return 0 if successes else 1
+
+
+def run_add_url(url: str) -> int:
+    """Register a playlist from its URL and import its tracks."""
+    try:
+        platform, playlist_id = parse_playlist_url(url)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    integrations = _build_integrations()
+    integration = integrations.get(platform)
+    if integration is None or not integration.is_authenticated():
+        print(f"error: {_auth_error(platform)}", file=sys.stderr)
+        return 1
+
+    # Platform-first: never register a playlist the platform cannot
+    # confirm exists (deleted, private, or an arbitrary bad URL).
+    try:
+        details = integration.get_playlist_details(playlist_id)
+    except Exception as e:
+        print(f"error: failed to fetch playlist details: {e}", file=sys.stderr)
+        return 1
+    name = details.get("title") if isinstance(details, dict) else None
+    if not name:
+        print(
+            f"error: playlist not found on {platform} "
+            "(deleted, private, or an invalid URL)",
+            file=sys.stderr,
+        )
+        return 1
+
+    thumb_url = ThumbnailService.from_data(details)
+    thumb_url = PlaylistSyncService.prefer_library_thumbnail(
+        platform, integration, playlist_id, thumb_url
+    )
+
+    existed = (
+        PlaylistStore.find_playlist(name, platform=platform, playlist_id=playlist_id)
+        is not None
+    )
+    PlaylistStore.add_playlist(
+        name,
+        platform=platform,
+        playlist_id=playlist_id,
+        thumbnail_url=thumb_url or "",
+    )
+
+    playlists = PlaylistStore.load_playlists()
+    number = next(
+        (
+            i + 1
+            for i, p in enumerate(playlists)
+            if p.get("platform") == platform
+            and p.get("playlist_id") == playlist_id
+        ),
+        len(playlists),
+    )
+
+    action = "Updated" if existed else "Added"
+    sync = PlaylistSyncService(integrations)
+    try:
+        inserted, status = sync.import_tracks_sync(name, platform, playlist_id)
+    except Exception as e:
+        print(
+            f'#{number} "{name}" ({platform}): {action}, track import failed: {e}',
+            file=sys.stderr,
+        )
+        return 1
+
+    import_note = f"imported {inserted} tracks" if inserted else status.lower()
+    print(f'#{number} "{name}" ({platform}): {action}, {import_note}', flush=True)
+    return 0
+
+
+def run_del(spec: str) -> int:
+    """Remove playlist(s) from the registry and delete their local DBs.
+
+    Local-only: never touches the playlist on the platform.
+    """
+    playlists = PlaylistStore.load_playlists()
+    if not playlists:
+        print("No playlists configured.", file=sys.stderr)
+        return 2
+
+    try:
+        targets = resolve_targets_for(spec, playlists)
+    except UsageError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    for number, entry in targets:
+        name = entry.get("name")
+        platform = entry.get("platform")
+        PlaylistStore.delete_playlist(
+            name, platform=platform, playlist_id=entry.get("playlist_id", "")
+        )
+        DatabaseManager.delete_playlist_db(name, platform)
+        print(f'#{number} "{name}" ({platform}): deleted', flush=True)
+    return 0
+
+
+def run_refresh(spec: str) -> int:
+    """Re-import all tracks for playlist(s) from the platform."""
+    playlists = PlaylistStore.load_playlists()
+    if not playlists:
+        print("No playlists configured.", file=sys.stderr)
+        return 2
+
+    try:
+        targets = resolve_targets_for(spec, playlists)
+    except UsageError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    integrations = _build_integrations()
+    sync = PlaylistSyncService(integrations)
+
+    failures = 0
+    for number, entry in targets:
+        name = entry.get("name")
+        platform = entry.get("platform")
+        playlist_id = entry.get("playlist_id", "")
+        if not playlist_id:
+            print(
+                f'#{number} "{name}" ({platform}): Error: no playlist_id - '
+                "re-add it with 'playlistmanager -p add <URL>'",
+                file=sys.stderr,
+            )
+            failures += 1
+            continue
+
+        DatabaseManager.close_thread_connections()
+        try:
+            inserted, status, _thumb = sync.reload_database_sync(
+                name, platform, playlist_id
+            )
+        except Exception as e:
+            print(f'#{number} "{name}" ({platform}): Error: {e}', file=sys.stderr)
+            failures += 1
+            continue
+
+        print(
+            f'#{number} "{name}" ({platform}): refreshed ({status.lower()})',
+            flush=True,
+        )
+    return 0 if failures == 0 else 1
+
+
+def run_login(
+    platform: str,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    refresh_token: Optional[str] = None,
+) -> int:
+    """Log in to a platform. Returns the CLI exit code.
+
+    youtube_music: mirrors the GUI tile - opens the auth folder and a
+    terminal running ``ytmusicapi browser`` (manual instructions instead
+    when no terminal emulator is installed).
+
+    spotify: requires ``--client-id`` / ``--client-secret`` /
+    ``--refresh-token``.  The file is written first, then verified
+    against ``/v1/me`` - on verify failure the just-written file is
+    rolled back and an error is shown (cli.md 15.12.4).
+    """
+    if platform not in KNOWN_PLATFORMS:
+        print(
+            f"error: unknown platform '{platform}' "
+            f"(use {', '.join(KNOWN_PLATFORMS)})",
+            file=sys.stderr,
+        )
+        return 2
+
+    if platform == PLATFORM_YOUTUBE_MUSIC:
+        result = auth_setup.setup_ytmusic_auth()
+        if result.get("manual"):
+            print(
+                f"youtube_music: no terminal emulator found - manually run:\n"
+                f"  cd {result['auth_dir']}\n"
+                f"  ytmusicapi browser\n"
+                f"and place the generated browser.json in {result['auth_dir']}",
+                file=sys.stderr,
+            )
+            return 0
+        print(
+            f"youtube_music: opened {auth_setup.AUTH_DIR} and a terminal - "
+            "run 'ytmusicapi browser' there and keep the generated "
+            "browser.json in that folder",
+            flush=True,
+        )
+        return 0
+
+    # Spotify
+    missing = [
+        name
+        for name, val in (
+            ("--client-id", client_id),
+            ("--client-secret", client_secret),
+            ("--refresh-token", refresh_token),
+        )
+        if not val
+    ]
+    if missing:
+        print(
+            f"error: '--login spotify' requires {' '.join(missing)} "
+            "(the refresh token comes from your Spotify app's dashboard)",
+            file=sys.stderr,
+        )
+        return 2
+
+    auth_setup.save_spotify_credentials(client_id, client_secret, refresh_token)
+    result = auth_setup.verify_spotify_credentials(
+        client_id, client_secret, refresh_token
+    )
+    if result.get("ok"):
+        print(f"spotify: logged in as {result.get('display_name')}", flush=True)
+        return 0
+
+    try:
+        auth_setup.delete_spotify_credentials()
+    except OSError as e:
+        logger.warning("Failed to roll back spotify.json after failed verify: %s", e)
+    print(
+        f"error: spotify login failed: {result.get('error')} "
+        "(credentials rolled back)",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def run_logout(platform: str) -> int:
+    """Log out of a platform: delete its credentials, registry entries and
+    local databases. Local-only - never touches the platform itself.
+
+    Idempotent: a second run with nothing left prints "no credentials
+    found" and still exits 0.
+    """
+    if platform not in KNOWN_PLATFORMS:
+        print(
+            f"error: unknown platform '{platform}' "
+            f"(use {', '.join(KNOWN_PLATFORMS)})",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        deleted, _missing = auth_setup.delete_platform_credentials(platform)
+    except OSError as e:
+        print(
+            f"error: failed to delete {platform} credentials: {e}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if deleted:
+        print(
+            f"{platform}: logged out (deleted {', '.join(str(p) for p in deleted)})",
+            flush=True,
+        )
+    else:
+        print(f"{platform}: no credentials found", flush=True)
+
+    n_registry = PlaylistStore.delete_playlists_for_platform(platform)
+    if n_registry:
+        print(f"{platform}: removed {n_registry} playlist(s) from the registry")
+
+    n_dbs = DatabaseManager.delete_platform_databases(platform)
+    if n_dbs:
+        print(f"{platform}: deleted {n_dbs} local database file(s)")
+    return 0
 
 
 def _capture_yt_song(keybind_flow, receiver) -> Tuple[Optional[str], Optional[Dict]]:
