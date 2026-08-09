@@ -92,6 +92,7 @@ class App:
         )
 
         ensure_settings_file()
+        PlaylistStore.ensure_playlists_file()
         cfg = ConfigParser()
         cfg.read(str(SETTINGS_PATH))
         if cfg.getboolean("center_windows", "is_true", fallback=True):

@@ -303,6 +303,21 @@ class PlaylistStore:
             if changed:
                 PlaylistStore._write(playlists)
 
+    @staticmethod
+    def ensure_playlists_file() -> None:
+        """Create ``db/playlists.json`` (empty list) on first launch.
+
+        The ``db/`` directory is gitignored, so a fresh clone has neither
+        the directory nor the file.  Without this the first playlist add
+        would fail to persist (``_write`` now creates the parent dir
+        defensively, but the file should exist from the first launch
+        onward, mirroring ``ensure_settings_file``).
+        """
+        with _lock:
+            playlists_json.parent.mkdir(parents=True, exist_ok=True)
+            if not playlists_json.exists():
+                PlaylistStore._write([])
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -315,15 +330,23 @@ class PlaylistStore:
         """
         global _playlist_cache, _cache_timestamp
         try:
+            # The db/ directory is gitignored and does not exist on a
+            # fresh clone - create it before the first write.
+            playlists_json.parent.mkdir(parents=True, exist_ok=True)
             # Write to a temporary file, then atomically replace the real one.
             # This prevents partial/corrupt writes on crash.
             temp = playlists_json.with_suffix(".json.tmp")
             with open(temp, "w", encoding="utf-8") as f:
                 json.dump(playlists, f, ensure_ascii=False, indent=2)
             temp.replace(playlists_json)
-
-            # Update cache so next read skips the file.
-            _playlist_cache = playlists
-            _cache_timestamp = time.monotonic()
         except Exception as e:
             logger.error(f"Failed to write playlists.json: {e}")
+        finally:
+            # Update the cache even when the write failed so the running
+            # session stays consistent - the mutated list was already
+            # handed to the caller and the UI (e.g. a playlist frame was
+            # just created).  Keeping the cache stale made lookups like
+            # "No playlist_id for '<name>', cannot reload" fail for an
+            # entry that visibly exists.
+            _playlist_cache = playlists
+            _cache_timestamp = time.monotonic()
