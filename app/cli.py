@@ -36,6 +36,7 @@ from constants import (
     PLATFORM_SPOTIFY,
     PLATFORM_YOUTUBE_MUSIC,
 )
+from integrations.music_youtube.music_youtube_receiver import URLReceiverManager
 from services import auth_setup
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
@@ -115,7 +116,14 @@ def resolve_targets(
     seen = set()
 
     def add(entry: dict, number: int) -> None:
-        key = (entry.get("platform"), entry.get("playlist_id"))
+        # Legacy entries may lack playlist_id (and even the platform field -
+        # the store defaults those to YouTube Music).  Key on
+        # (platform, playlist_id or name) so distinct legacy playlists are
+        # not collapsed into a single dedup key.
+        key = (
+            entry.get("platform") or PLATFORM_YOUTUBE_MUSIC,
+            entry.get("playlist_id") or entry.get("name"),
+        )
         if key in seen:
             return
         seen.add(key)
@@ -154,6 +162,10 @@ def resolve_targets(
             add(entry, playlists.index(entry) + 1)
         else:
             name = value
+            # Prefer exact matches - only fall back to case-insensitive
+            # lookup when nothing matches exactly.  Otherwise a playlist
+            # sharing a case-variant name on another platform would turn an
+            # otherwise unambiguous name into a false "ambiguous" error.
             matches = [p for p in playlists if p.get("name") == name]
             if not matches:
                 matches = [
@@ -308,15 +320,13 @@ def run_add(spec: str) -> int:
     keybind_flow = None
     yt_url = None
     yt_song_data = None
+    yt_error = ""
     if yt_targets and yt is not None:
         from controllers.keybind_flow import KeybindFlowController
-        from integrations.music_youtube.music_youtube_receiver import (
-            URLReceiverManager,
-        )
 
         receiver = URLReceiverManager()
         keybind_flow = KeybindFlowController(yt, song_manager, receiver)
-        yt_url, yt_song_data = _capture_yt_song(keybind_flow, receiver)
+        yt_url, yt_song_data, yt_error = _capture_yt_song(keybind_flow, receiver)
 
     sp_flow = None
     if sp_targets and sp_integration is not None:
@@ -327,7 +337,7 @@ def run_add(spec: str) -> int:
     successes = 0
     failures = 0
     for number, entry in targets:
-        platform = entry.get("platform")
+        platform = entry.get("platform") or PLATFORM_YOUTUBE_MUSIC
         name = entry.get("name")
         if platform == PLATFORM_YOUTUBE_MUSIC:
             if keybind_flow is None:
@@ -336,7 +346,7 @@ def run_add(spec: str) -> int:
                     "first (ytmusicapi must be installed)"
                 )
             elif yt_url is None:
-                ok, message = False, "Error: Timeout: no URL received"
+                ok, message = False, f"Error: {yt_error or 'Timeout: no URL received'}"
             else:
                 ok, message = _run_flow(
                     keybind_flow, name, url=yt_url, song_data=yt_song_data
@@ -453,7 +463,9 @@ def run_del(spec: str) -> int:
 
     for number, entry in targets:
         name = entry.get("name")
-        platform = entry.get("platform")
+        # Legacy entries may lack the platform field - default to YT like
+        # PlaylistStore does, so delete_playlist_db never sees None.
+        platform = entry.get("platform") or PLATFORM_YOUTUBE_MUSIC
         PlaylistStore.delete_playlist(
             name, platform=platform, playlist_id=entry.get("playlist_id", "")
         )
@@ -481,7 +493,7 @@ def run_refresh(spec: str) -> int:
     failures = 0
     for number, entry in targets:
         name = entry.get("name")
-        platform = entry.get("platform")
+        platform = entry.get("platform") or PLATFORM_YOUTUBE_MUSIC
         playlist_id = entry.get("playlist_id", "")
         if not playlist_id:
             print(
@@ -633,11 +645,16 @@ def run_logout(platform: str) -> int:
     return 0
 
 
-def _capture_yt_song(keybind_flow, receiver) -> Tuple[Optional[str], Optional[Dict]]:
+def _capture_yt_song(
+    keybind_flow, receiver
+) -> Tuple[Optional[str], Optional[Dict], str]:
     """
     Capture the current YouTube Music URL from the browser extension and fetch
-    its song details. Returns (url, song_data), or (None, None) on failure.
+    its song details. Returns ``(url, song_data, error)`` - on failure both
+    url and song_data are None and *error* describes what went wrong ("" on
+    success).
     """
+    url = None
     try:
         receiver.start()
         receiver.set_waiting(True)
@@ -648,11 +665,10 @@ def _capture_yt_song(keybind_flow, receiver) -> Tuple[Optional[str], Optional[Di
         )
         url = receiver.get_received_url(timeout=URL_WAIT_TIMEOUT)
     except TimeoutError:
-        logger.error("Timed out waiting for the YouTube Music URL")
-        return None, None
+        return None, None, "Timeout: no URL received from the browser extension"
     except Exception as e:
         logger.error(f"Failed to capture the YouTube Music URL: {e}", exc_info=True)
-        return None, None
+        return None, None, f"failed to start the URL receiver: {e}"
     finally:
         try:
             receiver.set_waiting(False)
@@ -664,20 +680,16 @@ def _capture_yt_song(keybind_flow, receiver) -> Tuple[Optional[str], Optional[Di
         except Exception:
             pass
 
-    from integrations.music_youtube.music_youtube_receiver import (
-        URLReceiverManager,
-    )
-
     video_id = URLReceiverManager._extract_video_id(url)
     if video_id is None:
         logger.error(f"Could not extract a video ID from '{url}'")
-        return None, None
+        return None, None, "could not extract a video ID from the received URL"
     try:
         song_data = keybind_flow.fetch_song_details(video_id)
     except Exception as e:
         logger.error(f"Failed to fetch song details: {e}", exc_info=True)
-        return None, None
-    return url, song_data
+        return None, None, f"failed to fetch song details: {e}"
+    return url, song_data, ""
 
 
 def _run_flow(flow, playlist_name: str, url=None, song_data=None) -> Tuple[bool, str]:

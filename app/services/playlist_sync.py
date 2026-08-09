@@ -166,9 +166,9 @@ class PlaylistSyncService:
         if integration is None:
             raise RuntimeError(f"no integration for platform '{platform}'")
 
-        DatabaseManager.delete_playlist_db(playlist_name, platform)
-        logger.info("Deleted database for '%s'", playlist_name)
-
+        # Confirm the playlist is reachable BEFORE destroying the local DB -
+        # a failed refresh (deleted/private playlist, network error) must
+        # not lose the cached tracks.
         details = integration.get_playlist_details(playlist_id)
         if not details:
             raise RuntimeError(
@@ -179,6 +179,9 @@ class PlaylistSyncService:
         thumb_url = self.prefer_library_thumbnail(
             platform, integration, playlist_id, thumb_url
         )
+
+        DatabaseManager.delete_playlist_db(playlist_name, platform)
+        logger.info("Deleted database for '%s'", playlist_name)
 
         tracks = integration.get_playlist_tracks(playlist_id)
 
