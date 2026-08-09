@@ -525,6 +525,11 @@ class MainWindow:
         prevents recursion.  The WM may take a few event-loop ticks to
         flip the state, so the gate is re-checked for a short while
         before giving up.
+
+        Some Wayland compositors unmap the XWayland window on minimize
+        without ever setting WM_STATE Iconic (plan.md W4), so once the
+        retries run out, a window that is still unmapped (and not
+        withdrawn) is treated as a minimize too.
         """
         if event.widget is not self.root:
             return
@@ -536,14 +541,16 @@ class MainWindow:
             )
             try:
                 state = self.root.state()
+                viewable = self.root.winfo_viewable()
             except tk.TclError:
                 return
             if not tray_ok or not self._hide_to_tray:
                 return
-            if state == "iconic":
-                self.root.withdraw()
-            elif state == "withdrawn":
+            if state == "withdrawn":
+                # Our own withdraw() (or an external one) - not a minimize.
                 return
+            if state == "iconic" or (attempts == 0 and not viewable):
+                self.root.withdraw()
             elif attempts > 0:
                 # WM hasn't settled the minimize yet - try again shortly.
                 self._hide_after_id = self.root.after(
@@ -573,7 +580,14 @@ class MainWindow:
         self._hide_to_tray = enabled
 
     def show_from_tray(self) -> None:
-        """Restore/raise the main window (tray "Open app" + default click)."""
+        """Restore/raise the main window (tray "Open app" + default click).
+
+        Best-effort under Wayland: compositors may refuse unsolicited
+        raise/focus requests (focus-stealing prevention), leaving the
+        window unfocused or below others (plan.md W3).  No app-side fix
+        exists - XDG Activation is compositor-granted, and the
+        ``-topmost`` hack is ignored by most compositors.
+        """
         try:
             if not self.root.winfo_exists():
                 return

@@ -23,6 +23,7 @@ from utils.key_mapping import (
     normalize_tk_key,
     read_global_listener_setting,
 )
+from utils.platform import is_wayland_session
 from controllers.keybind_registry import KeybindCallbacks, KeybindRegistry
 from services.song_manager import SongManager
 from utils.theme import C
@@ -122,6 +123,15 @@ class KeybindController:
                 self._listener.daemon = True
                 self._listener.start()
                 logger.info("Global hotkey listener started")
+                if is_wayland_session():
+                    logger.warning(
+                        "Wayland session detected - the global hotkey "
+                        "listener only captures keys while an XWayland "
+                        "client has focus; native Wayland apps never "
+                        "route keys through it. Bind compositor "
+                        "shortcuts to 'playlistmanager add N' for "
+                        "reliable global hotkeys (see cli.md)."
+                    )
             except Exception as e:
                 logger.error(f"Failed to start hotkey listener: {e}")
                 self._listener = None

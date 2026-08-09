@@ -3,7 +3,8 @@
 TrayService is backend plumbing - no tkinter imports, knows nothing
 about widgets.  It wraps :class:`pystray.Icon` and exposes
 :attr:`available` - whether a tray icon could be constructed at all
-(missing dependency, headless display, backend failure → False).
+(missing dependency, headless display, backend failure, or an
+X11-system-tray-only backend on a Wayland session → False).
 
 Callbacks passed to :meth:`start` fire on the tray backend thread; the
 caller must marshal them to the tkinter main thread via
@@ -13,6 +14,8 @@ caller must marshal them to the tkinter main thread via
 import logging
 import threading
 from pathlib import Path
+
+from utils.platform import is_wayland_session
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +62,21 @@ def _is_gtk_backend() -> bool:
     return "pystray._appindicator" in pystray.Icon.__module__ or "pystray._gtk" in pystray.Icon.__module__
 
 
+def _is_x11_tray_backend() -> bool:
+    """Whether the active backend docks into an X11 system tray (xembed).
+
+    The gtk StatusIcon and xorg backends need an X11 system-tray host to
+    display the icon.  The appindicator backend instead speaks
+    StatusNotifierItem over DBus -- the only mechanism that works in a
+    Wayland session, where no xembed tray host exists.  Only consulted
+    on Wayland sessions; see :meth:`TrayService.__init__`.
+    """
+    if not _PYSTRAY_OK:
+        return False
+    module = pystray.Icon.__module__
+    return "pystray._gtk" in module or "pystray._xorg" in module
+
+
 class TrayService:
     """System tray icon (pystray).  Not available -> .available is False.
 
@@ -81,6 +99,22 @@ class TrayService:
             self._icon = pystray.Icon("playlistmanager", image, title, menu=None)
         except Exception as e:
             logger.warning("Tray unavailable: %s", e)
+            self._icon = None
+            return
+        if _is_x11_tray_backend() and is_wayland_session():
+            # The gtk StatusIcon and xorg backends dock into the X11
+            # system tray (xembed).  A Wayland session has no such host,
+            # so the icon would silently never appear -- yet .available
+            # would stay True and the Settings checkbox would falsely
+            # enable hide-to-tray.  Degrade to unavailable instead.
+            # The appindicator backend (StatusNotifierItem over DBus) is
+            # the only one that works under Wayland.
+            logger.warning(
+                "Tray unavailable: pystray resolved to %s backend, which "
+                "requires an X11 system-tray host (none exists under "
+                "Wayland)",
+                pystray.Icon.__module__,
+            )
             self._icon = None
 
     @property

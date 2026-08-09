@@ -77,9 +77,12 @@ apt install -y python3-pystray
 > [!NOTE]
 > **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
 
+> [!NOTE]
+> **Tray behavior**: restoring the window from the tray ("Open PlaylistManager") is best-effort — compositors may refuse unsolicited raise/focus requests (focus-stealing prevention), so the window can appear unfocused or behind other windows. A maximized window may also restore unmaximized after hide-to-tray (the compositor clears the maximized state when the window is hidden). Both are compositor policy, may be fixed in the future.
+
 # Usage
 > [!NOTE]
-> **Wayland**: applications cannot grab global keyboard events (the compositor owns input - a security design decision), so pynput hotkeys only capture XWayland apps. Bind compositor shortcuts to the CLI instead - see [Command line](#command-line).
+> **Wayland**: applications cannot grab global keyboard events (the compositor owns input - a security design decision), so pynput hotkeys only capture XWayland apps. Bind compositor shortcuts to the CLI instead - see [Command line](#command-line) and [Global command](#global-command-for-compositor-shortcuts).
 ```
 python -m main
 
@@ -96,6 +99,8 @@ Add `--debug` for verbose logging.
 7. Create keybind (click on 2nd line after playlist name)
 
 # Command line
+See [Global command](#global-command-for-compositor-shortcuts)
+
 Authentication (`--login` / `--logout`) - the headless equivalent of the GUI login tiles:
 
 ```
@@ -193,8 +198,6 @@ KDE Plasma
 GNOME
 
 `Settings → Keyboard → Custom Shortcuts → Command`
-
-`playlistmanager --add-song 1` / `playlistmanager -a 1` can be used.
 
 # Integrations
 For now only available
