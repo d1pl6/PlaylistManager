@@ -1,5 +1,5 @@
 """
-Keybind registry — stores registered keybind combos and matches them
+Keybind registry - stores registered keybind combos and matches them
 against the currently-pressed keys.
 
 This module has no knowledge of pynput or tkinter; it is pure data.
@@ -23,7 +23,7 @@ class KeybindCallbacks:
     """Thin callback container that replaces direct widget access.
 
     A ``KeybindCallbacks`` instance is registered once per playlist
-    and is called from worker threads — the implementation should
+    and is called from worker threads - the implementation should
     route to the main thread (e.g. via ``root.after()``).
 
     Args:
@@ -54,7 +54,7 @@ class KeybindCallbacks:
 class KeybindRegistry:
     """Stores registered keybind combos and matches them against pressed keys.
 
-    Thread-safe — all mutation and reads are guarded by a single lock.
+    Thread-safe - all mutation and reads are guarded by a single lock.
     """
 
     def __init__(self):
@@ -78,10 +78,10 @@ class KeybindRegistry:
         with self._lock:
             existing = self._keybind_map.get(hotkey)
             if existing is not None and existing["playlist_name"] != playlist_name:
-                # Two playlists can't share one hotkey — the new binding
+                # Two playlists can't share one hotkey - the new binding
                 # silently wins, which is confusing.  Make it visible.
                 logger.warning(
-                    "Hotkey '%s' is already bound to playlist '%s' — "
+                    "Hotkey '%s' is already bound to playlist '%s' - "
                     "replacing its binding with '%s'",
                     hotkey, existing["playlist_name"], playlist_name,
                 )
@@ -115,7 +115,7 @@ class KeybindRegistry:
         exactly and has the highest specificity (most keys).  This
         prevents a single-key shortcut from shadowing a multi-key combo.
         """
-        best = None  # (specificity, hotkey_str, info)
+        best = None
         with self._lock:
             for hotkey_str, info in self._keybind_map.items():
                 expected = info["_parsed"]

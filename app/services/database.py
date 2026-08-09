@@ -68,10 +68,40 @@ class DatabaseManager:
             except OSError as e:
                 logger.debug("Failed deleting %s: %s", path, e)
 
+    @staticmethod
+    def delete_platform_databases(platform: str) -> int:
+        """Delete every playlist database for *platform*.
+
+        Closes the calling thread's cached connections first (they would
+        otherwise recreate the deleted files on the next write) then removes
+        every ``*.db``, ``*.db-wal`` and ``*.db-shm`` under ``db/<platform>/``
+        and rmdirs the platform directory when it is empty.  Best-effort:
+        per-file errors are logged and skipped.  Returns the number of files
+        removed.
+        """
+        DatabaseManager.close_thread_connections()
+        db_dir = DatabaseManager._get_db_directory(platform)
+        if not db_dir.is_dir():
+            return 0
+        removed = 0
+        for pattern in ("*.db", "*.db-wal", "*.db-shm"):
+            for path in sorted(db_dir.glob(pattern)):
+                try:
+                    path.unlink()
+                    logger.info("Deleted database file %s", path)
+                    removed += 1
+                except OSError as e:
+                    logger.debug("Failed deleting %s: %s", path, e)
+        try:
+            db_dir.rmdir()  # only removes the directory when empty
+        except OSError:
+            pass
+        return removed
+
     def get_playlist_db_path(self, playlist_name: str, platform: str = PLATFORM_YOUTUBE_MUSIC) -> Path:
         """Get the database file path for a playlist.
 
-        *platform* is required — callers always know which platform the
+        *platform* is required - callers always know which platform the
         playlist belongs to.  The old fallback-to-PlaylistStore lookup
         (which created a circular dependency) has been removed.
         """
@@ -178,7 +208,7 @@ def _set_pragmas(conn: sqlite3.Connection) -> None:
     is more resilient on removable filesystems (exFAT).  synchronous=NORMAL
     paired with WAL gives a good safety/performance balance.
 
-    These are safe to call on every connection — WAL mode is persistent
+    These are safe to call on every connection - WAL mode is persistent
     in the database file so the second call is a no-op.
     """
     try:

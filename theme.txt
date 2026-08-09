@@ -1,4 +1,4 @@
-# Theme palette keys — the short names used by app/utils/theme.py.
+# Theme palette keys - the short names used by app/utils/theme.py.
 # Each name maps 1:1 to a (section, option) in cfg/theme.ini; keep the two in sync.
 root_bg
 frame_head_bg

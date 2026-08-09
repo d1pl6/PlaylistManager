@@ -17,6 +17,22 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 
+def is_wayland_session() -> bool:
+    """Whether the session is running a Wayland compositor.
+
+    ``WAYLAND_DISPLAY`` being set is the reliable "a Wayland compositor
+    is running" signal; ``XDG_SESSION_TYPE`` can be absent or stale.
+    Either one indicating Wayland is enough -- notably an X11 app
+    launched from a Wayland session still has ``XDG_SESSION_TYPE=wayland``,
+    which is exactly what callers want: the compositor protocol is
+    Wayland, so X11-only integration points (X11 system tray, global
+    keyboard grabs) do not exist regardless of the app's own backend.
+    """
+    return bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get(
+        "XDG_SESSION_TYPE", ""
+    ).lower() == "wayland"
+
+
 def open_directory(path: Path) -> None:
     """Open *path* in the system file manager."""
     try:
@@ -73,7 +89,7 @@ def get_terminal_command(work_dir: Path) -> List[str]:
     if system == "Windows":
         return ["cmd", "/k", f'cd /d "{work_dir}" && ytmusicapi browser']
     elif system == "Darwin":
-        # "open -a Terminal <dir>" opens Finder, not a terminal — drive
+        # "open -a Terminal <dir>" opens Finder, not a terminal - drive
         # Terminal.app via AppleScript instead so the command actually runs.
         escaped_dir = str(work_dir).replace('"', '\\"')
         return [

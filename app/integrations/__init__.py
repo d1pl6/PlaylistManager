@@ -1,1 +1,1 @@
-# Integrations package — platform-specific music service integrations
+# Integrations package - platform-specific music service integrations

@@ -6,7 +6,9 @@
 
 [x] Tray & Hide in tray
 
-[ ] Wayland support
+[x] Wayland support
+
+[x] CLI integration
 
 [ ] Show last N added songs in playlist and option in settings:
 

@@ -9,6 +9,7 @@ AGENTS.md
 opencode.jsonc
 .gitignore
 plan.md
+cli.md
 
 auth/
 __pycache__/
@@ -25,6 +26,7 @@ cfg/
 .history/*
 youtube-music-extension/
 .cortexkit/
+.agents
 
 album_img.png
 close.png

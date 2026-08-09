@@ -1,40 +1,27 @@
+#!/usr/bin/env python3
 """
-PlaylistManager — entry point.
+PlaylistManager - entry point.
 
 Usage:
   python main.py              # launch GUI
   python main.py --debug      # verbose logging
+  python main.py -a 1,2,3     # CLI: add current song to playlists #1, #2, #3
+  python main.py -p add "URL" # CLI: register a playlist from its URL
+  python main.py --list       # CLI: print numbered playlists
+  python main.py --login youtube_music   # CLI: authenticate a platform
+  python main.py --logout spotify        # CLI: delete platform credentials + DBs
   python -m app               # equivalent alternative
 """
 
 import sys
-import argparse
-import logging
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent / "app"))
+# Insert the repo root so the `app` package resolves here exactly as it does
+# for `python -m app` from the repo root. resolve() keeps this working when
+# the script is invoked through a symlink (e.g. ~/.local/bin/playlistmanager).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app import App
-
-
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--debug", action="store_true")
-    return p.parse_args()
-
-
-def configure_logging(debug: bool):
-    level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s: %(message)s")
-
-
-def main():
-    args = parse_args()
-    configure_logging(args.debug)
-    app = App(args)
-    app.run()
-    sys.exit(0)
-
+from app.main import main
 
 if __name__ == "__main__":
     main()

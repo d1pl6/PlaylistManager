@@ -18,7 +18,7 @@ def _toggle_setting(section, var):
     cfg = ConfigParser()
     cfg.read(str(_settings_path))
     if section not in cfg:
-        # Only create the section if missing — don't wipe the other
+        # Only create the section if missing - don't wipe the other
         # sections (a bare section assignment replaces them).
         cfg[section] = {}
     cfg[section]["is_true"] = "yes" if var.get() else "no"

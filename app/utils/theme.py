@@ -12,7 +12,7 @@ every single widget creation.
 
 The theme can change at runtime (Settings -> Theme), so two rules apply:
 
-  * Read from ``C`` at *widget-creation time* — never freeze a colour into a
+  * Read from ``C`` at *widget-creation time* - never freeze a colour into a
     module-level constant at import time.
   * Call :func:`load_theme` again before re-applying colours to already
     created widgets (it always re-reads the file; it is not a no-op).

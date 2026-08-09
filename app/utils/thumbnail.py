@@ -69,7 +69,7 @@ class ThumbnailService:
     ) -> Optional[Image.Image]:
         """Download and resize a thumbnail into a plain PIL image.
 
-        Thread-safe — no Tk objects are created here.  Returns *None*
+        Thread-safe - no Tk objects are created here.  Returns *None*
         on any failure so callers don't need to catch exceptions.
 
         Handles HTTP to HTTPS upgrade, network errors, and invalid image
@@ -99,7 +99,7 @@ class ThumbnailService:
     def to_photoimage(img: Image.Image) -> ImageTk.PhotoImage:
         """Wrap a PIL image in a Tk ``PhotoImage``.
 
-        Tkinter is not thread-safe — call this **only from the main
+        Tkinter is not thread-safe - call this **only from the main
         (tkinter) thread**, after handing the image over from a worker
         thread via ``root.after(0, ...)``.
         """

@@ -520,11 +520,16 @@ class MainWindow:
 
         ``<Unmap>`` fires for reasons other than minimize (our own
         ``withdraw()``, WM restarts), so the decision is deferred and
-        gated on ``state() == "iconic"`` — that distinguishes a real
+        gated on ``state() == "iconic"`` - that distinguishes a real
         minimize from ``withdraw()`` (state ``withdrawn``), which
         prevents recursion.  The WM may take a few event-loop ticks to
         flip the state, so the gate is re-checked for a short while
         before giving up.
+
+        Some Wayland compositors unmap the XWayland window on minimize
+        without ever setting WM_STATE Iconic (plan.md W4), so once the
+        retries run out, a window that is still unmapped (and not
+        withdrawn) is treated as a minimize too.
         """
         if event.widget is not self.root:
             return
@@ -536,16 +541,18 @@ class MainWindow:
             )
             try:
                 state = self.root.state()
+                viewable = self.root.winfo_viewable()
             except tk.TclError:
-                return  # root destroyed while the callback was queued
+                return
             if not tray_ok or not self._hide_to_tray:
                 return
-            if state == "iconic":
+            if state == "withdrawn":
+                # Our own withdraw() (or an external one) - not a minimize.
+                return
+            if state == "iconic" or (attempts == 0 and not viewable):
                 self.root.withdraw()
-            elif state == "withdrawn":
-                return  # already hidden (our own withdraw) — done
             elif attempts > 0:
-                # WM hasn't settled the minimize yet — try again shortly.
+                # WM hasn't settled the minimize yet - try again shortly.
                 self._hide_after_id = self.root.after(
                     50, lambda: _maybe_hide(attempts - 1)
                 )
@@ -565,7 +572,7 @@ class MainWindow:
             try:
                 self.root.after_cancel(self._hide_after_id)
             except tk.TclError:
-                pass  # root destroyed while the callback was queued
+                pass
             self._hide_after_id = None
 
     def set_hide_to_tray(self, enabled: bool) -> None:
@@ -573,7 +580,14 @@ class MainWindow:
         self._hide_to_tray = enabled
 
     def show_from_tray(self) -> None:
-        """Restore/raise the main window (tray "Open app" + default click)."""
+        """Restore/raise the main window (tray "Open app" + default click).
+
+        Best-effort under Wayland: compositors may refuse unsolicited
+        raise/focus requests (focus-stealing prevention), leaving the
+        window unfocused or below others (plan.md W3).  No app-side fix
+        exists - XDG Activation is compositor-granted, and the
+        ``-topmost`` hack is ignored by most compositors.
+        """
         try:
             if not self.root.winfo_exists():
                 return

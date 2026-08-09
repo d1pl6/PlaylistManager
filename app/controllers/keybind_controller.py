@@ -1,5 +1,5 @@
 """
-Keybind controller — hotkey recording and flow dispatch.
+Keybind controller - hotkey recording and flow dispatch.
 
 Responsibilities (after the A4 split):
   1. Key event processing (recording state machine)
@@ -23,6 +23,7 @@ from utils.key_mapping import (
     normalize_tk_key,
     read_global_listener_setting,
 )
+from utils.platform import is_wayland_session
 from controllers.keybind_registry import KeybindCallbacks, KeybindRegistry
 from services.song_manager import SongManager
 from utils.theme import C
@@ -39,7 +40,7 @@ class KeybindController:
         self.song_manager: Optional[SongManager] = None
         self.keybind_thread: Optional[threading.Thread] = None
 
-        # Flow controllers — lazily created on first keybind trigger
+        # Flow controllers - lazily created on first keybind trigger
         self._keybind_flow = None
         self._spotify_flow = None
         self._url_receiver = None
@@ -122,6 +123,15 @@ class KeybindController:
                 self._listener.daemon = True
                 self._listener.start()
                 logger.info("Global hotkey listener started")
+                if is_wayland_session():
+                    logger.warning(
+                        "Wayland session detected - the global hotkey "
+                        "listener only captures keys while an XWayland "
+                        "client has focus; native Wayland apps never "
+                        "route keys through it. Bind compositor "
+                        "shortcuts to 'playlistmanager add N' for "
+                        "reliable global hotkeys (see cli.md)."
+                    )
             except Exception as e:
                 logger.error(f"Failed to start hotkey listener: {e}")
                 self._listener = None
@@ -133,12 +143,6 @@ class KeybindController:
         if listener is not None:
             listener.stop()
             if wait:
-                # pynput's X11 listener thread does not reliably exit after
-                # stop() — its record_enable_context loop can stay blocked
-                # indefinitely, so joining here would stall the calling
-                # thread for the full timeout.  stop() already prevents any
-                # further event delivery (running == False); keep this join
-                # short and bounded so mode switches stay responsive.
                 listener.join(timeout=0.5)
             logger.info("Global hotkey listener stopped")
 
@@ -419,7 +423,6 @@ class KeybindController:
             logger.info("Initialized Spotify flow")
             return True
 
-        # YouTube Music path
         if self._keybind_flow is not None:
             return True
         if self.yt is None:
@@ -465,7 +468,7 @@ class KeybindController:
             self._unbind_local_keys()
 
     def cleanup(self):
-        # Don't wait on the listener thread at quit — it may never exit
+        # Don't wait on the listener thread at quit - it may never exit
         # (see _stop_global_listener) and the process is about to die anyway.
         self.stop_listener(wait=False)
         self.stop_receiver()

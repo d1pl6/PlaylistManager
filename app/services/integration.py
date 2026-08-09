@@ -212,7 +212,7 @@ class SpotifyIntegration(BaseIntegration):
         return self.spotify_api.get_playlist_id_by_name(name)
 
     def get_playlist_id_by_name(self, name: str) -> Optional[str]:
-        """Alias for :meth:`get_playlist_id` — retained for backward compat."""
+        """Alias for :meth:`get_playlist_id` - retained for backward compat."""
         return self.get_playlist_id(name)
 
     def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]) -> bool:

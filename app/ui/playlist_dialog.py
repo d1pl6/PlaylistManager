@@ -2,7 +2,7 @@
 Playlist selection dialog (scrollable list of playlists with covers).
 
 Thumbnails are downloaded in background threads and applied on the main
-thread via ``parent.after()`` — tkinter must never be touched from a
+thread via ``parent.after()`` - tkinter must never be touched from a
 worker thread (and blocking network calls must never run on the UI
 thread).
 """

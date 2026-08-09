@@ -1,7 +1,7 @@
 """
 YouTube Music auth manager and ytmusicapi wrapper.
 
-All ytmusicapi imports are **lazy** — the module can be imported without
+All ytmusicapi imports are **lazy** - the module can be imported without
 ``ytmusicapi`` installed (it is an optional dependency).  The filesystem
 side effect ``AUTH_FOLDER.mkdir()`` is deferred to ``YouTubeAuthManager``
 instantiation.
@@ -103,7 +103,7 @@ def _patch_yt_music_library_playlists(yt):
 class YouTubeAuthManager:
     def __init__(self):
         AUTH_FOLDER.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.yt_music = None  # set by setup_auth(); type: YTMusic | None
+        self.yt_music = None
 
     def _find_browser_file(self) -> Optional[Path]:
         candidates = [BROWSER_FILE, *BROWSER_FILE_FALLBACKS]

@@ -1,7 +1,7 @@
 """
 Flask-based HTTP receiver for YouTube Music URLs from the browser extension.
 
-All Flask imports are **lazy** — they happen only when the receiver is
+All Flask imports are **lazy** - they happen only when the receiver is
 actually started (at most ~30 s per keybind press).
 
 Security: the server is bound to localhost and issues a random per-run
@@ -66,7 +66,7 @@ class URLReceiverManager:
         self.port = port
         self.timeout = timeout
         self.url_queue: Queue = Queue()
-        self.app = None   # created lazily by _ensure_app()
+        self.app = None
         self.thread: Optional[threading.Thread] = None
         self._server = None
         self._running = False
@@ -74,7 +74,7 @@ class URLReceiverManager:
         self._token: Optional[str] = None
         self._state_lock = threading.Lock()
         self._rate_limiter = _RateLimiter(max_requests=10, window_seconds=60)
-        # NOTE: _ensure_app() is NOT called here — Flask is imported lazily.
+        # NOTE: _ensure_app() is NOT called here - Flask is imported lazily.
 
     def _ensure_app(self):
         """Lazy initialisation of the Flask application and routes."""
@@ -175,9 +175,24 @@ class URLReceiverManager:
         return match.group(1)
 
     def set_waiting(self, waiting: bool) -> None:
-        """Control whether the /status endpoint reports ready."""
+        """Control whether the /status endpoint reports ready.
+
+        Each transition to waiting starts a new flow: issue a fresh per-run
+        token so the extension can distinguish a new keybind press from the
+        previous (finished) one even when this server instance was reused
+        (e.g. the previous flow's shutdown was still in flight and start()
+        skipped regenerating it). Also drain any URL a previous flow left
+        in the queue so a stale song cannot be consumed by the next flow.
+        """
         with self._state_lock:
             self._waiting_for_url = waiting
+            if waiting:
+                self._token = secrets.token_hex(16)
+                while True:
+                    try:
+                        self.url_queue.get_nowait()
+                    except Empty:
+                        break
 
     def start(self) -> Optional[threading.Thread]:
         """Start the Flask server in a daemon thread."""
@@ -187,7 +202,7 @@ class URLReceiverManager:
 
         self._ensure_app()
 
-        # Fresh token per run — a token from a previous (finished) flow
+        # Fresh token per run - a token from a previous (finished) flow
         # must not be accepted.
         self._token = secrets.token_hex(16)
 
