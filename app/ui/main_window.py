@@ -132,7 +132,15 @@ class MainWindow:
     # ------------------------------------------------------------------
 
     def apply_theme(self) -> None:
+        """Re-apply the palette from cfg/theme.ini to every existing widget.
+
+        Called after a theme change (theme picker).  The status labels are
+        left untouched - their colour is dynamic (good/warn/error) and is
+        refreshed by the status callbacks, which read ``C`` at update time.
+        """
         load_theme()
+        self.root.configure(background=C["root_bg"])
+
         header_bg = C["frame_head_bg"]
         self.header_frame.configure(background=header_bg)
         for widget in self.header_frame.winfo_children():
@@ -143,13 +151,57 @@ class MainWindow:
                 )
 
         frame_playlist_bg = C["frame_playlist_bg"]
-        for frame in self.frames:
+        for frame_idx, frame in enumerate(self.frames):
             frame.configure(background=frame_playlist_bg)
+            labels = self.active_log_labels.get(frame_idx)
+            if labels is None:
+                continue
+
+            name_label = self.playlist_name_labels[frame_idx]
+            name_label.configure(
+                background=C["label_playlist_name_bg"],
+                foreground=C["label_playlist_name_fg"],
+            )
+            labels["cover"].configure(background=C["label_playlist_bg"])
+
+            for key in ("artist", "name"):
+                labels[key].configure(
+                    background=C["label_playlist_log_bg"],
+                    foreground=C["label_playlist_log_fg"],
+                )
+
+            entry = labels["keybind_entry"]
+            if self._recording_frame_idx != frame_idx:
+                entry.configure(
+                    background=C["entry_playlist_bg"],
+                    foreground=C["entry_playlist_fg"],
+                    readonlybackground=C["entry_playlist_ro_bg"],
+                )
+
+            # Remaining descendants: the two log separator labels and the
+            # close/reload buttons.  The status label is deliberately
+            # skipped (dynamic colour, see docstring).
+            known_labels = {
+                labels["cover"],
+                labels["status"],
+                labels["artist"],
+                labels["name"],
+                name_label,
+            }
             for child in frame.winfo_children():
-                try:
-                    child.configure(background=frame_playlist_bg)
-                except Exception:
-                    pass
+                for widget in child.winfo_children():
+                    if isinstance(widget, tk.Label) and widget not in known_labels:
+                        widget.configure(
+                            background=C["label_playlist_log_bg"],
+                            foreground=C["label_playlist_log_fg"],
+                        )
+                    elif isinstance(widget, tk.Button):
+                        widget.configure(
+                            background=C["button_playlist_bg"],
+                            foreground=C["button_playlist_fg"],
+                            activebackground=C["button_playlist_a_bg"],
+                            activeforeground=C["button_playlist_a_fg"],
+                        )
 
     # ------------------------------------------------------------------
     # Widget creation
@@ -406,11 +458,27 @@ class MainWindow:
         count: int,
         status_text: str,
         frame_idx: int | None = None,
-    ) -> None:
-        if frame_idx is None:
+    ) -> int | None:
+        """Handle a finished track import; returns the resolved frame index.
+
+        The captured ``frame_idx`` can be stale after close_main_frame()
+        renumbered the frames - accept it only if it still belongs to
+        *playlist_name*, otherwise fall back to resolving by name so a
+        finished import never updates a different frame's labels.
+        """
+        if frame_idx is not None:
+            in_range = frame_idx < len(self.playlist_name_labels)
+            matches_name = (
+                in_range
+                and self.playlist_name_labels[frame_idx].cget("text")
+                == playlist_name
+            )
+            if not (matches_name and frame_idx in self.active_log_labels):
+                frame_idx = self._find_frame_index_by_name(playlist_name)
+        else:
             frame_idx = self._find_frame_index_by_name(playlist_name)
         if frame_idx is None or frame_idx not in self.active_log_labels:
-            return
+            return None
         status_label = self.active_log_labels[frame_idx]["status"]
         if count > 0:
             status_label.config(text="OK", background=C["label_playlist_good_bg"])
@@ -424,6 +492,7 @@ class MainWindow:
             frame_idx, playlist_name, self.frame_platforms[frame_idx]
         )
         logger.info("Import finished for '%s': %s", playlist_name, status_text)
+        return frame_idx
 
     def _on_reload_done(
         self,
@@ -433,9 +502,7 @@ class MainWindow:
         thumb_url: str | None,
         frame_idx: int | None = None,
     ) -> None:
-        self._on_import_done(playlist_name, count, status_text, frame_idx)
-        if frame_idx is None:
-            frame_idx = self._find_frame_index_by_name(playlist_name)
+        frame_idx = self._on_import_done(playlist_name, count, status_text, frame_idx)
         if frame_idx is not None and thumb_url:
             self._set_playlist_cover(frame_idx, thumb_url)
 
@@ -451,21 +518,34 @@ class MainWindow:
         """
         labels = self.active_log_labels[frame_idx]
 
+        def _set(widget, **kwargs) -> None:
+            """Configure *widget* if it still exists.
+
+            The flow runs on a worker thread and the frame can be closed
+            while it is in flight - touching a destroyed widget raises
+            TclError from the ``after`` callback.
+            """
+            try:
+                if widget.winfo_exists():
+                    widget.configure(**kwargs)
+            except tk.TclError:
+                pass
+
         def on_status(text: str, background: str) -> None:
-            labels["status"].config(text=text, background=background)
+            _set(labels["status"], text=text, background=background)
 
         def on_song_info(artist: str, name: str) -> None:
-            labels["artist"].config(text=artist)
-            labels["name"].config(text=name)
+            _set(labels["artist"], text=artist)
+            _set(labels["name"], text=name)
 
         def on_entry_state(state: str) -> None:
-            labels["keybind_entry"].config(state=state)
+            _set(labels["keybind_entry"], state=state)
 
         def on_reset(entry_state: str) -> None:
-            labels["keybind_entry"].config(state=entry_state)
-            labels["status"].config(text="", background=C["frame_playlist_bg"])
-            labels["artist"].config(text="")
-            labels["name"].config(text="")
+            _set(labels["keybind_entry"], state=entry_state)
+            _set(labels["status"], text="", background=C["frame_playlist_bg"])
+            _set(labels["artist"], text="")
+            _set(labels["name"], text="")
 
         return KeybindCallbacks(
             on_status=on_status,
@@ -685,9 +765,13 @@ class MainWindow:
                 readonlybackground=entry_playlist_ro_bg,
                 state="readonly",
             )
+            # Capture the frame widget, not its index: close_main_frame()
+            # renumbers self.frames after deleting a frame, and a captured
+            # index would then point at the wrong playlist (or out of range,
+            # silently disabling the reload button).
             playlist_keybind.bind(
                 "<Button-1>",
-                lambda e, frame_idx=len(self.frames): self._start_recording(frame_idx),
+                lambda e, f=main_frame: self._start_recording(self.frames.index(f)),
             )
 
             reload_database = tk.Button(
@@ -698,7 +782,9 @@ class MainWindow:
                 foreground=button_playlist_fg,
                 activebackground=button_playlist_a_bg,
                 activeforeground=button_playlist_a_fg,
-                command=lambda idx=len(self.frames): self._on_reload_requested(idx),
+                command=lambda f=main_frame: self._on_reload_requested(
+                    self.frames.index(f)
+                ),
             )
 
             log_artist = tk.Label(
@@ -823,6 +909,14 @@ class MainWindow:
                     new_active_log_labels[old_idx] = labels_dict
             self.active_log_labels = new_active_log_labels
 
+            # The recording target's frame is still open, just shifted down
+            # by one - keep the state index in sync with the renumbering.
+            if (
+                self._recording_frame_idx is not None
+                and self._recording_frame_idx > index
+            ):
+                self._recording_frame_idx -= 1
+
             PlaylistStore.delete_playlist(playlist_name, platform=platform)
             DatabaseManager.delete_playlist_db(playlist_name, platform)
 
@@ -891,6 +985,7 @@ class MainWindow:
             self._stop_recording(self._recording_frame_idx)
 
         self._recording_frame_idx = frame_idx
+        recording_frame = self.frames[frame_idx]
         entry = self.active_log_labels[frame_idx]["keybind_entry"]
         entry.config(
             state="normal",
@@ -899,15 +994,29 @@ class MainWindow:
         )
         entry.delete(0, tk.END)
 
+        def _live_index() -> int | None:
+            # close_main_frame() renumbers self.frames after deleting a
+            # frame; resolve the recording frame's current index at
+            # callback time so a mid-recording close can't commit against
+            # the wrong playlist (or IndexError when out of range).
+            try:
+                return self.frames.index(recording_frame)
+            except ValueError:
+                return None
+
         def on_combo(combo: str) -> None:
             entry.config(state="normal")
             entry.delete(0, tk.END)
             entry.insert(0, combo)
 
         def on_stop() -> None:
+            cur_idx = _live_index()
+            if cur_idx is None:
+                self._recording_frame_idx = None
+                return
             # Only commit the empty keybind if this frame was still the
             # active recording target when the stop fired.
-            was_recording_here = self._recording_frame_idx == frame_idx
+            was_recording_here = self._recording_frame_idx == cur_idx
             self._recording_frame_idx = None
             entry.config(
                 state="readonly", readonlybackground=C["entry_playlist_ro_bg"]
@@ -919,8 +1028,8 @@ class MainWindow:
             # the previously registered hotkey is removed and the store
             # matches what the entry now shows - a stale hotkey firing with
             # a blank entry is confusing.
-            playlist_name = self.playlist_name_labels[frame_idx].cget("text")
-            platform = self.frame_platforms[frame_idx]
+            playlist_name = self.playlist_name_labels[cur_idx].cget("text")
+            platform = self.frame_platforms[cur_idx]
             PlaylistStore.update_keybind(playlist_name, platform, "")
             self.kc.unregister_hotkey(playlist_name, platform=platform)
 

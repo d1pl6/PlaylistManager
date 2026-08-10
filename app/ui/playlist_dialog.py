@@ -139,12 +139,20 @@ class PlaylistDialog:
 
     def _apply_thumb(self, button: tk.Button, img) -> None:
         try:
+            if not button.winfo_exists():
+                # Dialog was closed before the download finished.
+                return
             photo = ThumbnailService.to_photoimage(img)
         except Exception as e:
             logger.error(f"Failed to create dialog thumbnail: {e}")
             return
-        self.img_refs.append(photo)
-        button.configure(image=photo)
+        try:
+            button.configure(image=photo)
+            self.img_refs.append(photo)
+        except tk.TclError as e:
+            # The dialog can be destroyed between the winfo_exists() check
+            # and configure() - swallow the race, not a real failure.
+            logger.debug("Dialog closed before thumbnail could be applied: %s", e)
 
     def _on_playlist_click(self, playlist_name, playlist_id, thumb_url=None):
         self.close()
