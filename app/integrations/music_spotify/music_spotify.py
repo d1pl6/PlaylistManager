@@ -18,6 +18,8 @@ from typing import Optional, Dict, List
 import requests
 from platformdirs import user_config_dir
 
+from utils.logging_config import user_log
+
 logger = logging.getLogger(__name__)
 
 AUTH_FOLDER = Path(user_config_dir("playlistmanager")) / "auth"
@@ -268,8 +270,8 @@ class SpotifyAuthManager:
         _ensure_auth_dir()
         if not SPOTIFY_AUTH_FILE.exists():
             logger.info(
-                f"Spotify credentials not found at {SPOTIFY_AUTH_FILE}.\n"
-                f"See INTEGRATIONS.MD."
+                f"Spotify credentials not found at {SPOTIFY_AUTH_FILE}."
+                f"See INTEGRATIONS.MD.",
             )
             return False
 
@@ -282,8 +284,9 @@ class SpotifyAuthManager:
             )
             me = self.api.get_me()
             if me:
-                logger.info(
-                    f"Spotify authenticated as {me.get('display_name', 'unknown')}"
+                user_log(
+                    logger,
+                    f"Spotify authenticated as {me.get('display_name', 'unknown')}",
                 )
                 return True
             logger.error("Spotify auth validation failed")

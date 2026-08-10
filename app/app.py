@@ -20,6 +20,7 @@ from ui.updater_ui import show_update_dialog
 from utils.window import center_window
 from utils import updater
 from utils.config import SETTINGS_PATH, ensure_settings_file
+from utils.logging_config import user_log
 from _version import __version__
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ class App:
             if _yt_auth.setup_auth():
                 try:
                     yt_client = _yt_auth.get_yt_music()
-                    logger.info("YouTube Music authenticated")
+                    user_log(logger, "YouTube Music authenticated")
                 except Exception as e:
                     logger.error(f"YouTube Music auth failed: {e}")
                     messagebox.showwarning(
@@ -48,8 +49,9 @@ class App:
             else:
                 logger.warning("YouTube Music not configured (no browser.json)")
         except ImportError:
-            logger.info(
-                "ytmusicapi not installed - YouTube Music integration disabled"
+            user_log(
+                logger,
+                "ytmusicapi not installed - YouTube Music integration disabled",
             )
 
         self.integrations = IntegrationRegistry()
@@ -64,9 +66,9 @@ class App:
             spotify_auth = _sp_auth
             if _sp_auth.setup_auth():
                 sp_api = _sp_auth.get_api()
-                logger.info("Spotify authenticated")
+                user_log(logger, "Spotify authenticated")
             else:
-                logger.warning("Spotify not configured")
+                logger.warning("Spotify is not configured")
         except Exception as e:
             logger.error(f"Spotify auth failed: {e}")
             messagebox.showwarning("Spotify", f"Spotify authentication failed:\n{e}")
@@ -129,7 +131,7 @@ class App:
     def refresh_auth(self):
         for integration in self.integrations.get_all().values():
             if integration.refresh_auth():
-                logger.info(f"{integration.display_name} re-authenticated")
+                user_log(logger, f"{integration.display_name} re-authenticated")
             else:
                 logger.error(f"{integration.display_name} re-authentication failed")
 
@@ -152,7 +154,7 @@ class App:
             available, latest_version=None, download_url=None, body=None, error=None
         ):
             if available:
-                logger.info("Update v%s available at %s", latest_version, download_url)
+                user_log(logger, "Update v%s available at %s", latest_version, download_url)
                 self.root.after(
                     0, show_update_dialog, self.root, latest_version, download_url, body
                 )
@@ -172,7 +174,7 @@ class App:
         """
         tray = TrayService()
         if not tray.available:
-            logger.info("Tray unavailable - hide-to-tray disabled")
+            user_log(logger, "Tray unavailable - hide-to-tray disabled")
             self.main_window.tray_service = None
             return
         try:

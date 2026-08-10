@@ -7,7 +7,6 @@ Kept for backward compatibility - will be removed in a future release.
 
 import sys
 import argparse
-import logging
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -21,6 +20,7 @@ from cli import (
     run_logout,
     run_refresh,
 )
+from utils.logging_config import configure_logging
 
 
 def parse_args():
@@ -28,7 +28,18 @@ def parse_args():
         prog="playlistmanager",
         description="PlaylistManager - add the currently-playing song to your playlists.",
     )
-    p.add_argument("--debug", action="store_true", help="verbose logging")
+    p.add_argument(
+        "-v", "--verbose", action="count", default=0,
+        help="more logging: -v = INFO, -vv = DEBUG (same as --debug)",
+    )
+    p.add_argument(
+        "--debug", action="store_true",
+        help="verbose logging (DEBUG level, same as -vv)",
+    )
+    p.add_argument(
+        "--trace", action="store_true",
+        help="ultra-verbose logging (TRACE level + third-party debug)",
+    )
     p.add_argument(
         "-a", "--add-song", dest="add_song_targets", metavar="PLAYLISTS",
         help='add the currently-playing song to playlist(s), e.g. "1,2,3", "1-3"',
@@ -69,11 +80,6 @@ def parse_args():
     return p.parse_args()
 
 
-def configure_logging(debug: bool):
-    level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s: %(message)s")
-
-
 def _import_app():
     """
     Import the App class.
@@ -94,7 +100,12 @@ def _import_app():
 
 def main():
     args = parse_args()
-    configure_logging(args.debug)
+    verbosity = args.verbose
+    if args.debug:
+        verbosity = max(verbosity, 2)
+    if args.trace:
+        verbosity = 3
+    configure_logging(verbosity)
 
     if args.list_only:
         sys.exit(run_list())

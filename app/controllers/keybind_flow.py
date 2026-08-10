@@ -4,6 +4,7 @@ import re
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from services.song_manager import SongManager
+from utils.logging_config import trace_log
 
 if TYPE_CHECKING:
     from ytmusicapi import YTMusic
@@ -70,7 +71,7 @@ class KeybindFlowController:
             song_data: Pre-fetched song details. When given, the ytmusicapi
                 fetch is skipped (the CLI fetches once and shares the result).
 
-        Note: the platform-first invariant is preserved in every mode — the song
+        Note: the platform-first invariant is preserved in every mode - the song
         is added to the platform API before the local database, and a platform
         failure never leaves a "successful" local entry behind.
         """
@@ -96,7 +97,7 @@ class KeybindFlowController:
             if song_data is None:
                 on_status("Fetch")
                 song_data = self.fetch_song_details(video_id)
-            logger.debug(f"Song data: {song_data}")
+            trace_log(logger, f"Song data: {song_data}")
 
             # Check if song exists
             on_status("Check")

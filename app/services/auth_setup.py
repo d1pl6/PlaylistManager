@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from platformdirs import user_config_dir
 
 from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
+from utils.logging_config import user_log
 from utils.platform import get_terminal_command, open_directory
 
 logger = logging.getLogger(__name__)
@@ -98,7 +99,7 @@ def delete_spotify_credentials() -> bool:
     if SPOTIFY_FILE.exists():
         try:
             SPOTIFY_FILE.unlink()
-            logger.info("Deleted Spotify credentials")
+            user_log(logger, "Deleted Spotify credentials")
             return True
         except OSError as e:
             logger.error("Failed to delete Spotify credentials: %s", e)
@@ -173,7 +174,7 @@ def delete_platform_credentials(platform: str) -> Tuple[List[Path], List[Path]]:
     for path in PLATFORM_CREDENTIAL_FILES.get(platform, []):
         if path.exists():
             path.unlink()
-            logger.info("Deleted credentials: %s", path)
+            user_log(logger, "Deleted credentials: %s", path)
             deleted.append(path)
         else:
             missing.append(path)

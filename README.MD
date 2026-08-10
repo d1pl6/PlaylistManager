@@ -16,6 +16,8 @@ git clone https://github.com/d1pl6/PlaylistManager.git && cd PlaylistManager
 ```
 Or Code > Download ZIP
 
+Update `git pull`
+
 ## Windows / Mac OS
 ```
 # to install basic dependencies
@@ -78,7 +80,7 @@ apt install -y python3-pystray
 > **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
 
 > [!NOTE]
-> **Tray behavior**: restoring the window from the tray ("Open PlaylistManager") is best-effort — compositors may refuse unsolicited raise/focus requests (focus-stealing prevention), so the window can appear unfocused or behind other windows. A maximized window may also restore unmaximized after hide-to-tray (the compositor clears the maximized state when the window is hidden). Both are compositor policy, may be fixed in the future.
+> **Tray behavior**: restoring the window from the tray ("Open PlaylistManager") is best-effort - compositors may refuse unsolicited raise/focus requests (focus-stealing prevention), so the window can appear unfocused or behind other windows. A maximized window may also restore unmaximized after hide-to-tray (the compositor clears the maximized state when the window is hidden). Both are compositor policy, may be fixed in the future.
 
 # Usage
 > [!NOTE]
@@ -89,7 +91,10 @@ python -m main
 # Or
 python main.py
 ```
-Add `--debug` for verbose logging.
+
+- `--verbose / -v` for verbose logging.
+- `--debug / -vv`  DEBUG and above (everything)
+- `--trace / -vvv` TRACE and above + third-party debug loggers (requests / urllib3 / ytmusicapi / etc)
 
 2. Click on `Login` button (top left corner)
 3. See [INTEGRATIONS](INTEGRATIONS.MD) for detailed steps for your platform
@@ -104,7 +109,7 @@ See [Global command](#global-command-for-compositor-shortcuts)
 Authentication (`--login` / `--logout`) - the headless equivalent of the GUI login tiles:
 
 ```
-python -m app --login youtube_music                                   # open auth folder + terminal ('ytmusicapi browser')
+python -m app --login youtube_music       # open auth folder + terminal ('ytmusicapi browser')
 python -m app --login spotify --client-id <ID> --client-secret <SECRET> --refresh-token <TOKEN>
 python -m app --logout youtube_music      # delete browser.json + registry entries + db/youtube_music/
 python -m app --logout spotify            # delete spotify.json + registry entries + db/spotify/
@@ -169,15 +174,15 @@ The simplest way - a symlink (the app resolves its own real location, so any che
 path works; nothing machine-specific is hardcoded in the code):
 
 ```sh
-chmod +x /path/to/playlistmanager/main.py
-ln -s /path/to/playlistmanager/main.py ~/.local/bin/playlistmanager
+chmod +x /path/to/PlaylistManager/main.py
+ln -s /path/to/PlaylistManager/main.py ~/.local/bin/playlistmanager
 ```
 
 or a small wrapper (no symlink indirection):
 
 ```sh
 #!/bin/sh
-exec python3 /path/to/playlistmanager/main.py "$@"
+exec python3 /path/to/PlaylistManager/main.py "$@"
 ```
 
 (`~/.local/bin` is on PATH on most Linux setups; otherwise use `/usr/local/bin`.)

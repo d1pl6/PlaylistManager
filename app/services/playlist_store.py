@@ -277,31 +277,53 @@ class PlaylistStore:
         if lookup_playlist_id is None:
             return
 
+        # Snapshot the entries needing backfill without holding the lock -
+        # each lookup hits the platform API (network) and can take seconds.
+        # Holding _lock across those calls would stall every concurrent
+        # store operation, including first paint of the UI (load_playlists
+        # in MainWindow.setup) and any CLI command.
         with _lock:
             playlists = PlaylistStore.load_playlists()
+            targets = [
+                (p.get("name", ""), p.get("platform", ""))
+                for p in playlists
+                if not p.get("playlist_id") and p.get("platform") and p.get("name")
+            ]
+
+        results = []
+        for name, platform in targets:
+            try:
+                pid = lookup_playlist_id(name, platform)
+            except Exception:
+                logger.exception(
+                    "Migration lookup failed for '%s' (%s)", name, platform
+                )
+                continue
+            if pid:
+                results.append((name, platform, pid))
+                logger.info(
+                    "Migrated playlist '%s' (%s): playlist_id=%s", name, platform, pid
+                )
+
+        if not results:
+            return
+
+        # Merge and write once, under the lock.  The registry may have
+        # changed while we were looking up, so re-read it and only fill
+        # entries that are still missing a playlist_id.
+        with _lock:
+            current = PlaylistStore.load_playlists()
             changed = False
-            for p in playlists:
+            for p in current:
                 if p.get("playlist_id"):
                     continue
-                platform = p.get("platform", "")
-                name = p.get("name", "")
-                if not platform or not name:
-                    continue
-                try:
-                    pid = lookup_playlist_id(name, platform)
-                except Exception:
-                    logger.exception(
-                        "Migration lookup failed for '%s' (%s)", name, platform
-                    )
-                    continue
-                if pid:
-                    p["playlist_id"] = pid
-                    changed = True
-                    logger.info(
-                        "Migrated playlist '%s' (%s): playlist_id=%s", name, platform, pid
-                    )
+                for name, platform, pid in results:
+                    if p.get("name") == name and p.get("platform", "") == platform:
+                        p["playlist_id"] = pid
+                        changed = True
+                        break
             if changed:
-                PlaylistStore._write(playlists)
+                PlaylistStore._write(current)
 
     @staticmethod
     def ensure_playlists_file() -> None:

@@ -43,6 +43,7 @@ from services.playlist_store import PlaylistStore
 from services.playlist_sync import PlaylistSyncService
 from services.playlist_url import parse_playlist_url
 from services.song_manager import SongManager
+from utils.logging_config import user_log
 from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
@@ -215,7 +216,9 @@ def _init_yt_music():
             return youtube_auth.get_yt_music()
         logger.warning("YouTube Music not configured (no browser.json)")
     except ImportError:
-        logger.info("ytmusicapi not installed — YouTube Music integration disabled")
+        user_log(
+            logger, "ytmusicapi not installed - YouTube Music integration disabled"
+        )
     except Exception as e:
         logger.error(f"YouTube Music auth failed: {e}", exc_info=True)
     return None
@@ -231,7 +234,7 @@ def _init_spotify():
             integration = SpotifyIntegration(auth_manager=spotify_auth)
             integration.spotify_api = spotify_auth.get_api()
             return integration
-        logger.warning("Spotify not configured (no spotify.json)")
+        logger.warning("Spotify is not configured (no spotify.json)")
     except Exception as e:
         logger.error(f"Spotify auth failed: {e}", exc_info=True)
     return None
@@ -354,7 +357,7 @@ def run_add(spec: str) -> int:
         elif platform == PLATFORM_SPOTIFY:
             if sp_flow is None:
                 ok, message = False, (
-                    "Error: Spotify not configured — run the GUI auth setup first"
+                    "Error: Spotify is not configured — run the GUI auth setup first"
                 )
             else:
                 ok, message = _run_flow(sp_flow, name)

@@ -30,6 +30,10 @@ from utils.theme import C
 
 logger = logging.getLogger(__name__)
 
+# Sentinel for update_credentials - distinguishes "don't touch this
+# client" from "explicitly clear it" (None).
+_UNSET = object()
+
 
 class KeybindController:
     """Orchestrates hotkey listeners, recording, and flow dispatch."""
@@ -39,6 +43,12 @@ class KeybindController:
         self.spotify_integration = spotify_integration
         self.song_manager: Optional[SongManager] = None
         self.keybind_thread: Optional[threading.Thread] = None
+
+        # Guards the single in-flight flow.  Acquired synchronously here on
+        # the main thread BEFORE the flow thread starts, released when the
+        # flow ends - closing the race where two keybind events in the same
+        # event-loop tick could both see keybind_thread as not-yet-alive.
+        self._flow_busy = threading.Lock()
 
         # Flow controllers - lazily created on first keybind trigger
         self._keybind_flow = None
@@ -67,20 +77,25 @@ class KeybindController:
     # Credentials
     # ------------------------------------------------------------------
 
-    def update_credentials(self, yt_client=None, spotify_integration=None):
+    def update_credentials(self, yt_client=_UNSET, spotify_integration=_UNSET):
         """Update API clients and invalidate active flow controllers.
 
         Called from the UI thread after re-authentication.  The flow
         controllers are set to None so they will be lazily re-created
         on the next keybind trigger with the new credentials.
 
+        Passing ``None`` for a client explicitly **clears** it - after a
+        failed re-auth a stale authenticated client must not keep being
+        used silently (flows then report "not authenticated" instead).
+        Omit the argument to leave that client untouched.
+
         The old URL receiver is stopped to free port 5000 before a new
         receiver is created on the next keybind.
         """
         self.stop_receiver()
-        if yt_client is not None:
+        if yt_client is not _UNSET:
             self.yt = yt_client
-        if spotify_integration is not None:
+        if spotify_integration is not _UNSET:
             self.spotify_integration = spotify_integration
         self._keybind_flow = None
         self._spotify_flow = None
@@ -279,8 +294,8 @@ class KeybindController:
     ):
         self.registry.register(playlist_name, hotkey, callbacks, platform)
 
-    def unregister_hotkey(self, playlist_name: str):
-        self.registry.unregister(playlist_name)
+    def unregister_hotkey(self, playlist_name: str, platform: str = ""):
+        self.registry.unregister(playlist_name, platform=platform)
 
     def _check_hotkeys(self):
         with self._pressed_keys_lock:
@@ -311,7 +326,7 @@ class KeybindController:
         All UI updates go through *callbacks* so the controller never
         touches tkinter widgets directly.
         """
-        if self.keybind_thread is not None and self.keybind_thread.is_alive():
+        if not self._flow_busy.acquire(blocking=False):
             callbacks.on_status("Busy", C["label_playlist_warn_bg"])
             logger.warning("Flow already in progress, ignoring keybind")
             return
@@ -322,6 +337,7 @@ class KeybindController:
 
         if not self._ensure_initialized(platform, callbacks):
             callbacks.on_reset("readonly")
+            self._flow_busy.release()
             return
 
         def on_status(msg):
@@ -386,6 +402,8 @@ class KeybindController:
             except Exception as e:
                 logger.error(f"Keybind flow exception: {e}", exc_info=True)
                 on_error(str(e))
+            finally:
+                self._flow_busy.release()
 
         self.keybind_thread = threading.Thread(target=run_flow, daemon=True)
         self.keybind_thread.start()

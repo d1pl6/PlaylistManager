@@ -14,6 +14,8 @@ from typing import Optional
 
 from platformdirs import user_config_dir
 
+from utils.logging_config import user_log
+
 logger = logging.getLogger(__name__)
 
 AUTH_FOLDER = Path(user_config_dir("playlistmanager")) / "auth"

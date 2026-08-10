@@ -29,6 +29,7 @@ from utils.config import (
     SETTINGS_PATH as _settings_path,
 )
 from utils.theme import C, load_theme
+from utils.platform import is_wayland_session
 
 logger = logging.getLogger(__name__)
 
@@ -346,7 +347,11 @@ class MainWindow:
             logger.error(f"Failed to create cover PhotoImage: {e}")
             return
         cover_label.configure(image=tk_img)
-        self.frame_img_refs.setdefault(id(cover_label), []).append(tk_img)
+        # Keep a reference so the PhotoImage isn't garbage-collected.
+        # Keyed by the widget itself (not id()) so the close path can
+        # release the refs reliably - id() values are reused after widget
+        # destruction and the old close-path check never matched.
+        self.frame_img_refs.setdefault(cover_label, []).append(tk_img)
 
     # ------------------------------------------------------------------
     # Database / log label helpers
@@ -412,7 +417,9 @@ class MainWindow:
         elif status_text == "Error":
             status_label.config(text=status_text, background=C["label_playlist_error_bg"])
         else:
-            status_label.config(text=status_text, background=C["label_playlist_good_bg"])
+            # Nothing imported - "No tracks" (empty playlist or a swallowed
+            # platform error) and "0 new" (all duplicates) are not successes.
+            status_label.config(text=status_text, background=C["label_playlist_warn_bg"])
         self._update_log_labels_from_db(
             frame_idx, playlist_name, self.frame_platforms[frame_idx]
         )
@@ -529,12 +536,16 @@ class MainWindow:
         Some Wayland compositors unmap the XWayland window on minimize
         without ever setting WM_STATE Iconic (plan.md W4), so once the
         retries run out, a window that is still unmapped (and not
-        withdrawn) is treated as a minimize too.
+        withdrawn) is treated as a minimize too - but only on Wayland
+        sessions.  On X11 an unmap that never turns "iconic" is not a
+        minimize (e.g. a slow WM still completing a restore), and hiding
+        the window would yank it out from under the user, so X11 waits
+        for the iconic state exclusively.
         """
         if event.widget is not self.root:
             return
 
-        def _maybe_hide(attempts: int = 6) -> None:
+        def _maybe_hide(attempts: int = 10) -> None:
             self._hide_after_id = None
             tray_ok = (
                 self.tray_service is not None and self.tray_service.available
@@ -549,7 +560,9 @@ class MainWindow:
             if state == "withdrawn":
                 # Our own withdraw() (or an external one) - not a minimize.
                 return
-            if state == "iconic" or (attempts == 0 and not viewable):
+            if state == "iconic" or (
+                is_wayland_session() and attempts == 0 and not viewable
+            ):
                 self.root.withdraw()
             elif attempts > 0:
                 # WM hasn't settled the minimize yet - try again shortly.
@@ -778,7 +791,7 @@ class MainWindow:
             playlist_name = self.playlist_name_labels[index].cget("text")
             platform = self.frame_platforms[index]
 
-            self.kc.unregister_hotkey(playlist_name)
+            self.kc.unregister_hotkey(playlist_name, platform=platform)
             if self._recording_frame_idx == index:
                 self.kc.stop_recording()
                 self._recording_frame_idx = None
@@ -787,6 +800,17 @@ class MainWindow:
             self.frame_positions.pop(index)
             self.playlist_name_labels.pop(index)
             self.frame_platforms.pop(index)
+
+            # Release the cover-image references for the closing frame so the
+            # PhotoImages can be garbage-collected (they were keyed by the
+            # cover label widget in _apply_cover).
+            closing_labels = self.active_log_labels.get(index)
+            if closing_labels is not None:
+                cover = closing_labels.get("cover")
+                if cover is not None:
+                    refs = self.frame_img_refs.pop(cover, None)
+                    if refs:
+                        refs.clear()
 
             if index in self.active_log_labels:
                 del self.active_log_labels[index]
@@ -798,10 +822,6 @@ class MainWindow:
                 else:
                     new_active_log_labels[old_idx] = labels_dict
             self.active_log_labels = new_active_log_labels
-
-            if frame in self.frame_img_refs:
-                self.frame_img_refs[frame].clear()
-                del self.frame_img_refs[frame]
 
             PlaylistStore.delete_playlist(playlist_name, platform=platform)
             DatabaseManager.delete_playlist_db(playlist_name, platform)
@@ -885,11 +905,24 @@ class MainWindow:
             entry.insert(0, combo)
 
         def on_stop() -> None:
+            # Only commit the empty keybind if this frame was still the
+            # active recording target when the stop fired.
+            was_recording_here = self._recording_frame_idx == frame_idx
             self._recording_frame_idx = None
             entry.config(
                 state="readonly", readonlybackground=C["entry_playlist_ro_bg"]
             )
             entry.delete(0, tk.END)
+            if not was_recording_here:
+                return
+            # Escape / focus-out during recording: commit the empty combo so
+            # the previously registered hotkey is removed and the store
+            # matches what the entry now shows - a stale hotkey firing with
+            # a blank entry is confusing.
+            playlist_name = self.playlist_name_labels[frame_idx].cget("text")
+            platform = self.frame_platforms[frame_idx]
+            PlaylistStore.update_keybind(playlist_name, platform, "")
+            self.kc.unregister_hotkey(playlist_name, platform=platform)
 
         self.kc.start_recording(on_combo, on_stop=on_stop)
         return "break"
@@ -920,7 +953,7 @@ class MainWindow:
             )
         else:
             PlaylistStore.update_keybind(playlist_name, platform, "")
-            self.kc.unregister_hotkey(playlist_name)
+            self.kc.unregister_hotkey(playlist_name, platform=platform)
 
     def _on_root_click(self, event) -> None:
         if self._recording_frame_idx is not None:
