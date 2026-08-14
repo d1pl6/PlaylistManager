@@ -19,6 +19,8 @@ from typing import Any, Optional, cast
 
 from services import auth_setup
 from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
+from utils.scaling import ui_font
+from utils.icons import IconService
 from utils.window import center_window
 from utils.theme import C
 from utils.logging_config import user_log
@@ -56,7 +58,7 @@ def show_login_dialog(parent, on_success=None):
         text="Select platform",
         background=frame_header_bg,
         foreground=label_fg,
-        font=("Noto", 14),
+        font=ui_font(14),
     ).pack(fill="both", pady=5, padx=5)
 
     platforms_frame = tk.Frame(win, background=label_bg)
@@ -86,7 +88,7 @@ def _create_platform_button(parent, name, icon_path, command):
 
     img: Optional[tk.PhotoImage] = None
     try:
-        img = tk.PhotoImage(file=str(icon_path))
+        img = IconService.get(icon_path, 32)
     except Exception as e:
         logger.error("Failed to load icon %s: %s", icon_path, e)
 
@@ -100,7 +102,7 @@ def _create_platform_button(parent, name, icon_path, command):
             text="?",
             background=frame_bg,
             foreground=label_fg,
-            font=("Noto", 20),
+            font=ui_font(20),
         ).pack(pady=(5, 5))
 
     tk.Label(
@@ -108,7 +110,7 @@ def _create_platform_button(parent, name, icon_path, command):
         text=name,
         background=frame_bg,
         foreground=label_fg,
-        font=("Noto", 10),
+        font=ui_font(10),
     ).pack(pady=(0, 5))
 
     for widget in [frame] + list(frame.winfo_children()):
@@ -262,7 +264,7 @@ def _on_spotify(parent, on_success):
         text="Spotify Credentials",
         background=header_bg,
         foreground=label_fg,
-        font=("Noto", 14),
+        font=ui_font(14),
     ).pack(fill="both", pady=5, padx=5)
 
     # ---------- fields ----------
@@ -285,7 +287,7 @@ def _on_spotify(parent, on_success):
             text=label_text,
             background=frame_bg,
             foreground=label_fg,
-            font=("Noto", 10),
+            font=ui_font(10),
         ).grid(row=i, column=0, sticky="w", pady=5)
 
         entry = tk.Entry(
@@ -294,7 +296,7 @@ def _on_spotify(parent, on_success):
             background=entry_bg,
             foreground=entry_fg,
             insertbackground=entry_fg,
-            font=("Noto", 10),
+            font=ui_font(10),
             width=40,
             show="*",
         )
@@ -308,7 +310,7 @@ def _on_spotify(parent, on_success):
         text="",
         background=frame_bg,
         foreground=label_fg,
-        font=("Noto", 10),
+        font=ui_font(10),
     )
     status_label.pack(padx=20, pady=5)
 
@@ -417,7 +419,7 @@ def _on_spotify(parent, on_success):
         background=button_close_bg,
         foreground=button_close_fg,
         activebackground=button_close_a_bg,
-        font=("Noto", 10),
+        font=ui_font(10),
         command=delete_credentials,
     )
     btn_delete.pack(side="left")
@@ -428,7 +430,7 @@ def _on_spotify(parent, on_success):
         background=btn_test_bg,
         foreground=btn_test_fg,
         activebackground=btn_test_abg,
-        font=("Noto", 10),
+        font=ui_font(10),
         command=test_credentials,
     )
     btn_test.pack(side="left", padx=5)
@@ -439,7 +441,7 @@ def _on_spotify(parent, on_success):
         background=button_save_bg,
         foreground=button_save_fg,
         activebackground=button_save_a_bg,
-        font=("Noto", 10),
+        font=ui_font(10),
         command=save_credentials,
     )
     btn_save.pack(side="right")

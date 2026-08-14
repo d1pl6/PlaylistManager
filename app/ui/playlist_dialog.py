@@ -12,6 +12,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
+from utils.scaling import px, ui_font
 from utils.theme import C
 from utils.thumbnail import ThumbnailService
 
@@ -49,7 +50,7 @@ class PlaylistDialog:
             text="Select a Playlist below",
             background=dialog_bg,
             foreground=label_fg,
-            font="Noto, 12",
+            font=ui_font(12),
         ).pack(side="left", anchor="w")
 
         tk.Button(
@@ -58,7 +59,7 @@ class PlaylistDialog:
             background=close_bg,
             foreground=close_fg,
             activebackground=close_a_bg,
-            font="Noto, 12",
+            font=ui_font(12),
             command=self.cancel,
         ).pack(side="right", anchor="e")
 
@@ -98,7 +99,12 @@ class PlaylistDialog:
                 foreground=btn_fg,
                 activebackground=btn_a_bg,
                 activeforeground=btn_a_fg,
-                width=40,
+                # NOTE: on an image-only button, Tk reads -width in PIXELS,
+                # not characters. px(40) matches the thumbnail size so the
+                # placeholder is stable and the image is never clipped
+                # (a char-width constant would cap the button at 40px and
+                # cut the scaled thumbnail).
+                width=px(40),
                 command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
             )
             btn.pack(pady=5, padx=5)
@@ -109,7 +115,7 @@ class PlaylistDialog:
                 foreground=btn_fg,
                 activebackground=btn_a_bg,
                 activeforeground=btn_a_fg,
-                font="Noto, 11",
+                font=ui_font(11),
                 width=40,
                 command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
             ).pack(pady=5)
@@ -136,7 +142,7 @@ class PlaylistDialog:
     def _load_thumb_async(self, button: tk.Button, thumb_url: str) -> None:
         """Download the cover in a worker; apply the PhotoImage on the main thread."""
         def _run() -> None:
-            img = ThumbnailService.fetch_image(thumb_url, size=(40, 40))
+            img = ThumbnailService.fetch_image(thumb_url, size=(px(40), px(40)))
             if img is not None:
                 try:
                     self.parent.after(0, lambda: self._apply_thumb(button, img))

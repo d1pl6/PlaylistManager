@@ -9,6 +9,7 @@ from utils.config import (
     restore_theme_defaults,
     THEME_PATH,
 )
+from utils.scaling import px, ui_font
 from utils.theme import C
 from utils.window import center_window
 
@@ -30,7 +31,7 @@ def show_theme_dialog(parent, on_theme_change=None):
     win.configure(background=win_bg, padx=2, pady=2)
     win.transient(parent)
     win.grab_set()
-    win.minsize(350, 400)
+    win.minsize(px(350), px(400))
 
     # Restore the Settings dialog's grab when this Toplevel closes - the
     # theme picker steals the grab at open, and destroying it otherwise
@@ -47,7 +48,7 @@ def show_theme_dialog(parent, on_theme_change=None):
         text="Theme settings",
         background=header_bg,
         foreground=label_fg,
-        font=("Noto", 12),
+        font=ui_font(12),
     ).pack(fill="x")
 
     canvas = tk.Canvas(win, background=win_bg, highlightthickness=0)
@@ -122,7 +123,7 @@ def show_theme_dialog(parent, on_theme_change=None):
             text=label_text,
             background=label_bg,
             foreground=label_fg,
-            font=("Noto", 10),
+            font=ui_font(10),
             width=26,
             anchor="w",
         ).pack(side="left", padx=(4, 4))
@@ -131,6 +132,7 @@ def show_theme_dialog(parent, on_theme_change=None):
         btn = tk.Button(
             frame,
             text="Change",
+            font=ui_font(10),
             command=lambda: _choose_color(section, option, default, btn),
             bd=0,
         )
@@ -228,6 +230,7 @@ def show_theme_dialog(parent, on_theme_change=None):
     tk.Button(
         button_frame,
         text="White Theme",
+        font=ui_font(10),
         command=lambda: (_apply_preset("white"), _fire_change()),
         background="#EDEDED",
         activebackground="#D2D2D2",
@@ -238,6 +241,7 @@ def show_theme_dialog(parent, on_theme_change=None):
     tk.Button(
         button_frame,
         text="Restore Defaults",
+        font=ui_font(10),
         command=lambda: (_restore_defaults(), _fire_change()),
         background=button_bg,
         activebackground=button_abg,

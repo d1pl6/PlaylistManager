@@ -14,6 +14,7 @@ DEFAULT_SETTINGS = {
     "auto_resize": {"is_true": "no"},
     "global_listener": {"is_true": "yes"},
     "hide_to_tray": {"is_true": "no"},
+    "ui_scale": {"value": "auto"},
 }
 
 THEME_PATH = Path(__file__).resolve().parents[2] / "cfg" / "theme.ini"
@@ -278,4 +279,33 @@ def set_setting(section: str, enabled: bool) -> None:
     if section not in cfg:
         cfg[section] = {}
     cfg[section]["is_true"] = "yes" if enabled else "no"
+    _write_ini_file(SETTINGS_PATH, cfg)
+
+
+def get_setting_value(section: str, option: str, fallback: str = "") -> str:
+    """Read one arbitrary (non-boolean) setting option.
+
+    Like :func:`get_setting` but for value options (e.g. ``ui_scale``),
+    which have no ``is_true`` key.  Returns *fallback* on any error.
+    """
+    ensure_settings_file()
+    cfg = ConfigParser()
+    try:
+        cfg.read(str(SETTINGS_PATH))
+        return cfg.get(section, option, fallback=fallback)
+    except Exception:
+        return fallback
+
+
+def set_setting_value(section: str, option: str, value: str) -> None:
+    """Write one arbitrary setting option, preserving every other section.
+
+    Unknown or legacy sections in settings.ini are left untouched.
+    """
+    ensure_settings_file()
+    cfg = ConfigParser()
+    cfg.read(str(SETTINGS_PATH))
+    if section not in cfg:
+        cfg[section] = {}
+    cfg[section][option] = value
     _write_ini_file(SETTINGS_PATH, cfg)

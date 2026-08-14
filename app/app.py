@@ -20,6 +20,7 @@ from utils.window import center_window
 from utils import updater
 from utils.config import get_setting
 from utils.logging_config import user_log
+from utils import scaling
 from _version import __version__
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,15 @@ class App:
     def __init__(self, args):
         self.args = args
         self.root = tk.Tk()
+        # Must run before any widget exists: picks the ui_scale profile from
+        # settings + display Xft.dpi, which every ui_font()/px()/IconService
+        # call reads afterwards (see utils/scaling.py).
+        scaling.init(self.root)
+        # Default font for any widget that doesn't set its own font (entries,
+        # dialogs, ...). Under a manual profile TkDefaultFont would keep
+        # following the display Xft.dpi while the rest of the UI follows the
+        # profile - the option database makes the default follow too.
+        self.root.option_add("*Font", scaling.ui_font(10))
 
         yt_client = None
         youtube_auth = None

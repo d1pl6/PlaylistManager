@@ -10,6 +10,7 @@ opencode.jsonc
 .gitignore
 plan.md
 cli.md
+screen.md
 
 auth/
 __pycache__/

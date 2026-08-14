@@ -11,6 +11,7 @@ import logging
 import tkinter as tk
 from typing import Callable, Optional
 
+from utils.scaling import px, ui_font
 from utils.theme import C
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,7 @@ class AppController:
                 text="An error occurred while closing PlaylistManager:",
                 background=C["frame_main_bg"],
                 foreground=C["label_def_fg"],
-                font=("Noto", 10),
+                font=ui_font(10),
             ).pack(padx=16, pady=(12, 0))
 
             tk.Label(
@@ -128,8 +129,8 @@ class AppController:
                 text=str(error),
                 background=C["frame_main_bg"],
                 foreground=C["label_playlist_error_fg"],
-                font=("Noto", 9),
-                wraplength=360,
+                font=ui_font(9),
+                wraplength=px(360),
                 justify="left",
             ).pack(padx=16, pady=(4, 12))
 

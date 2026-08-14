@@ -19,6 +19,8 @@ from services.playlist_store import PlaylistStore
 from services.playlist_sync import PlaylistSyncService
 from services.song_manager import SongManager
 from utils.thumbnail import ThumbnailService
+from utils.icons import IconService
+from utils.scaling import px, ui_font
 from ui.login_ui import show_login_dialog
 from ui.playlist_dialog import PlaylistDialog
 from ui.settings_ui import show_settings_dialog
@@ -39,6 +41,13 @@ playlist_cover_img_path = assets_dir / "playlist_image.png"
 close_playlist_img_path = assets_dir / "close_playlist.png"
 reload_database_img_path = assets_dir / "reloadCache.png"
 loading_img_path = assets_dir / "hourglass.png"
+
+# Base design sizes of the playlist card, in unscaled pixels; every value
+# is multiplied by the UI scale (utils/scaling).  The card is a fixed-size
+# box (grid_propagate(False)) so text never makes it grow — long names and
+# track titles clip inside instead of ballooning the window at high scale.
+CARD_W_BASE = 320
+CARD_H_BASE = 96
 
 
 class MainWindow:
@@ -94,18 +103,18 @@ class MainWindow:
 
         self.root.title("PlaylistManager")
         self.root.configure(background=C["root_bg"])
-        self.root.geometry("650x460")
-        self.root.minsize(325, 150)
+        self.root.geometry(f"{px(650)}x{px(460)}")
+        self.root.minsize(px(325), px(150))
         self.root.maxsize(999999, 999999)
 
         icon_path = assets_dir / "app_image.png"
-        self.icon = tk.PhotoImage(file=str(icon_path))
+        self.icon = IconService.get(icon_path, 32)
         self.root.iconphoto(False, self.icon)
 
-        self.playlist_cover_img = tk.PhotoImage(file=str(playlist_cover_img_path))
-        self.close_playlist_img = tk.PhotoImage(file=str(close_playlist_img_path))
-        self.reload_database_img = tk.PhotoImage(file=str(reload_database_img_path))
-        self.loading_img = tk.PhotoImage(file=str(loading_img_path))
+        self.playlist_cover_img = IconService.get(playlist_cover_img_path, 64)
+        self.close_playlist_img = IconService.get(close_playlist_img_path, 16)
+        self.reload_database_img = IconService.get(reload_database_img_path, 16)
+        self.loading_img = IconService.get(loading_img_path, 32)
 
         self.root.grid_rowconfigure(0, weight=0)
         self.root.grid_rowconfigure(1, weight=1)
@@ -208,7 +217,7 @@ class MainWindow:
         btn_header_abg = C["button_head_a_bg"]
 
         login_img_path = assets_dir / "login.png"
-        self.login_img = tk.PhotoImage(file=str(login_img_path))
+        self.login_img = IconService.get(login_img_path, 32)
         self.btn_login = tk.Button(
             self.header_frame,
             image=self.login_img,
@@ -221,7 +230,7 @@ class MainWindow:
         )
 
         add_playlist_img_path = assets_dir / "addPlaylist.png"
-        self.add_playlist_img = tk.PhotoImage(file=str(add_playlist_img_path))
+        self.add_playlist_img = IconService.get(add_playlist_img_path, 32)
         self.btn_add_playlist = tk.Button(
             self.header_frame,
             image=self.add_playlist_img,
@@ -232,7 +241,7 @@ class MainWindow:
         )
 
         open_settings_img_path = assets_dir / "settings.png"
-        self.open_settings_img = tk.PhotoImage(file=str(open_settings_img_path))
+        self.open_settings_img = IconService.get(open_settings_img_path, 32)
         self.btn_open_settings = tk.Button(
             self.header_frame,
             image=self.open_settings_img,
@@ -298,7 +307,7 @@ class MainWindow:
             text="Select platform to fetch playlists from:",
             background=win_bg,
             foreground=label_fg,
-            font="Noto, 11",
+            font=ui_font(11),
         ).pack(pady=10, padx=20)
 
         for integration in platforms:
@@ -309,7 +318,7 @@ class MainWindow:
                 foreground=btn_fg,
                 activebackground=btn_a_bg,
                 activeforeground=btn_a_fg,
-                font="Noto, 11",
+                font=ui_font(11),
                 width=30,
                 command=lambda i=integration: (win.destroy(), callback(i)),
             ).pack(pady=4, padx=20)
@@ -320,7 +329,7 @@ class MainWindow:
             background=cancel_bg,
             foreground=cancel_fg,
             activebackground=cancel_a_bg,
-            font="Noto, 10",
+            font=ui_font(10),
             command=_do_cancel,
         ).pack(pady=10)
 
@@ -392,7 +401,7 @@ class MainWindow:
         side just checks it still exists.
         """
         def fetch() -> None:
-            img = ThumbnailService.fetch_image(thumb_url, size=(64, 64))
+            img = ThumbnailService.fetch_image(thumb_url, size=(px(64), px(64)))
             if img is not None:
                 try:
                     self.root.after(0, lambda: self._apply_cover(cover_label, img))
@@ -759,7 +768,20 @@ class MainWindow:
             entry_playlist_fg = C["entry_playlist_fg"]
             entry_playlist_ro_bg = C["entry_playlist_ro_bg"]
 
-            main_frame = tk.Frame(self.root, width=320, background=frame_playlist_bg)
+            # Fixed-size card: grid_propagate(False) + explicit scaled size
+            # means text never makes the card grow (long names clip inside
+            # instead).  Rows/columns use weights so inner frames stretch
+            # and the weighted column absorbs/clips overflow text.
+            main_frame = tk.Frame(
+                self.root,
+                width=px(CARD_W_BASE),
+                height=px(CARD_H_BASE),
+                background=frame_playlist_bg,
+            )
+            main_frame.grid_propagate(False)
+            main_frame.grid_rowconfigure(0, weight=1)
+            main_frame.grid_rowconfigure(1, weight=1)
+            main_frame.grid_columnconfigure(0, weight=1)
             main_header_frame = tk.Frame(main_frame, background=frame_playlist_bg)
             main_log_frame = tk.Frame(main_frame, background=frame_playlist_bg)
 
@@ -771,7 +793,7 @@ class MainWindow:
             playlist_name = tk.Label(
                 main_header_frame,
                 text=f"row:{row} col:{col}",
-                font="Noto, 12",
+                font=ui_font(12),
                 background=label_playlist_name_bg,
                 foreground=label_playlist_name_fg,
                 width=25,
@@ -790,7 +812,7 @@ class MainWindow:
 
             playlist_keybind = tk.Entry(
                 main_header_frame,
-                font="Noto, 12",
+                font=ui_font(12),
                 justify="center",
                 background=entry_playlist_bg,
                 foreground=entry_playlist_fg,
@@ -822,7 +844,7 @@ class MainWindow:
             log_artist = tk.Label(
                 main_log_frame,
                 text="log_artist placeholder",
-                font="Noto, 12",
+                font=ui_font(12),
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
                 width=8,
@@ -831,7 +853,7 @@ class MainWindow:
             log_helper_1 = tk.Label(
                 main_log_frame,
                 text="-",
-                font="Noto, 12",
+                font=ui_font(12),
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
                 anchor="w",
@@ -839,7 +861,7 @@ class MainWindow:
             log_name = tk.Label(
                 main_log_frame,
                 text="log_name placeholder",
-                font="Noto, 12",
+                font=ui_font(12),
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
                 width=18,
@@ -848,7 +870,7 @@ class MainWindow:
             log_helper_2 = tk.Label(
                 main_log_frame,
                 text="|",
-                font="Noto, 12",
+                font=ui_font(12),
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
                 anchor="w",
@@ -856,7 +878,7 @@ class MainWindow:
             log_log = tk.Label(
                 main_log_frame,
                 text="Waiting",
-                font="Noto, 12",
+                font=ui_font(12),
                 background=label_playlist_good_bg,
                 foreground=label_playlist_good_fg,
                 width=5,
@@ -878,8 +900,14 @@ class MainWindow:
                 "cover": playlist_cover,
             }
 
-            main_header_frame.grid(row=0, column=0, columnspan=2)
-            main_log_frame.grid(row=1, column=0)
+            # Weighted name column: absorbs/clips long text instead of
+            # letting the card grow (the card itself never grows - see the
+            # grid_propagate(False) above).
+            main_header_frame.grid_columnconfigure(1, weight=1)
+            main_log_frame.grid_columnconfigure(2, weight=1)
+
+            main_header_frame.grid(row=0, column=0, sticky="nsew")
+            main_log_frame.grid(row=1, column=0, sticky="nsew")
 
             playlist_cover.grid(row=0, column=0, sticky="ne", rowspan=2)
             playlist_name.grid(row=0, column=1, sticky="nswe")
