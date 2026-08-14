@@ -10,7 +10,7 @@ import json
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from platformdirs import user_config_dir
 
@@ -41,7 +41,13 @@ def setup_ytmusic_auth() -> Dict[str, Any]:
 
     try:
         terminal_cmd = get_terminal_command(AUTH_DIR)
-        subprocess.Popen(terminal_cmd)
+        subprocess.Popen(
+            terminal_cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
         return {"ok": True, "manual": False}
     except (FileNotFoundError, OSError) as e:
         logger.error("Failed to open terminal: %s", e)
@@ -117,16 +123,23 @@ def verify_spotify_credentials(
     this service.
 
     Returns a dict with keys ``ok`` (bool) and either ``display_name``
-    or ``error``.
+    or ``error``.  On success the dict also carries ``refresh_token``:
+    the *final* refresh token after the verification round trip (when
+    the app opts into Spotify's token rotation, the entered token is
+    invalidated during the check and replaced).
     """
     try:
         from integrations.music_spotify.music_spotify import SpotifyAuthManager
 
-        me = SpotifyAuthManager.verify_credentials(
+        me, api = SpotifyAuthManager.verify_credentials(
             client_id, client_secret, refresh_token
         )
         if me and me.get("display_name"):
-            return {"ok": True, "display_name": me["display_name"]}
+            return {
+                "ok": True,
+                "display_name": me["display_name"],
+                "refresh_token": api.refresh_token,
+            }
         return {"ok": False, "error": "Authentication failed"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -135,13 +148,30 @@ def verify_spotify_credentials(
 def save_and_verify_spotify_credentials(
     client_id: str, client_secret: str, refresh_token: str
 ) -> Dict[str, Any]:
-    """Save Spotify credentials to disk and verify them.
+    """Verify Spotify credentials and persist them if they are valid.
 
-    Convenience wrapper for the Save button flow.  Returns the same
-    dict as :func:`verify_spotify_credentials`.
+    Verification runs FIRST: only a successful ``/v1/me`` round trip
+    writes the credential file, so a typo in the login form can no
+    longer destroy previously working auth (the old save-then-verify
+    ordering overwrote the file before the credential check could
+    fail).
+
+    The persisted token is the *final* one reported by the verification
+    (``result["refresh_token"]``) - NOT the raw input.  Spotify's
+    optional refresh-token rotation invalidates the entered token during
+    the check, and persisting the dead token would break auth at the
+    next launch.  A failed verify never writes anything.
+
+    Returns the same dict as :func:`verify_spotify_credentials`.
     """
-    save_spotify_credentials(client_id, client_secret, refresh_token)
-    return verify_spotify_credentials(client_id, client_secret, refresh_token)
+    result = verify_spotify_credentials(client_id, client_secret, refresh_token)
+    if result.get("ok"):
+        save_spotify_credentials(
+            client_id,
+            client_secret,
+            result.get("refresh_token") or refresh_token,
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------

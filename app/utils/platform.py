@@ -9,6 +9,7 @@ for the YouTube Music auth flow.
 import logging
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -40,9 +41,21 @@ def open_directory(path: Path) -> None:
         if system == "Windows":
             os.startfile(str(path))  # type: ignore[attr-defined]
         elif system == "Darwin":
-            subprocess.Popen(["open", str(path)])
+            subprocess.Popen(
+                ["open", str(path)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
         else:
-            subprocess.Popen(["xdg-open", str(path)])
+            subprocess.Popen(
+                ["xdg-open", str(path)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
     except Exception as e:
         logger.error("Failed to open directory %s: %s", path, e)
 
@@ -57,6 +70,7 @@ def find_linux_terminal() -> Optional[str]:
         "xterm",
         "alacritty",
         "kitty",
+        "ghostty",
         "wezterm",
         "tilix",
         "foot",
@@ -102,5 +116,13 @@ def get_terminal_command(work_dir: Path) -> List[str]:
         if not term:
             raise FileNotFoundError("No supported terminal emulator found")
         shell = find_shell()
-        cmd = f'cd "{work_dir}" && ytmusicapi browser; exec {shell}'
+        # work_dir comes from platformdirs (typically ~/.config/playlistmanager/
+        # auth) - quote it so an unusual home-dir name ($, backtick, quote)
+        # cannot break or hijack the shell command.  shell is quoted too even
+        # though it is normally an absolute path, because find_shell()'s last
+        # resort is the bare name "sh".
+        cmd = (
+            f"cd {shlex.quote(str(work_dir))} && ytmusicapi browser; "
+            f"exec {shlex.quote(shell)}"
+        )
         return [term, "-e", shell, "-c", cmd]

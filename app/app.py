@@ -1,8 +1,7 @@
 import logging
 import threading
 import tkinter as tk
-from configparser import ConfigParser
-from pathlib import Path
+from typing import Callable, Dict, Optional
 from tkinter import messagebox
 
 from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
@@ -19,7 +18,7 @@ from ui.main_window import MainWindow
 from ui.updater_ui import show_update_dialog
 from utils.window import center_window
 from utils import updater
-from utils.config import SETTINGS_PATH, ensure_settings_file
+from utils.config import get_setting
 from utils.logging_config import user_log
 from _version import __version__
 
@@ -93,13 +92,9 @@ class App:
             app_controller=app_controller,
         )
 
-        ensure_settings_file()
         PlaylistStore.ensure_playlists_file()
-        cfg = ConfigParser()
-        cfg.read(str(SETTINGS_PATH))
-        if cfg.getboolean("center_windows", "is_true", fallback=True):
+        if get_setting("center_windows", True):
             center_window(self.root)
-        self._check_updates()
 
     def _migrate_playlist_schema(self) -> None:
         """Backfill missing *playlist_id* values in the store.
@@ -128,26 +123,89 @@ class App:
 
         PlaylistStore.migrate_schema(lookup_playlist_id=lookup)
 
-    def refresh_auth(self):
-        for integration in self.integrations.get_all().values():
-            if integration.refresh_auth():
-                user_log(logger, f"{integration.display_name} re-authenticated")
-            else:
-                logger.error(f"{integration.display_name} re-authentication failed")
+    def refresh_auth(
+        self,
+        platform: Optional[str] = None,
+        on_done: Optional[Callable[[], None]] = None,
+    ) -> None:
+        """Re-authenticate integrations and push fresh clients to the keybind flow.
 
-        yt_client = None
-        spotify_integration = None
+        With *platform* given (a ``constants.PLATFORM_*`` value) only that
+        integration is refreshed - a YouTube Music login event must not
+        re-verify (and, on a transient failure, deauthenticate) Spotify,
+        and vice versa.  Without it (legacy callers) every integration is
+        refreshed.
 
-        yt = self.integrations.get(PLATFORM_YOUTUBE_MUSIC)
-        if isinstance(yt, YouTubeMusicIntegration):
-            yt_client = yt.yt_client
-        sp = self.integrations.get(PLATFORM_SPOTIFY)
-        if isinstance(sp, SpotifyIntegration):
-            spotify_integration = sp
+        *on_done*, when given, is called on the main thread after the
+        credential swap has been applied - e.g. the playlist picker uses
+        it to retry a fetch that failed because the login refresh raced a
+        mid-write ``browser.json``.  It fires whether or not the refresh
+        itself succeeded; the caller's retry then fails fast and shows
+        the real error.
 
-        self.main_window.kc.update_credentials(
-            yt_client=yt_client, spotify_integration=spotify_integration
-        )
+        The refresh runs on a worker thread: Spotify's re-auth validates
+        the credentials against ``/v1/me`` (a network round trip with a
+        15 s timeout) and must never block the tkinter main thread.  Only
+        the final credential swap (``update_credentials``) and *on_done*
+        are marshaled back to the main thread via ``root.after``.
+        """
+        integrations = self.integrations.get_all()
+        if platform is not None:
+            if platform not in integrations:
+                logger.error(f"Unknown platform '{platform}' - cannot refresh")
+                return
+            targets = [integrations[platform]]
+        else:
+            targets = list(integrations.values())
+
+        def _refresh_worker() -> None:
+            for integration in targets:
+                try:
+                    ok = integration.refresh_auth()
+                except Exception:
+                    logger.exception(
+                        "refresh_auth failed for %s", integration.display_name
+                    )
+                    ok = False
+                if ok:
+                    user_log(logger, "%s re-authenticated", integration.display_name)
+                else:
+                    logger.error(f"{integration.display_name} re-authentication failed")
+
+            # update_credentials treats a missing kwarg as "leave untouched"
+            # and an explicit None as "clear" - so a scoped refresh must only
+            # pass the integration that was actually refreshed.
+            kwargs: Dict[str, object] = {}
+            if platform is None or platform == PLATFORM_YOUTUBE_MUSIC:
+                yt = self.integrations.get(PLATFORM_YOUTUBE_MUSIC)
+                if isinstance(yt, YouTubeMusicIntegration):
+                    kwargs["yt_client"] = yt.yt_client
+            if platform is None or platform == PLATFORM_SPOTIFY:
+                sp = self.integrations.get(PLATFORM_SPOTIFY)
+                if isinstance(sp, SpotifyIntegration):
+                    kwargs["spotify_integration"] = sp
+
+            def _apply() -> None:
+                self.main_window.kc.update_credentials(**kwargs)
+                if on_done is not None:
+                    try:
+                        on_done()
+                    except Exception:
+                        logger.exception(
+                            "on_done callback failed after auth refresh"
+                        )
+
+            try:
+                self.root.after(0, _apply)
+            except Exception:
+                # The app quit while the refresh was in flight - the new
+                # credentials are picked up on the next launch.
+                logger.debug(
+                    "Refresh finished after the window closed - it applies "
+                    "on the next launch"
+                )
+
+        threading.Thread(target=_refresh_worker, daemon=True).start()
 
     def _check_updates(self):
         def on_result(
@@ -155,12 +213,26 @@ class App:
         ):
             if available:
                 user_log(logger, "Update v%s available at %s", latest_version, download_url)
-                self.root.after(
-                    0, show_update_dialog, self.root, latest_version, download_url, body
-                )
+                try:
+                    self.root.after(
+                        0, show_update_dialog, self.root, latest_version, download_url, body
+                    )
+                except Exception:
+                    # Check finished before mainloop() started, or the app
+                    # quit while the request was in flight.  Best-effort -
+                    # the updater thread must never raise uncaught.
+                    logger.debug(
+                        "Update dialog not shown: %s",
+                        "mainloop not running or app shutting down",
+                    )
             elif error:
                 logger.warning(error)
-                self.root.after(0, messagebox.showwarning, "Update Check Failed", error)
+                try:
+                    self.root.after(0, messagebox.showwarning, "Update Check Failed", error)
+                except Exception:
+                    logger.debug(
+                        "Update warning not shown: mainloop not running or app shutting down"
+                    )
 
         updater.check(on_result)
 
@@ -177,10 +249,24 @@ class App:
             user_log(logger, "Tray unavailable - hide-to-tray disabled")
             self.main_window.tray_service = None
             return
+
+        def _tray_after(fn) -> None:
+            """Marshal a tray callback to the main thread.
+
+            Tray callbacks fire on the tray backend thread; ``after``
+            raises if the root is already destroyed (quit raced a
+            last-second tray click) and the exception would otherwise
+            surface in the backend's thread.
+            """
+            try:
+                self.root.after(0, fn)
+            except Exception:
+                logger.debug("App is shutting down; dropped tray callback")
+
         try:
             tray.start(
-                on_open=lambda: self.root.after(0, self.main_window.show_from_tray),
-                on_quit=lambda: self.root.after(0, self.ac.quit_app),
+                on_open=lambda: _tray_after(self.main_window.show_from_tray),
+                on_quit=lambda: _tray_after(self.ac.quit_app),
             )
         except Exception:
             # Best-effort feature - a backend quirk must not kill the app.
@@ -194,7 +280,18 @@ class App:
         logger.info("Starting app")
         try:
             self.main_window.setup()
+            # setup() restores playlist frames, and auto-resize may have
+            # grown the window past the 650x460 geometry that __init__
+            # centered - re-center now that the initial size has settled.
+            if get_setting("center_windows", True):
+                center_window(self.root)
             self._start_tray()
+            # Kick off the update check here, immediately before the
+            # mainloop starts: launched from __init__, a fast network could
+            # complete the check before mainloop() ran, and the marshaled
+            # root.after(0, ...) would raise "main thread is not in main
+            # loop" - dropping the update dialog on the fastest startups.
+            self._check_updates()
             self.root.mainloop()
         except Exception:
             logger.exception("Unhandled exception")

@@ -5,11 +5,10 @@ Separated from the keybind controller so the mapping functions can be
 tested and reused independently of the pynput listener loop.
 """
 
-from configparser import ConfigParser
 from typing import Optional, Set
 
 from pynput import keyboard
-from utils.config import ensure_settings_file, SETTINGS_PATH
+from utils.config import get_setting
 
 # -- pynput key → normalised name -------------------------------------------------
 _KEY_MAP = {
@@ -91,10 +90,4 @@ def parse_hotkey(hotkey_str: str) -> Set[str]:
 
 def read_global_listener_setting() -> bool:
     """Read the ``global_listener`` boolean from settings.ini (default: True)."""
-    ensure_settings_file()
-    cfg = ConfigParser()
-    try:
-        cfg.read(str(SETTINGS_PATH))
-        return cfg.getboolean("global_listener", "is_true", fallback=True)
-    except Exception:
-        return True
+    return get_setting("global_listener", True)

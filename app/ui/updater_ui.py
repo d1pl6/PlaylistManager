@@ -75,6 +75,10 @@ def show_update_dialog(parent, latest_version, download_url, body):
     btn_frame = tk.Frame(frame, background=theme_frame_bg)
     btn_frame.pack(fill="x")
 
+    def _download():
+        if webbrowser.open(download_url):
+            win.destroy()
+
     tk.Button(
         btn_frame,
         text="Download",
@@ -86,7 +90,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
         relief="flat",
         cursor="hand2",
         padx=16,
-        command=lambda: (webbrowser.open(download_url), win.destroy()),
+        command=_download,
     ).pack(side="right", padx=(8, 0))
 
     tk.Button(

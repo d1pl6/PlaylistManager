@@ -13,7 +13,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 
 import requests
 from platformdirs import user_config_dir
@@ -41,6 +41,10 @@ def _ensure_auth_dir():
         _auth_dir_created = True
 
 
+# Serialises writes to SPOTIFY_AUTH_FILE across threads and API instances.
+_creds_write_lock = threading.Lock()
+
+
 def save_spotify_credentials_file(
     client_id: str, client_secret: str, refresh_token: str
 ) -> None:
@@ -50,6 +54,13 @@ def save_spotify_credentials_file(
     (via :mod:`services.auth_setup`) and by the token-refresh path in
     :class:`SpotifyAPI`.
 
+    Writes are serialised by a module-level lock and performed atomically
+    (temp file + ``os.replace``).  Several writers can run concurrently
+    (a refresh rotation from a flow thread racing a login-UI save or a
+    temporary :class:`SpotifyAPI` instance), and interleaved
+    ``open(..., O_TRUNC)`` + ``write`` calls from two threads would
+    corrupt the file - silently bricking auth at the next startup.
+
     Raises ``OSError`` on write failure.
     """
     _ensure_auth_dir()
@@ -58,13 +69,20 @@ def save_spotify_credentials_file(
         "client_secret": client_secret,
         "refresh_token": refresh_token,
     }
-    fd = os.open(
-        str(SPOTIFY_AUTH_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
-    )
-    try:
-        os.write(fd, json.dumps(creds, indent=2).encode("utf-8"))
-    finally:
-        os.close(fd)
+    payload = json.dumps(creds, indent=2).encode("utf-8")
+    # Co-locate the temp file with the target so os.replace() is a
+    # same-filesystem rename (atomic); a temp in another directory could
+    # cross filesystems and fail with EXDEV.
+    tmp_path = SPOTIFY_AUTH_FILE.with_name(SPOTIFY_AUTH_FILE.name + ".tmp")
+    with _creds_write_lock:
+        fd = os.open(
+            str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+        )
+        try:
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+        os.replace(tmp_path, SPOTIFY_AUTH_FILE)
 
 
 class SpotifyAPI:
@@ -243,6 +261,15 @@ class SpotifyAPI:
         if not data or not data.get("item"):
             return None
         track = data["item"]
+        if track.get("type") != "track":
+            # Episodes/audiobooks carry an id but no spotify:track: URI -
+            # returning it would make the caller build "spotify:track:<episode_id>"
+            # which the API always rejects.  Treat as nothing playable.
+            logger.info(
+                "Currently playing item is not a track (%s); ignoring",
+                track.get("type"),
+            )
+            return None
         images = track.get("album", {}).get("images", [])
         return {
             "track_id": track["id"],
@@ -300,19 +327,24 @@ class SpotifyAuthManager:
     @staticmethod
     def verify_credentials(
         client_id: str, client_secret: str, refresh_token: str
-    ) -> Optional[Dict]:
+    ) -> Tuple[Optional[Dict], Optional["SpotifyAPI"]]:
         """Validate credentials against the Spotify API.
 
         Creates a temporary :class:`SpotifyAPI` client and calls ``/v1/me``
         so the caller doesn't have to construct the API wrapper itself.
-        Returns the parsed response dict, or None if the request failed.
+        Returns ``(me, api)``: the parsed response dict (or None if the
+        request failed) together with the client that performed the check.
+        The client carries the post-check state - most importantly
+        ``api.refresh_token``, which Spotify may have rotated during the
+        verification round trip - so callers can persist the *final* token
+        instead of the (possibly already-revoked) one they entered.
         """
         api = SpotifyAPI(
             client_id=client_id,
             client_secret=client_secret,
             refresh_token=refresh_token,
         )
-        return api.get_me()
+        return api.get_me(), api
 
     def is_authenticated(self) -> bool:
         return self.api is not None

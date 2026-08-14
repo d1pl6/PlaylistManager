@@ -1,6 +1,7 @@
 import sqlite3
 import logging
 import threading
+import weakref
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -13,14 +14,21 @@ logger = logging.getLogger(__name__)
 class DatabaseManager:
     """Manages SQLite connections for per-playlist databases.
 
-    Connections are cached per-thread via ``threading.local()`` so that
-    repeated ``get_connection()`` calls within the same thread (e.g.
-    during bulk import) reuse the same connection instead of opening a
-    new one each time.  Connections are closed automatically when the
-    thread exits or when :meth:`close_thread_connections` is called.
+    Connections are cached per thread (keyed by thread id) so repeated
+    ``get_connection()`` calls within the same thread - e.g. during bulk
+    import or a keybind flow - reuse one connection instead of opening a
+    new one each time.  The cache is a class-level registry guarded by a
+    lock, which lets :meth:`delete_playlist_db` drop every thread's
+    cached handle for a database before unlinking its files: a
+    connection held by another thread (a keybind flow thread, a reload
+    worker) would otherwise be handed out again on the next
+    ``get_connection`` and recreate the deleted files.  Entries whose
+    owning thread has exited are pruned lazily.
     """
 
-    _tls = threading.local()
+    _connections_lock = threading.Lock()
+    # key: (thread_id, playlist_name, platform) -> (thread_weakref, conn)
+    _connections: dict = {}
 
     @staticmethod
     def _get_db_directory(platform: str) -> Path:
@@ -36,29 +44,66 @@ class DatabaseManager:
         return db_dir / f"{safe_name}.db"
 
     @staticmethod
+    def _prune_dead_connections() -> None:
+        """Drop cache entries whose owning thread has exited.
+
+        The connection is NOT closed here - CPython's sqlite3 forbids
+        closing a connection from any thread other than the one that
+        created it.  Dropping the last registry reference lets the
+        connection be garbage-collected (and closed) once the owning
+        thread is gone.
+        """
+        dead = [
+            key
+            for key, (thread_ref, _conn) in DatabaseManager._connections.items()
+            if thread_ref() is None
+        ]
+        for key in dead:
+            del DatabaseManager._connections[key]
+
+    @staticmethod
+    def _close_connection(cache_key: tuple, conn: sqlite3.Connection) -> None:
+        """Close a connection owned by the CALLING thread.
+
+        Only used from :meth:`close_thread_connections` - sqlite3 raises
+        ProgrammingError when close() runs on a different thread than
+        connect().
+        """
+        try:
+            conn.close()
+            logger.debug("Closed cached connection: %s", cache_key)
+        except sqlite3.Error as e:
+            logger.error("Error closing cached connection %s: %s", cache_key, e)
+
+    @staticmethod
     def delete_playlist_db(playlist_name: str, platform: str) -> None:
         """Delete a playlist database and its WAL sidecar files.
 
         Removes ``<name>.db`` together with ``<name>.db-wal`` and
         ``<name>.db-shm``, which SQLite leaves behind when a connection
-        is still (or was recently) open in WAL mode.  Any connection
-        cached for this database in the current thread is closed first
-        so it cannot recreate the files.  Errors are logged and ignored
-        so callers can treat this as best-effort cleanup.
+        is still (or was recently) open in WAL mode.  Every thread's
+        cached connection for this database is dropped from the registry
+        first - not just the calling thread's - so a flow thread or
+        reload worker that still holds a handle can neither recreate the
+        files on a later ``get_connection`` nor keep the inode alive
+        beyond its own lifetime (each owner closes its own handle when
+        its ``with`` block exits).  Errors are logged and ignored so
+        callers can treat this as best-effort cleanup.
         """
         db_path = DatabaseManager.get_playlist_db_path_static(
             playlist_name, platform
         )
 
-        connections = DatabaseManager._get_thread_connections()
-        cached = connections.pop(f"{playlist_name}:{platform}", None)
-        if cached is not None:
-            try:
-                cached.close()
-            except sqlite3.Error as e:
-                logger.debug(
-                    "Error closing cached connection for %s: %s", playlist_name, e
-                )
+        with DatabaseManager._connections_lock:
+            DatabaseManager._prune_dead_connections()
+            for key in [
+                key
+                for key in DatabaseManager._connections
+                if key[1] == playlist_name and key[2] == platform
+            ]:
+                # Drop without closing: the owning thread (still alive)
+                # closes it itself when it exits the `with` block.
+                del DatabaseManager._connections[key]
 
         for path in (db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
             try:
@@ -72,14 +117,23 @@ class DatabaseManager:
     def delete_platform_databases(platform: str) -> int:
         """Delete every playlist database for *platform*.
 
-        Closes the calling thread's cached connections first (they would
-        otherwise recreate the deleted files on the next write) then removes
-        every ``*.db``, ``*.db-wal`` and ``*.db-shm`` under ``db/<platform>/``
-        and rmdirs the platform directory when it is empty.  Best-effort:
-        per-file errors are logged and skipped.  Returns the number of files
-        removed.
+        Closes every thread's cached connections first (they would
+        otherwise recreate the deleted files on the next write) then
+        removes every ``*.db``, ``*.db-wal`` and ``*.db-shm`` under
+        ``db/<platform>/`` and rmdirs the platform directory when it is
+        empty.  Best-effort: per-file errors are logged and skipped.
+        Returns the number of files removed.
         """
-        DatabaseManager.close_thread_connections()
+        with DatabaseManager._connections_lock:
+            DatabaseManager._prune_dead_connections()
+            for key in [
+                key
+                for key in DatabaseManager._connections
+                if key[2] == platform
+            ]:
+                # Drop without closing - see delete_playlist_db.
+                del DatabaseManager._connections[key]
+
         db_dir = DatabaseManager._get_db_directory(platform)
         if not db_dir.is_dir():
             return 0
@@ -133,72 +187,82 @@ class DatabaseManager:
 
         The connection is opened once per (thread, playlist, platform)
         combination and reused for the lifetime of the thread.  Call
-        :meth:`close_thread_connections` to release resources.
+        :meth:`close_thread_connections` to release the calling thread's
+        connections, or :meth:`delete_playlist_db` to release every
+        thread's connection for one database.
         """
-        cache_key = f"{playlist_name}:{platform}"
-        connections = DatabaseManager._get_thread_connections()
-        conn = connections.get(cache_key)
-        if conn is None:
-            conn = self.get_db_connection(playlist_name, platform=platform)
-            connections[cache_key] = conn
+        cache_key = (threading.get_ident(), playlist_name, platform)
+        current_thread = threading.current_thread()
+        with DatabaseManager._connections_lock:
+            DatabaseManager._prune_dead_connections()
+            entry = DatabaseManager._connections.get(cache_key)
+            if entry is not None and entry[0]() is current_thread:
+                conn = entry[1]
+            else:
+                if entry is not None:
+                    # Stale entry: the owning thread has exited but its
+                    # Thread object is still referenced somewhere (so
+                    # _prune_dead_connections kept it), and this thread
+                    # now reuses the same OS thread id.  Handing out that
+                    # connection would raise ProgrammingError on first
+                    # use - drop it instead; the connection is finalized
+                    # with the entry.
+                    del DatabaseManager._connections[cache_key]
+                conn = self.get_db_connection(playlist_name, platform=platform)
+                DatabaseManager._connections[cache_key] = (
+                    weakref.ref(current_thread),
+                    conn,
+                )
         yield conn
 
     def _init_playlist_database(self, conn: sqlite3.Connection) -> None:
-        """Initialize the database schema if it doesn't exist."""
+        """Initialize the database schema if it doesn't exist.
+
+        Uses ``IF NOT EXISTS`` so concurrent threads opening the same
+        brand-new database (e.g. a keybind flow thread racing a reload
+        worker) cannot fail on a duplicate CREATE.
+        """
         try:
             cursor = conn.cursor()
-
-            # Check if songs table exists
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS songs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    artists TEXT NOT NULL,
+                    duration INTEGER,
+                    track_id TEXT UNIQUE NOT NULL,
+                    thumbnail_url TEXT,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='songs'"
+                "CREATE INDEX IF NOT EXISTS idx_track_id ON songs(track_id)"
             )
-
-            if cursor.fetchone() is None:
-                # Create songs table
-                cursor.execute("""
-                    CREATE TABLE songs (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        title TEXT NOT NULL,
-                        artists TEXT NOT NULL,
-                        duration INTEGER,
-                        track_id TEXT UNIQUE NOT NULL,
-                        thumbnail_url TEXT,
-                        added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                """)
-
-                # Create index on track_id for faster lookups
-                cursor.execute("CREATE INDEX idx_track_id ON songs(track_id)")
-
-                conn.commit()
-                logger.debug("Initialized new playlist database schema")
-            else:
-                logger.debug("Database schema already exists")
-
+            conn.commit()
+            logger.debug("Initialized playlist database schema")
         except sqlite3.Error as e:
             logger.error(f"Failed to initialize database schema: {e}")
             raise
 
     @staticmethod
-    def _get_thread_connections() -> dict:
-        """Get the current thread's connection cache dict."""
-        if not hasattr(DatabaseManager._tls, "_db_connections"):
-            DatabaseManager._tls._db_connections = {}
-        return DatabaseManager._tls._db_connections
-
-    @staticmethod
     def close_thread_connections() -> None:
         """Close all cached connections for the calling thread."""
-        connections = getattr(DatabaseManager._tls, "_db_connections", None)
-        if connections is None:
-            return
-        for cache_key, conn in list(connections.items()):
-            try:
-                conn.close()
-                logger.debug("Closed cached connection: %s", cache_key)
-            except sqlite3.Error as e:
-                logger.error("Error closing cached connection %s: %s", cache_key, e)
-        DatabaseManager._tls._db_connections = {}
+        thread_id = threading.get_ident()
+        current_thread = threading.current_thread()
+        with DatabaseManager._connections_lock:
+            DatabaseManager._prune_dead_connections()
+            for key in [
+                key
+                for key in DatabaseManager._connections
+                if key[0] == thread_id
+                # Ownership is thread *identity*, not just id: a dead
+                # thread whose Thread object is still referenced can have
+                # its id reused, and closing its connection from here
+                # would raise ProgrammingError (see get_connection).
+                and DatabaseManager._connections[key][0]() is current_thread
+            ]:
+                conn = DatabaseManager._connections.pop(key)[1]
+                DatabaseManager._close_connection(key, conn)
 
 
 def _set_pragmas(conn: sqlite3.Connection) -> None:
@@ -208,11 +272,19 @@ def _set_pragmas(conn: sqlite3.Connection) -> None:
     is more resilient on removable filesystems (exFAT).  synchronous=NORMAL
     paired with WAL gives a good safety/performance balance.
 
+    busy_timeout is per-connection, so it must be set on every connection:
+    without it sqlite falls back to its 5s default and a keybind flow that
+    collides with a reload's write lock raises "database is locked" after
+    5s - an error that would also poison the thread-cached connection (see
+    song_manager's rollback-on-error).  30s is comfortably longer than a
+    bulk re-import holds the write lock.
+
     These are safe to call on every connection - WAL mode is persistent
     in the database file so the second call is a no-op.
     """
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
     except sqlite3.Error as e:
         logger.warning("Failed to set database pragmas: %s", e)

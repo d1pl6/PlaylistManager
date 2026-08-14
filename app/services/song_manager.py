@@ -216,6 +216,7 @@ class SongManager:
         Returns:
             Number of songs actually inserted (skips duplicates)
         """
+        conn = None
         try:
             with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
                 cursor = conn.cursor()
@@ -253,6 +254,17 @@ class SongManager:
                 return inserted
 
         except sqlite3.Error as e:
+            # Roll back the implicit transaction: a statement that fails
+            # mid-execution leaves it OPEN on the thread-cached connection,
+            # which would silently swallow later adds (add_song_by_info's
+            # own_tx guard would then skip its commit and the row would be
+            # lost when the thread exits).  conn is None only when the
+            # connection itself failed to open - nothing to roll back.
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    pass
             logger.error("Failed bulk insert (%s) into %s: %s", platform, playlist_name, e)
             raise
 
@@ -416,6 +428,7 @@ class SongManager:
         Raises:
             sqlite3.Error: If database operation fails
         """
+        conn = None
         try:
             with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
                 cursor = conn.cursor()
@@ -454,6 +467,13 @@ class SongManager:
                 return song_id
 
         except sqlite3.Error as e:
+            # Roll back the implicit transaction - see _add_songs_bulk.
+            # conn is None only when the connection failed to open.
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    pass
             logger.error("Failed to add song to %s: %s", playlist_name, e)
             raise
 

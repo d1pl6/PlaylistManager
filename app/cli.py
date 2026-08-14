@@ -36,7 +36,7 @@ from constants import (
     PLATFORM_SPOTIFY,
     PLATFORM_YOUTUBE_MUSIC,
 )
-from integrations.music_youtube.music_youtube_receiver import URLReceiverManager
+from integrations.music_youtube.music_youtube_receiver import URLReceiverManager, extract_video_id
 from services import auth_setup
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
@@ -78,15 +78,13 @@ def _parse_token(token: str, allow_urls: bool = False) -> Tuple[str, object]:
         if start > end:
             raise UsageError(f"Invalid range '{token}': start is greater than end")
         return "range", (start, end)
-    if allow_urls and (
-        token.startswith("http://")
-        or token.startswith("https://")
-        or token.startswith("spotify:")
-    ):
-        try:
-            return "url", parse_playlist_url(token)
-        except ValueError as e:
-            raise UsageError(str(e))
+    if allow_urls:
+        lowered = token.lower()
+        if lowered.startswith(("http://", "https://", "spotify:")):
+            try:
+                return "url", parse_playlist_url(token)
+            except ValueError as e:
+                raise UsageError(str(e))
     return "name", token
 
 
@@ -352,7 +350,8 @@ def run_add(spec: str) -> int:
                 ok, message = False, f"Error: {yt_error or 'Timeout: no URL received'}"
             else:
                 ok, message = _run_flow(
-                    keybind_flow, name, url=yt_url, song_data=yt_song_data
+                    keybind_flow, name, url=yt_url, song_data=yt_song_data,
+                    playlist_id=entry.get("playlist_id") or None,
                 )
         elif platform == PLATFORM_SPOTIFY:
             if sp_flow is None:
@@ -360,7 +359,10 @@ def run_add(spec: str) -> int:
                     "Error: Spotify is not configured — run the GUI auth setup first"
                 )
             else:
-                ok, message = _run_flow(sp_flow, name)
+                ok, message = _run_flow(
+                    sp_flow, name,
+                    playlist_id=entry.get("playlist_id") or None,
+                )
         else:
             ok, message = False, f"Error: unsupported platform '{platform}'"
 
@@ -537,9 +539,12 @@ def run_login(
     when no terminal emulator is installed).
 
     spotify: requires ``--client-id`` / ``--client-secret`` /
-    ``--refresh-token``.  The file is written first, then verified
-    against ``/v1/me`` - on verify failure the just-written file is
-    rolled back and an error is shown (cli.md 15.12.4).
+    ``--refresh-token``.  Credentials are verified against ``/v1/me``
+    FIRST and only persisted on success (the verify itself writes the
+    refreshed - possibly rotated - refresh token through the canonical
+    writer).  A typo'd login can no longer overwrite and then destroy
+    previously working auth, matching the GUI's save_and_verify ordering
+    (auth_setup.save_and_verify_spotify_credentials).
     """
     if platform not in KNOWN_PLATFORMS:
         print(
@@ -586,21 +591,20 @@ def run_login(
         )
         return 2
 
-    auth_setup.save_spotify_credentials(client_id, client_secret, refresh_token)
-    result = auth_setup.verify_spotify_credentials(
+    # Verify FIRST, persist only on success - see the docstring.  The
+    # failed-login rollback (delete_spotify_credentials) is gone because
+    # nothing was ever written; previously valid credentials survive a
+    # typo intact.
+    result = auth_setup.save_and_verify_spotify_credentials(
         client_id, client_secret, refresh_token
     )
     if result.get("ok"):
         print(f"spotify: logged in as {result.get('display_name')}", flush=True)
         return 0
 
-    try:
-        auth_setup.delete_spotify_credentials()
-    except OSError as e:
-        logger.warning("Failed to roll back spotify.json after failed verify: %s", e)
     print(
         f"error: spotify login failed: {result.get('error')} "
-        "(credentials rolled back)",
+        "(existing credentials left untouched)",
         file=sys.stderr,
     )
     return 1
@@ -683,7 +687,7 @@ def _capture_yt_song(
         except Exception:
             pass
 
-    video_id = URLReceiverManager._extract_video_id(url)
+    video_id = extract_video_id(url)
     if video_id is None:
         logger.error(f"Could not extract a video ID from '{url}'")
         return None, None, "could not extract a video ID from the received URL"
@@ -695,7 +699,9 @@ def _capture_yt_song(
     return url, song_data, ""
 
 
-def _run_flow(flow, playlist_name: str, url=None, song_data=None) -> Tuple[bool, str]:
+def _run_flow(
+    flow, playlist_name: str, url=None, song_data=None, playlist_id=None
+) -> Tuple[bool, str]:
     """Run one add-flow; returns (ok, message) — message is the line tail."""
     outcome = {"ok": None, "message": ""}
 
@@ -718,6 +724,7 @@ def _run_flow(flow, playlist_name: str, url=None, song_data=None) -> Tuple[bool,
             on_success,
             url=url,
             song_data=song_data,
+            playlist_id=playlist_id,
         )
     except Exception as e:
         logger.error(f"Flow failed for '{playlist_name}': {e}", exc_info=True)

@@ -4,7 +4,6 @@ from configparser import ConfigParser
 
 from utils.config import (
     ensure_theme_file,
-    get_theme_value,
     set_theme_value,
     apply_theme_preset,
     restore_theme_defaults,
@@ -32,6 +31,16 @@ def show_theme_dialog(parent, on_theme_change=None):
     win.transient(parent)
     win.grab_set()
     win.minsize(350, 400)
+
+    # Restore the Settings dialog's grab when this Toplevel closes - the
+    # theme picker steals the grab at open, and destroying it otherwise
+    # releases the grab globally, leaving Settings non-modal.
+    def _on_close() -> None:
+        win.destroy()
+        if parent.winfo_exists():
+            parent.grab_set()
+
+    win.protocol("WM_DELETE_WINDOW", _on_close)
 
     tk.Label(
         win,
@@ -71,10 +80,11 @@ def show_theme_dialog(parent, on_theme_change=None):
     theme_cfg = ConfigParser()
     theme_cfg.read(str(THEME_PATH))
 
-    def _choose_color(section, option, button):
-        current = theme_cfg.get(
-            section, option, fallback=get_theme_value(section, option, "#000000")
-        )
+    def _choose_color(section, option, default, button):
+        # theme_cfg is loaded after ensure_theme_file(), so every
+        # DEFAULT_THEME option is guaranteed present - the fallback only
+        # guards against a hand-edited file.
+        current = theme_cfg.get(section, option, fallback=default)
         _, color = colorchooser.askcolor(color=current, parent=win)
         if color:
             if section not in theme_cfg:
@@ -84,6 +94,24 @@ def show_theme_dialog(parent, on_theme_change=None):
             button.config(background=color)
             if callable(on_theme_change):
                 on_theme_change()
+
+    color_buttons: list = []
+
+    def _luminance(hex_color: str) -> float:
+        """Relative luminance (0..1) of a #RRGGBB color; dark-assumption fallback."""
+        h = hex_color.lstrip("#")
+        if len(h) != 6:
+            return 0.0  # named color: assume dark, use white text
+        r, g, b = (int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    def _style_button(btn, value) -> None:
+        """Apply a color to a swatch button (bg + readable fg)."""
+        btn.config(
+            background=value,
+            activebackground=value,
+            foreground="#000000" if _luminance(value) >= 0.6 else "#ffffff",
+        )
 
     def _create_theme_button(label_text, section, option, default):
         frame = tk.Frame(inner, background=win_bg)
@@ -103,22 +131,28 @@ def show_theme_dialog(parent, on_theme_change=None):
         btn = tk.Button(
             frame,
             text="Change",
-            command=lambda: _choose_color(section, option, btn),
-            background=value,
-            activebackground=value,
-            foreground="#ffffff" if value.lower() != "#ffffff" else "#000000",
+            command=lambda: _choose_color(section, option, default, btn),
             bd=0,
         )
+        _style_button(btn, value)
         btn.pack(side="right", padx=4)
+        color_buttons.append((section, option, default, btn))
         return btn
 
     def _apply_preset(preset):
         apply_theme_preset(preset)
         theme_cfg.read(str(THEME_PATH))
+        _refresh_buttons()
 
     def _restore_defaults():
         restore_theme_defaults()
         theme_cfg.read(str(THEME_PATH))
+        _refresh_buttons()
+
+    def _refresh_buttons() -> None:
+        """Sync the swatch buttons after a preset or defaults restore."""
+        for section, option, default, btn in color_buttons:
+            _style_button(btn, theme_cfg.get(section, option, fallback=default))
 
     _create_theme_button("Root background", "root_background", "background", "#1A1A1A")
     _create_theme_button("Frame header background", "frame_header", "background", "#101010")

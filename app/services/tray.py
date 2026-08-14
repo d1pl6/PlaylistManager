@@ -59,6 +59,8 @@ def _is_gtk_backend() -> bool:
     (win32, xorg, darwin) start their own event loop in
     ``run_detached()`` and must keep using it.
     """
+    if not _PYSTRAY_OK:
+        return False
     return "pystray._appindicator" in pystray.Icon.__module__ or "pystray._gtk" in pystray.Icon.__module__
 
 
@@ -144,7 +146,7 @@ class TrayService:
                 default=_has_default_action(),
             )
         )
-        if pystray.Icon.HAS_MENU:
+        if getattr(pystray.Icon, "HAS_MENU", False):
             items.append(_MenuItem("Quit", lambda icon, item: on_quit()))
         # The Open item is always present, so the menu is never empty.
         self._icon.menu = _Menu(*items)

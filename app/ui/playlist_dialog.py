@@ -123,6 +123,11 @@ class PlaylistDialog:
         scrollable_frame.bind("<MouseWheel>", self._on_mouse_wheel)
         scrollable_frame.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
         scrollable_frame.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
+        # Also scroll when the wheel is over the bare canvas (a short list
+        # doesn't cover the full scroll area).
+        self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
+        self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
+        self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
         for child in scrollable_frame.winfo_children():
             child.bind("<MouseWheel>", self._on_mouse_wheel)
             child.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
@@ -133,7 +138,10 @@ class PlaylistDialog:
         def _run() -> None:
             img = ThumbnailService.fetch_image(thumb_url, size=(40, 40))
             if img is not None:
-                self.parent.after(0, lambda: self._apply_thumb(button, img))
+                try:
+                    self.parent.after(0, lambda: self._apply_thumb(button, img))
+                except Exception:
+                    logger.debug("Dialog closed during thumbnail download", exc_info=True)
 
         threading.Thread(target=_run, daemon=True).start()
 

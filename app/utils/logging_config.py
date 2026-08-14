@@ -38,6 +38,11 @@ def user_log(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
     Use for auth results, credential locations and similar lines the user
     should see even without --debug.  Everything else belongs at INFO or
     below so it stays hidden in normal runs.
+
+    Prefer ``%``-style arguments (``user_log(logger, "%s ready", name)``)
+    over pre-built f-strings: the formatting is skipped entirely when the
+    level is disabled, while an f-string is built at the call site no
+    matter what.
     """
     logger.log(USER_LEVEL, msg, *args, **kwargs)
 
@@ -46,6 +51,9 @@ def trace_log(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
     """Emit an ultra-verbose line (only shown with --trace).
 
     Use for payload dumps and other output too noisy even for DEBUG.
+    Must be called with ``%``-style arguments (``trace_log(logger,
+    "Song data: %s", song_data)``) - f-strings are evaluated at the call
+    site even when TRACE is disabled, defeating the point of the level.
     """
     logger.log(TRACE_LEVEL, msg, *args, **kwargs)
 

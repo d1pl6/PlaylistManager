@@ -12,6 +12,7 @@ import time
 import threading
 import logging
 from pathlib import Path
+from typing import Callable, Optional
 
 from constants import PLATFORM_YOUTUBE_MUSIC
 
@@ -186,7 +187,9 @@ class PlaylistStore:
             PlaylistStore._write(playlists)
 
     @staticmethod
-    def update_thumbnail(name: str, platform: str, thumbnail_url: str):
+    def update_thumbnail(
+        name: str, platform: str, thumbnail_url: str, playlist_id: str = ""
+    ):
         """Update the thumbnail URL for a single playlist.
 
         Matches by ``(platform, playlist_id)`` when available, falling back
@@ -194,21 +197,33 @@ class PlaylistStore:
         """
         with _lock:
             playlists = PlaylistStore.load_playlists()
-            # We don't have playlist_id here, so match by (platform, name).
-            target = _find_by_key(playlists, platform=platform, name=name)
+            target = _find_by_key(
+                playlists, playlist_id=playlist_id, platform=platform, name=name
+            )
             if target is not None:
                 target["thumbnail_url"] = thumbnail_url
                 PlaylistStore._write(playlists)
 
     @staticmethod
-    def update_keybind(name: str, platform: str, hotkey: str):
-        """Update the hotkey binding for a single playlist."""
+    def update_keybind(
+        name: str, platform: str, hotkey: str, playlist_id: str = ""
+    ):
+        """Update the hotkey binding for a single playlist.
+
+        *playlist_id* disambiguates playlists that share *name* on the same
+        platform; without it the first name match wins, which can persist a
+        hotkey to the wrong playlist.
+        """
         with _lock:
             playlists = PlaylistStore.load_playlists()
-            target = _find_by_key(playlists, platform=platform, name=name)
-            if target is not None:
-                target["hotkey"] = hotkey
-                PlaylistStore._write(playlists)
+            target = _find_by_key(
+                playlists, playlist_id=playlist_id, platform=platform, name=name
+            )
+            if target is None:
+                return False
+            target["hotkey"] = hotkey
+            PlaylistStore._write(playlists)
+            return True
 
     @staticmethod
     def delete_playlist(name: str, platform: str, playlist_id: str = ""):
@@ -262,7 +277,7 @@ class PlaylistStore:
 
     @staticmethod
     def migrate_schema(
-        lookup_playlist_id: "Callable[[str, str], str] | None" = None,
+        lookup_playlist_id: Optional[Callable[[str, str], str]] = None,
     ):
         """Backfill missing *playlist_id* values for legacy entries.
 

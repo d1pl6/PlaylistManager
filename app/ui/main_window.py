@@ -8,7 +8,6 @@ controllers and services.
 import logging
 import threading
 import tkinter as tk
-from configparser import ConfigParser
 from pathlib import Path
 from tkinter import ttk, messagebox
 
@@ -24,10 +23,7 @@ from ui.login_ui import show_login_dialog
 from ui.playlist_dialog import PlaylistDialog
 from ui.settings_ui import show_settings_dialog
 from utils.window import center_window, resize_window
-from utils.config import (
-    ensure_settings_file,
-    SETTINGS_PATH as _settings_path,
-)
+from utils.config import get_setting
 from utils.theme import C, load_theme
 from utils.platform import is_wayland_session
 
@@ -66,7 +62,6 @@ class MainWindow:
         self.active_log_labels: dict[int, dict] = {}
         self.img_refs: list = []
         self.frame_img_refs: dict = {}
-        self._choose_open = False
         self._recording_frame_idx: int | None = None
 
         self._auto_resize_enabled = self._read_auto_resize_setting()
@@ -90,6 +85,7 @@ class MainWindow:
             on_add_playlist_frame=self._on_add_playlist_frame,
             on_dialog_cancel=self._on_dialog_cancel,
             on_show_error=self._show_integration_error,
+            on_refresh=self.ac.refresh_auth,
         )
 
         # ----- theme & layout ------------------------------------------
@@ -249,6 +245,7 @@ class MainWindow:
                 on_theme_change=self.apply_theme,
                 tray_available=self.tray_service,
                 on_tray_toggle=self.set_hide_to_tray,
+                on_auto_resize_toggle=self.set_auto_resize,
             ),
         )
 
@@ -268,8 +265,13 @@ class MainWindow:
     def _open_playlist_dialog(self) -> None:
         self._playlist_controller.open_playlist_dialog()
 
-    def _show_platform_picker(self, platforms, callback) -> None:
-        """Create a Toplevel to pick a platform."""
+    def _show_platform_picker(self, platforms, callback, on_cancel=None) -> None:
+        """Create a Toplevel to pick a platform.
+
+        ``on_cancel`` (the controller's cancel path) fires when the user
+        dismisses the picker without choosing, so the controller can
+        release its re-entrancy guard.
+        """
         win_bg = C["frame_main_bg"]
         label_fg = C["label_def_fg"]
         btn_bg = C["button_main_bg"]
@@ -280,12 +282,16 @@ class MainWindow:
         cancel_fg = C["button_head_fg"]
         cancel_a_bg = C["button_head_a_bg"]
 
+        def _do_cancel() -> None:
+            if on_cancel:
+                on_cancel()
+            win.destroy()
+
         win = tk.Toplevel(self.root)
         win.title("Choose Platform")
         win.configure(background=win_bg)
         win.transient(self.root)
-        center_window(win)
-        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", _do_cancel)
 
         tk.Label(
             win,
@@ -315,12 +321,16 @@ class MainWindow:
             foreground=cancel_fg,
             activebackground=cancel_a_bg,
             font="Noto, 10",
-            command=win.destroy,
+            command=_do_cancel,
         ).pack(pady=10)
+
+        # Center only after the widgets are packed - centering an empty
+        # Toplevel (1x1) and letting it grow produces an off-center dialog.
+        center_window(win)
+        win.grab_set()
 
     def _show_playlist_dialog(self, playlists, integration, on_select, on_cancel) -> None:
         """Create the playlist selection dialog."""
-        self._choose_open = True
         self.btn_add_playlist.configure(state="disabled", image=self.loading_img)
         self._hide_main_content()
 
@@ -338,7 +348,6 @@ class MainWindow:
 
     def _on_dialog_cancel(self) -> None:
         """Restore UI after playlist dialog is cancelled."""
-        self._choose_open = False
         self.btn_add_playlist.configure(state="normal", image=self.add_playlist_img)
         self._show_main_content()
 
@@ -359,7 +368,9 @@ class MainWindow:
             status_label.config(text="Sync", background=C["label_playlist_warn_bg"])
 
             if thumb_url:
-                self._set_playlist_cover(frame_idx, thumb_url)
+                cover_label = self.active_log_labels[frame_idx].get("cover")
+                if cover_label:
+                    self._set_playlist_cover(cover_label, thumb_url)
 
             self._import_playlist_tracks(playlist_name, platform, playlist_id, frame_idx)
 
@@ -367,43 +378,47 @@ class MainWindow:
     # Thumbnail management
     # ------------------------------------------------------------------
 
-    def _set_playlist_cover(self, frame_idx: int, thumb_url: str) -> None:
+    def _set_playlist_cover(self, cover_label: tk.Label, thumb_url: str) -> None:
         """Download a playlist thumbnail in a background thread.
 
         Only the download + resize run off-thread (thread-safe); the
         PhotoImage is created on the main thread by :meth:`_apply_cover`
         because tkinter is not thread-safe.
-        """
-        if frame_idx not in self.active_log_labels:
-            return
-        cover_label = self.active_log_labels[frame_idx].get("cover")
-        if not cover_label:
-            return
 
+        The cover *widget* is captured, not a frame index: after
+        close_main_frame() renumbers ``self.frames``/``active_log_labels``,
+        a captured index could silently resolve to a different frame (or
+        out of range).  A widget reference stays unambiguous - the apply
+        side just checks it still exists.
+        """
         def fetch() -> None:
             img = ThumbnailService.fetch_image(thumb_url, size=(64, 64))
             if img is not None:
-                self.root.after(0, lambda: self._apply_cover(frame_idx, img))
+                try:
+                    self.root.after(0, lambda: self._apply_cover(cover_label, img))
+                except Exception:
+                    logger.debug("Window closed during cover download", exc_info=True)
 
         threading.Thread(target=fetch, daemon=True).start()
 
-    def _apply_cover(self, frame_idx: int, img) -> None:
-        if frame_idx not in self.active_log_labels:
-            return
-        cover_label = self.active_log_labels[frame_idx].get("cover")
-        if not cover_label:
-            return
+    def _apply_cover(self, cover_label: tk.Label, img) -> None:
         try:
+            if not cover_label.winfo_exists():
+                return
             tk_img = ThumbnailService.to_photoimage(img)
         except Exception as e:
             logger.error(f"Failed to create cover PhotoImage: {e}")
             return
-        cover_label.configure(image=tk_img)
-        # Keep a reference so the PhotoImage isn't garbage-collected.
-        # Keyed by the widget itself (not id()) so the close path can
-        # release the refs reliably - id() values are reused after widget
-        # destruction and the old close-path check never matched.
-        self.frame_img_refs.setdefault(cover_label, []).append(tk_img)
+        try:
+            cover_label.configure(image=tk_img)
+        except tk.TclError:
+            # Widget destroyed between winfo_exists() and configure().
+            return
+        # Replace, not append: every reload otherwise piles a new
+        # PhotoImage reference onto the same label, leaking them for the
+        # life of the frame.  The label now displays the new image, so the
+        # old one can be released immediately.
+        self.frame_img_refs[cover_label] = [tk_img]
 
     # ------------------------------------------------------------------
     # Database / log label helpers
@@ -438,9 +453,18 @@ class MainWindow:
     ) -> None:
         """Start importing tracks in a background thread."""
         def on_done(name: str, count: int, status_text: str) -> None:
-            self.root.after(
-                0, self._on_import_done, name, count, status_text, frame_idx
-            )
+            try:
+                self.root.after(
+                    0, self._on_import_done, name, count, status_text, frame_idx
+                )
+            except Exception:
+                # App quit while the import ran - the after() call comes
+                # from the sync worker thread and fails against a
+                # destroyed root.  The result matters only for the UI.
+                logger.debug(
+                    "App is shutting down; dropped import-done update",
+                    exc_info=True,
+                )
 
         self._sync_service.import_tracks(
             playlist_name, platform, playlist_id, on_done
@@ -504,7 +528,9 @@ class MainWindow:
     ) -> None:
         frame_idx = self._on_import_done(playlist_name, count, status_text, frame_idx)
         if frame_idx is not None and thumb_url:
-            self._set_playlist_cover(frame_idx, thumb_url)
+            cover_label = self.active_log_labels[frame_idx].get("cover")
+            if cover_label:
+                self._set_playlist_cover(cover_label, thumb_url)
 
     # ------------------------------------------------------------------
     # Keybind setup (called once after __init__)
@@ -572,18 +598,24 @@ class MainWindow:
                         entry.config(state="normal")
                         entry.insert(0, hotkey)
                         entry.config(state="readonly")
-                        self.kc.register_hotkey(
+                        displaced = self.kc.register_hotkey(
                             name,
                             hotkey,
                             self._make_keybind_callbacks(i),
                             platform=platform,
                         )
+                        if displaced:
+                            # Self-heal stale stores: a displaced playlist's
+                            # persisted hotkey no longer fires anything.
+                            self._clear_displaced_keybind(displaced)
 
                     self._update_log_labels_from_db(i, name, platform)
 
                     thumb_url = playlist.get("thumbnail_url", "")
                     if thumb_url:
-                        self._set_playlist_cover(i, thumb_url)
+                        cover_label = self.active_log_labels[i].get("cover")
+                        if cover_label:
+                            self._set_playlist_cover(cover_label, thumb_url)
 
     # ------------------------------------------------------------------
     # Drag-to-move window
@@ -672,6 +704,16 @@ class MainWindow:
         """Live-apply the hide-to-tray setting (called from Settings)."""
         self._hide_to_tray = enabled
 
+    def set_auto_resize(self, enabled: bool) -> None:
+        """Live-apply the auto-resize setting (called from Settings).
+
+        The flag is read on every frame add/close, so without this
+        callback a Settings toggle would only take effect after restart.
+        """
+        self._auto_resize_enabled = enabled
+        if enabled:
+            self._auto_resize()
+
     def show_from_tray(self) -> None:
         """Restore/raise the main window (tray "Open app" + default click).
 
@@ -701,20 +743,14 @@ class MainWindow:
             col = i % 2
             row = (i // 2) + 1
 
-            main_bg = C["frame_main_bg"]
             frame_playlist_bg = C["frame_playlist_bg"]
             label_playlist_bg = C["label_playlist_bg"]
-            label_playlist_fg = C["label_playlist_fg"]
             label_playlist_name_bg = C["label_playlist_name_bg"]
             label_playlist_name_fg = C["label_playlist_name_fg"]
             label_playlist_log_bg = C["label_playlist_log_bg"]
             label_playlist_log_fg = C["label_playlist_log_fg"]
             label_playlist_good_bg = C["label_playlist_good_bg"]
             label_playlist_good_fg = C["label_playlist_good_fg"]
-            label_playlist_warn_bg = C["label_playlist_warn_bg"]
-            label_playlist_warn_fg = C["label_playlist_warn_fg"]
-            label_playlist_error_bg = C["label_playlist_error_bg"]
-            label_playlist_error_fg = C["label_playlist_error_fg"]
             button_playlist_bg = C["button_playlist_bg"]
             button_playlist_fg = C["button_playlist_fg"]
             button_playlist_a_bg = C["button_playlist_a_bg"]
@@ -722,10 +758,6 @@ class MainWindow:
             entry_playlist_bg = C["entry_playlist_bg"]
             entry_playlist_fg = C["entry_playlist_fg"]
             entry_playlist_ro_bg = C["entry_playlist_ro_bg"]
-            btn_close_bg = C["button_close_bg"]
-            btn_close_abg = C["button_close_a_bg"]
-            btn_close_fg = C["button_close_fg"]
-            btn_close_a_fg = C["button_close_a_fg"]
 
             main_frame = tk.Frame(self.root, width=320, background=frame_playlist_bg)
             main_header_frame = tk.Frame(main_frame, background=frame_playlist_bg)
@@ -935,24 +967,12 @@ class MainWindow:
     @staticmethod
     def _read_auto_resize_setting() -> bool:
         """Read the auto-resize setting once."""
-        try:
-            ensure_settings_file()
-            cfg = ConfigParser()
-            cfg.read(str(_settings_path))
-            return cfg.getboolean("auto_resize", "is_true", fallback=False)
-        except Exception:
-            return False
+        return get_setting("auto_resize", False)
 
     @staticmethod
     def _read_hide_to_tray_setting() -> bool:
         """Read the hide-to-tray setting once."""
-        try:
-            ensure_settings_file()
-            cfg = ConfigParser()
-            cfg.read(str(_settings_path))
-            return cfg.getboolean("hide_to_tray", "is_true", fallback=False)
-        except Exception:
-            return False
+        return get_setting("hide_to_tray", False)
 
     def _auto_resize(self) -> None:
         """Resize the window to fit playlist frames."""
@@ -975,6 +995,34 @@ class MainWindow:
     # ------------------------------------------------------------------
     # Keybind recording
     # ------------------------------------------------------------------
+
+    def _clear_displaced_keybind(self, displaced: dict) -> None:
+        """Clear a hotkey that was just taken over by another playlist.
+
+        Recording the same combo on playlist B silently displaces playlist
+        A's binding (``KeybindRegistry.register`` returns the displaced
+        info).  A's entry must stop showing the stolen combo and its
+        persisted keybind must be cleared - otherwise the app would
+        display a hotkey that fires B, and a restart would resurrect the
+        collision (leaving the combo bound to nothing once B's frame is
+        closed).
+        """
+        name = displaced.get("playlist_name")
+        platform = displaced.get("platform", PLATFORM_YOUTUBE_MUSIC)
+        if not name:
+            return
+        for i, label in enumerate(self.playlist_name_labels):
+            if label.cget("text") == name and self.frame_platforms[i] == platform:
+                entry = self.active_log_labels.get(i, {}).get("keybind_entry")
+                if entry is not None:
+                    try:
+                        entry.config(state="normal")
+                        entry.delete(0, tk.END)
+                        entry.config(state="readonly")
+                    except tk.TclError:
+                        pass
+                break
+        PlaylistStore.update_keybind(name, platform, "")
 
     def _start_recording(self, frame_idx: int) -> str:
         if frame_idx >= len(self.playlist_name_labels):
@@ -1054,12 +1102,14 @@ class MainWindow:
         if combo:
             entry.insert(0, combo)
             PlaylistStore.update_keybind(playlist_name, platform, combo)
-            self.kc.register_hotkey(
+            displaced = self.kc.register_hotkey(
                 playlist_name,
                 combo,
                 self._make_keybind_callbacks(frame_idx),
                 platform=platform,
             )
+            if displaced:
+                self._clear_displaced_keybind(displaced)
         else:
             PlaylistStore.update_keybind(playlist_name, platform, "")
             self.kc.unregister_hotkey(playlist_name, platform=platform)
@@ -1093,15 +1143,23 @@ class MainWindow:
         def on_done(
             name: str, count: int, status_text: str, thumb_url: str | None
         ) -> None:
-            self.root.after(
-                0,
-                self._on_reload_done,
-                name,
-                count,
-                status_text,
-                thumb_url,
-                frame_idx,
-            )
+            try:
+                self.root.after(
+                    0,
+                    self._on_reload_done,
+                    name,
+                    count,
+                    status_text,
+                    thumb_url,
+                    frame_idx,
+                )
+            except Exception:
+                # App quit while the reload ran - after() comes from the
+                # sync worker thread and fails against a destroyed root.
+                logger.debug(
+                    "App is shutting down; dropped reload-done update",
+                    exc_info=True,
+                )
         try:
             DatabaseManager.close_thread_connections()
         except Exception as e:

@@ -26,6 +26,15 @@ def resize_window(win: tk.Misc) -> None:
     children placed on grid rows >= 1 (playlists).  The header (row 0)
     is accounted for in height.  The resulting size respects the current
     ``minsize`` of the window.
+
+    When the window is mapped the new size is applied around its current
+    center, so growing the window for a new playlist row (or shrinking it
+    after a close) does not drift it down-right from a stale top-left
+    corner.  A manually dragged window is left where the user put it -
+    the center stays anchored.  Unmapped windows (e.g. the initial resize
+    during startup, before ``mainloop()`` maps the root) keep the old
+    position-preserving behaviour, since ``winfo_x()`` is meaningless
+    before mapping.
     """
     win.update_idletasks()
 
@@ -71,4 +80,11 @@ def resize_window(win: tk.Misc) -> None:
     except Exception:
         pass
 
-    win.geometry(f"{total_w}x{total_h}")
+    if win.winfo_ismapped():
+        # Anchor the current center so add/remove of frames doesn't drift
+        # the window down-right from its old top-left corner.
+        new_x = win.winfo_x() + (win.winfo_width() - total_w) // 2
+        new_y = win.winfo_y() + (win.winfo_height() - total_h) // 2
+        win.geometry(f"{total_w}x{total_h}+{new_x}+{new_y}")
+    else:
+        win.geometry(f"{total_w}x{total_h}")

@@ -9,6 +9,7 @@ Actual credential-file i/o, terminal launching, and API verification are
 delegated to :mod:`services.auth_setup` and :mod:`utils.platform`.
 """
 
+import json
 import logging
 import threading
 import tkinter as tk
@@ -17,8 +18,10 @@ from tkinter import messagebox
 from typing import Any, Optional, cast
 
 from services import auth_setup
+from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from utils.window import center_window
 from utils.theme import C
+from utils.logging_config import user_log
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +133,94 @@ def _on_youtube_music(parent, on_success):
             f"Then place the generated browser.json in:\n{result['auth_dir']}",
             parent=parent,
         )
+    if on_success:
+        # The YT handoff is asynchronous - poll until browser.json lands,
+        # then tell the app which platform's credentials changed so a
+        # scoped refresh doesn't re-verify (and possibly deauthenticate)
+        # Spotify.
+        _poll_for_browser_json(
+            parent, lambda: on_success(PLATFORM_YOUTUBE_MUSIC)
+        )
+
+
+def _browser_file_ready() -> bool:
+    """Whether a *complete, usable* browser.json exists.
+
+    The auth manager (``YouTubeAuthManager._find_browser_file``) accepts
+    the primary platformdirs path plus legacy fallback locations; the
+    poll must mirror that, or a fallback copy would never trigger the
+    refresh and the login would silently only apply on restart.
+
+    ``ytmusicapi browser`` writes the file with a plain ``open(path, "w")``
+    + ``json.dump``: the file *exists* from the moment the write truncates
+    it, before a single byte of JSON lands.  Firing the refresh on mere
+    existence builds the client from an empty or partial file - ``YTMusic``
+    raises ``JSONDecodeError``, the scoped refresh fails, and the poll
+    never fires again (``on_success`` is called exactly once), leaving
+    every YouTube feature broken until the app is restarted.  Requiring
+    valid JSON that actually carries the auth cookie/access token closes
+    that window.
+    """
+    try:
+        from integrations.music_youtube.music_youtube import (
+            BROWSER_FILE as YT_BROWSER_FILE,
+            BROWSER_FILE_FALLBACKS,
+        )
+    except Exception:
+        return _complete_browser_file(auth_setup.BROWSER_FILE)
+    return any(
+        _complete_browser_file(p) for p in [YT_BROWSER_FILE, *BROWSER_FILE_FALLBACKS]
+    )
+
+
+def _complete_browser_file(path: Path) -> bool:
+    """True when *path* is a browser.json that ``YTMusic`` can consume.
+
+    Valid JSON is not enough on its own - a headers file without the
+    auth cookie constructs an UNAUTHORIZED client whose every browse
+    fails.  The check mirrors ytmusicapi's own requirement (its setup
+    refuses to write a file without ``cookie``).
+    """
+    try:
+        if not path.exists():
+            return False
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return False
+        keys = {k.lower() for k in data}
+        return bool(keys & {"cookie", "access_token"})
+    except Exception:
+        return False
+
+
+def _poll_for_browser_json(parent, on_success, attempts: int = 0) -> None:
+    """Wait for browser.json and fire *on_success* once it appears.
+
+    The YT auth flow hands off to a terminal (``ytmusicapi browser``),
+    so the credential file can land any time after the terminal opens -
+    long after this callback returns.  Poll cheaply on the main thread
+    via ``after`` so ``refresh_auth`` picks the new credentials up
+    without an app restart.  Stops when the login dialog closes, or the
+    wait window (~5 min) expires.
+    """
+    try:
+        if not parent.winfo_exists():
+            return
+    except tk.TclError:
+        return
+
+    if _browser_file_ready():
+        on_success()
+        return
+
+    if attempts >= 150:
+        user_log(
+            logger,
+            "browser.json not detected yet - re-login will be picked up on restart",
+        )
+        return
+
+    parent.after(2000, lambda: _poll_for_browser_json(parent, on_success, attempts + 1))
 
 
 # ======================================================================
@@ -150,9 +241,6 @@ def _on_spotify(parent, on_success):
     label_fg = C["label_def_fg"]
     entry_bg = C["entry_default_bg"]
     entry_fg = C["entry_default_fg"]
-    btn_bg = C["button_main_bg"]
-    btn_abg = C["button_main_a_bg"]
-    btn_fg = C["button_main_fg"]
     button_close_bg = C["button_close_bg"]
     button_close_fg = C["button_close_fg"]
     button_close_a_bg = C["button_close_a_bg"]
@@ -251,7 +339,7 @@ def _on_spotify(parent, on_success):
                     foreground=C["label_playlist_good_fg"],
                 )
                 if on_success:
-                    on_success()
+                    on_success(PLATFORM_SPOTIFY)
             else:
                 status_label.config(text="No credentials file found", foreground="red")
         except Exception as e:
@@ -273,6 +361,14 @@ def _on_spotify(parent, on_success):
         threading.Thread(target=run, daemon=True).start()
 
     def _test_done(result):
+        # The dialog may have been closed while the verify thread ran -
+        # the scheduled after() callback then fires against destroyed
+        # widgets, so bail out before touching them.
+        try:
+            if not win.winfo_exists():
+                return
+        except tk.TclError:
+            return
         btn_test.config(state="normal")
         if result.get("ok"):
             status_label.config(
@@ -298,13 +394,19 @@ def _on_spotify(parent, on_success):
         threading.Thread(target=run, daemon=True).start()
 
     def _save_done(result):
+        try:
+            if not win.winfo_exists():
+                return
+        except tk.TclError:
+            return
         btn_save.config(state="normal")
         if result.get("ok"):
             status_label.config(
-                text=f"OK: {result['display_name']}", foreground=button_save_fg
+                text=f"OK: {result['display_name']}",
+                foreground=C["label_playlist_good_fg"],
             )
             if on_success:
-                on_success()
+                on_success(PLATFORM_SPOTIFY)
         else:
             status_label.config(text=result.get("error", "Error"), foreground="red")
 

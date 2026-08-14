@@ -5,28 +5,23 @@ from configparser import ConfigParser
 from ui.settings_theme_ui import show_theme_dialog
 from utils.config import (
     ensure_settings_file,
+    set_setting,
     SETTINGS_PATH as _settings_path,
 )
 from utils.theme import C
-from utils.window import center_window, resize_window
+from utils.window import center_window
 
 logger = logging.getLogger(__name__)
 
 
 def _toggle_setting(section, var):
-    ensure_settings_file()
-    cfg = ConfigParser()
-    cfg.read(str(_settings_path))
-    if section not in cfg:
-        # Only create the section if missing - don't wipe the other
-        # sections (a bare section assignment replaces them).
-        cfg[section] = {}
-    cfg[section]["is_true"] = "yes" if var.get() else "no"
-    with open(_settings_path, "w", encoding="utf-8") as f:
-        cfg.write(f)
+    try:
+        set_setting(section, bool(var.get()))
+    except Exception as e:
+        logger.error("Failed to write settings file: %s", e)
 
 
-def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, tray_available=None, on_tray_toggle=None):
+def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, tray_available=None, on_tray_toggle=None, on_auto_resize_toggle=None):
     """Show the settings dialog.
 
     Args:
@@ -39,10 +34,12 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
             checkbutton is disabled.
         on_tray_toggle: optional callback applied live with the new
             hide-to-tray state (bool) when the checkbox changes.
+        on_auto_resize_toggle: optional callback applied live with the
+            new auto-resize state (bool) when the checkbox changes -
+            without it the toggle only takes effect after a restart.
     """
     theme_win_bg = C["frame_main_bg"]
     theme_header_bg = C["frame_head_bg"]
-    theme_label_bg = C["label_def_bg"]
     theme_label_fg = C["label_def_fg"]
     theme_check_bg = C["checkbutton_bg"]
     theme_check_fg = C["checkbutton_fg"]
@@ -74,7 +71,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         global_var_value = 1 if cfg.getboolean("global_listener", "is_true", fallback=True) else 0
         tray_var_value = 1 if cfg.getboolean("hide_to_tray", "is_true", fallback=False) else 0
     except Exception as e:
-        logger.error("Error loading config, defaulting to yes: %s", e)
+        logger.error("Error loading settings, using defaults: %s", e)
         update_var_value = 1
         center_var_value = 1
         resize_var_value = 0
@@ -116,6 +113,11 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         variable=center_var,
     ).pack(fill="both")
 
+    def _on_auto_resize_toggle():
+        _toggle_setting("auto_resize", resize_var)
+        if on_auto_resize_toggle is not None:
+            on_auto_resize_toggle(resize_var.get() == 1)
+
     tk.Checkbutton(
         win,
         text="Auto-resize main window?",
@@ -125,10 +127,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         activebackground=theme_check_abg,
         activeforeground=theme_check_afg,
         font=("Noto", 10),
-        command=lambda: (
-            _toggle_setting("auto_resize", resize_var),
-            resize_var.get() and resize_window(parent)
-        ),
+        command=_on_auto_resize_toggle,
         variable=resize_var,
     ).pack(fill="both")
 
