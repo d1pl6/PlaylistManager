@@ -216,6 +216,7 @@ class SongManager:
         Returns:
             Number of songs actually inserted (skips duplicates)
         """
+        conn = None
         try:
             with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
                 cursor = conn.cursor()
@@ -253,6 +254,17 @@ class SongManager:
                 return inserted
 
         except sqlite3.Error as e:
+            # Roll back the implicit transaction: a statement that fails
+            # mid-execution leaves it OPEN on the thread-cached connection,
+            # which would silently swallow later adds (add_song_by_info's
+            # own_tx guard would then skip its commit and the row would be
+            # lost when the thread exits).  conn is None only when the
+            # connection itself failed to open - nothing to roll back.
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    pass
             logger.error("Failed bulk insert (%s) into %s: %s", platform, playlist_name, e)
             raise
 
@@ -309,8 +321,13 @@ class SongManager:
                 artists_json = json.dumps(artists)
                 norm_title = _normalize_text(title)
 
-                # Atomic transaction: check + insert to prevent TOCTOU
-                cursor.execute("BEGIN IMMEDIATE")
+                # Atomic transaction: check + insert to prevent TOCTOU.
+                # Only open a transaction when none is active on this
+                # thread-cached connection - a nested BEGIN would raise
+                # "cannot start a transaction within a transaction".
+                own_tx = not conn.in_transaction
+                if own_tx:
+                    cursor.execute("BEGIN IMMEDIATE")
                 try:
                     cursor.execute(
                         "SELECT id FROM songs WHERE LOWER(TRIM(title)) = ? AND artists = ? AND duration = ?",
@@ -318,28 +335,62 @@ class SongManager:
                     )
                     existing = cursor.fetchone()
                     if existing:
-                        conn.commit()
+                        if own_tx:
+                            conn.commit()
                         logger.info(
                             "Song already exists in %s (ID: %s, track_id: %s)",
                             playlist_name, existing["id"], track_id,
                         )
                         return existing["id"]
 
+                    # INSERT OR IGNORE: the info check can miss a row that
+                    # holds the same track_id with drifted metadata (artist
+                    # order, title formatting, duration). A plain INSERT
+                    # would then raise a UNIQUE constraint error after the
+                    # platform add already succeeded, leaving the local DB
+                    # without the song - reuse the existing row instead.
                     cursor.execute(
-                        "INSERT INTO songs (title, artists, duration, track_id, thumbnail_url) "
+                        "INSERT OR IGNORE INTO songs (title, artists, duration, track_id, thumbnail_url) "
                         "VALUES (?, ?, ?, ?, ?)",
                         (title, artists_json, duration, track_id, thumbnail_url),
                     )
-                    conn.commit()
+                    if own_tx:
+                        conn.commit()
                 except Exception:
-                    conn.rollback()
+                    if own_tx:
+                        conn.rollback()
                     raise
 
-                song_id = cursor.lastrowid
-                if song_id is None:
-                    raise RuntimeError("song_id is None after INSERT")
-                logger.info("Added song (info match) to %s (ID: %s)", playlist_name, song_id)
-                return song_id
+                if cursor.rowcount > 0:
+                    song_id = cursor.lastrowid
+                    if song_id is None:
+                        raise RuntimeError("song_id is None after INSERT")
+                    logger.info("Added song (info match) to %s (ID: %s)", playlist_name, song_id)
+                    return song_id
+
+                # Insert was ignored - the track_id already exists. Return
+                # the existing row's ID (mirrors add_song's behaviour).
+                cursor.execute("SELECT id FROM songs WHERE track_id = ?", (track_id,))
+                row = cursor.fetchone()
+                if row is not None:
+                    logger.info(
+                        "Song %s already exists in %s by track_id (existing ID: %s)",
+                        track_id, playlist_name, row["id"],
+                    )
+                    return row["id"]
+
+                # Defensive fallback - the row may have been inserted by
+                # another thread between the check and the INSERT.
+                cursor.execute(
+                    "SELECT id FROM songs WHERE LOWER(TRIM(title)) = ? AND artists = ? AND duration = ?",
+                    (norm_title, artists_json, duration),
+                )
+                row = cursor.fetchone()
+                if row is not None:
+                    return row["id"]
+                raise RuntimeError(
+                    "INSERT OR IGNORE reported no insert but no matching row found"
+                )
 
         except sqlite3.Error as e:
             logger.error("Failed to add song to %s: %s", playlist_name, e)
@@ -377,6 +428,7 @@ class SongManager:
         Raises:
             sqlite3.Error: If database operation fails
         """
+        conn = None
         try:
             with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
                 cursor = conn.cursor()
@@ -415,6 +467,13 @@ class SongManager:
                 return song_id
 
         except sqlite3.Error as e:
+            # Roll back the implicit transaction - see _add_songs_bulk.
+            # conn is None only when the connection failed to open.
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except sqlite3.Error:
+                    pass
             logger.error("Failed to add song to %s: %s", playlist_name, e)
             raise
 

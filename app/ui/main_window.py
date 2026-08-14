@@ -8,7 +8,6 @@ controllers and services.
 import logging
 import threading
 import tkinter as tk
-from configparser import ConfigParser
 from pathlib import Path
 from tkinter import ttk, messagebox
 
@@ -20,15 +19,15 @@ from services.playlist_store import PlaylistStore
 from services.playlist_sync import PlaylistSyncService
 from services.song_manager import SongManager
 from utils.thumbnail import ThumbnailService
+from utils.icons import IconService
+from utils.scaling import px, ui_font
 from ui.login_ui import show_login_dialog
 from ui.playlist_dialog import PlaylistDialog
 from ui.settings_ui import show_settings_dialog
 from utils.window import center_window, resize_window
-from utils.config import (
-    ensure_settings_file,
-    SETTINGS_PATH as _settings_path,
-)
+from utils.config import get_setting
 from utils.theme import C, load_theme
+from utils.platform import is_wayland_session
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +41,13 @@ playlist_cover_img_path = assets_dir / "playlist_image.png"
 close_playlist_img_path = assets_dir / "close_playlist.png"
 reload_database_img_path = assets_dir / "reloadCache.png"
 loading_img_path = assets_dir / "hourglass.png"
+
+# Base design sizes of the playlist card, in unscaled pixels; every value
+# is multiplied by the UI scale (utils/scaling).  The card is a fixed-size
+# box (grid_propagate(False)) so text never makes it grow — long names and
+# track titles clip inside instead of ballooning the window at high scale.
+CARD_W_BASE = 320
+CARD_H_BASE = 96
 
 
 class MainWindow:
@@ -65,7 +71,6 @@ class MainWindow:
         self.active_log_labels: dict[int, dict] = {}
         self.img_refs: list = []
         self.frame_img_refs: dict = {}
-        self._choose_open = False
         self._recording_frame_idx: int | None = None
 
         self._auto_resize_enabled = self._read_auto_resize_setting()
@@ -89,6 +94,7 @@ class MainWindow:
             on_add_playlist_frame=self._on_add_playlist_frame,
             on_dialog_cancel=self._on_dialog_cancel,
             on_show_error=self._show_integration_error,
+            on_refresh=self.ac.refresh_auth,
         )
 
         # ----- theme & layout ------------------------------------------
@@ -97,18 +103,18 @@ class MainWindow:
 
         self.root.title("PlaylistManager")
         self.root.configure(background=C["root_bg"])
-        self.root.geometry("650x460")
-        self.root.minsize(325, 150)
+        self.root.geometry(f"{px(650)}x{px(460)}")
+        self.root.minsize(px(325), px(150))
         self.root.maxsize(999999, 999999)
 
         icon_path = assets_dir / "app_image.png"
-        self.icon = tk.PhotoImage(file=str(icon_path))
+        self.icon = IconService.get(icon_path, 32)
         self.root.iconphoto(False, self.icon)
 
-        self.playlist_cover_img = tk.PhotoImage(file=str(playlist_cover_img_path))
-        self.close_playlist_img = tk.PhotoImage(file=str(close_playlist_img_path))
-        self.reload_database_img = tk.PhotoImage(file=str(reload_database_img_path))
-        self.loading_img = tk.PhotoImage(file=str(loading_img_path))
+        self.playlist_cover_img = IconService.get(playlist_cover_img_path, 64)
+        self.close_playlist_img = IconService.get(close_playlist_img_path, 16)
+        self.reload_database_img = IconService.get(reload_database_img_path, 16)
+        self.loading_img = IconService.get(loading_img_path, 32)
 
         self.root.grid_rowconfigure(0, weight=0)
         self.root.grid_rowconfigure(1, weight=1)
@@ -131,7 +137,15 @@ class MainWindow:
     # ------------------------------------------------------------------
 
     def apply_theme(self) -> None:
+        """Re-apply the palette from cfg/theme.ini to every existing widget.
+
+        Called after a theme change (theme picker).  The status labels are
+        left untouched - their colour is dynamic (good/warn/error) and is
+        refreshed by the status callbacks, which read ``C`` at update time.
+        """
         load_theme()
+        self.root.configure(background=C["root_bg"])
+
         header_bg = C["frame_head_bg"]
         self.header_frame.configure(background=header_bg)
         for widget in self.header_frame.winfo_children():
@@ -142,13 +156,57 @@ class MainWindow:
                 )
 
         frame_playlist_bg = C["frame_playlist_bg"]
-        for frame in self.frames:
+        for frame_idx, frame in enumerate(self.frames):
             frame.configure(background=frame_playlist_bg)
+            labels = self.active_log_labels.get(frame_idx)
+            if labels is None:
+                continue
+
+            name_label = self.playlist_name_labels[frame_idx]
+            name_label.configure(
+                background=C["label_playlist_name_bg"],
+                foreground=C["label_playlist_name_fg"],
+            )
+            labels["cover"].configure(background=C["label_playlist_bg"])
+
+            for key in ("artist", "name"):
+                labels[key].configure(
+                    background=C["label_playlist_log_bg"],
+                    foreground=C["label_playlist_log_fg"],
+                )
+
+            entry = labels["keybind_entry"]
+            if self._recording_frame_idx != frame_idx:
+                entry.configure(
+                    background=C["entry_playlist_bg"],
+                    foreground=C["entry_playlist_fg"],
+                    readonlybackground=C["entry_playlist_ro_bg"],
+                )
+
+            # Remaining descendants: the two log separator labels and the
+            # close/reload buttons.  The status label is deliberately
+            # skipped (dynamic colour, see docstring).
+            known_labels = {
+                labels["cover"],
+                labels["status"],
+                labels["artist"],
+                labels["name"],
+                name_label,
+            }
             for child in frame.winfo_children():
-                try:
-                    child.configure(background=frame_playlist_bg)
-                except Exception:
-                    pass
+                for widget in child.winfo_children():
+                    if isinstance(widget, tk.Label) and widget not in known_labels:
+                        widget.configure(
+                            background=C["label_playlist_log_bg"],
+                            foreground=C["label_playlist_log_fg"],
+                        )
+                    elif isinstance(widget, tk.Button):
+                        widget.configure(
+                            background=C["button_playlist_bg"],
+                            foreground=C["button_playlist_fg"],
+                            activebackground=C["button_playlist_a_bg"],
+                            activeforeground=C["button_playlist_a_fg"],
+                        )
 
     # ------------------------------------------------------------------
     # Widget creation
@@ -159,7 +217,7 @@ class MainWindow:
         btn_header_abg = C["button_head_a_bg"]
 
         login_img_path = assets_dir / "login.png"
-        self.login_img = tk.PhotoImage(file=str(login_img_path))
+        self.login_img = IconService.get(login_img_path, 32)
         self.btn_login = tk.Button(
             self.header_frame,
             image=self.login_img,
@@ -172,7 +230,7 @@ class MainWindow:
         )
 
         add_playlist_img_path = assets_dir / "addPlaylist.png"
-        self.add_playlist_img = tk.PhotoImage(file=str(add_playlist_img_path))
+        self.add_playlist_img = IconService.get(add_playlist_img_path, 32)
         self.btn_add_playlist = tk.Button(
             self.header_frame,
             image=self.add_playlist_img,
@@ -183,7 +241,7 @@ class MainWindow:
         )
 
         open_settings_img_path = assets_dir / "settings.png"
-        self.open_settings_img = tk.PhotoImage(file=str(open_settings_img_path))
+        self.open_settings_img = IconService.get(open_settings_img_path, 32)
         self.btn_open_settings = tk.Button(
             self.header_frame,
             image=self.open_settings_img,
@@ -196,6 +254,7 @@ class MainWindow:
                 on_theme_change=self.apply_theme,
                 tray_available=self.tray_service,
                 on_tray_toggle=self.set_hide_to_tray,
+                on_auto_resize_toggle=self.set_auto_resize,
             ),
         )
 
@@ -215,8 +274,13 @@ class MainWindow:
     def _open_playlist_dialog(self) -> None:
         self._playlist_controller.open_playlist_dialog()
 
-    def _show_platform_picker(self, platforms, callback) -> None:
-        """Create a Toplevel to pick a platform."""
+    def _show_platform_picker(self, platforms, callback, on_cancel=None) -> None:
+        """Create a Toplevel to pick a platform.
+
+        ``on_cancel`` (the controller's cancel path) fires when the user
+        dismisses the picker without choosing, so the controller can
+        release its re-entrancy guard.
+        """
         win_bg = C["frame_main_bg"]
         label_fg = C["label_def_fg"]
         btn_bg = C["button_main_bg"]
@@ -227,19 +291,23 @@ class MainWindow:
         cancel_fg = C["button_head_fg"]
         cancel_a_bg = C["button_head_a_bg"]
 
+        def _do_cancel() -> None:
+            if on_cancel:
+                on_cancel()
+            win.destroy()
+
         win = tk.Toplevel(self.root)
         win.title("Choose Platform")
         win.configure(background=win_bg)
         win.transient(self.root)
-        center_window(win)
-        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", _do_cancel)
 
         tk.Label(
             win,
             text="Select platform to fetch playlists from:",
             background=win_bg,
             foreground=label_fg,
-            font="Noto, 11",
+            font=ui_font(11),
         ).pack(pady=10, padx=20)
 
         for integration in platforms:
@@ -250,7 +318,7 @@ class MainWindow:
                 foreground=btn_fg,
                 activebackground=btn_a_bg,
                 activeforeground=btn_a_fg,
-                font="Noto, 11",
+                font=ui_font(11),
                 width=30,
                 command=lambda i=integration: (win.destroy(), callback(i)),
             ).pack(pady=4, padx=20)
@@ -261,13 +329,17 @@ class MainWindow:
             background=cancel_bg,
             foreground=cancel_fg,
             activebackground=cancel_a_bg,
-            font="Noto, 10",
-            command=win.destroy,
+            font=ui_font(10),
+            command=_do_cancel,
         ).pack(pady=10)
+
+        # Center only after the widgets are packed - centering an empty
+        # Toplevel (1x1) and letting it grow produces an off-center dialog.
+        center_window(win)
+        win.grab_set()
 
     def _show_playlist_dialog(self, playlists, integration, on_select, on_cancel) -> None:
         """Create the playlist selection dialog."""
-        self._choose_open = True
         self.btn_add_playlist.configure(state="disabled", image=self.loading_img)
         self._hide_main_content()
 
@@ -285,7 +357,6 @@ class MainWindow:
 
     def _on_dialog_cancel(self) -> None:
         """Restore UI after playlist dialog is cancelled."""
-        self._choose_open = False
         self.btn_add_playlist.configure(state="normal", image=self.add_playlist_img)
         self._show_main_content()
 
@@ -306,7 +377,9 @@ class MainWindow:
             status_label.config(text="Sync", background=C["label_playlist_warn_bg"])
 
             if thumb_url:
-                self._set_playlist_cover(frame_idx, thumb_url)
+                cover_label = self.active_log_labels[frame_idx].get("cover")
+                if cover_label:
+                    self._set_playlist_cover(cover_label, thumb_url)
 
             self._import_playlist_tracks(playlist_name, platform, playlist_id, frame_idx)
 
@@ -314,39 +387,47 @@ class MainWindow:
     # Thumbnail management
     # ------------------------------------------------------------------
 
-    def _set_playlist_cover(self, frame_idx: int, thumb_url: str) -> None:
+    def _set_playlist_cover(self, cover_label: tk.Label, thumb_url: str) -> None:
         """Download a playlist thumbnail in a background thread.
 
         Only the download + resize run off-thread (thread-safe); the
         PhotoImage is created on the main thread by :meth:`_apply_cover`
         because tkinter is not thread-safe.
-        """
-        if frame_idx not in self.active_log_labels:
-            return
-        cover_label = self.active_log_labels[frame_idx].get("cover")
-        if not cover_label:
-            return
 
+        The cover *widget* is captured, not a frame index: after
+        close_main_frame() renumbers ``self.frames``/``active_log_labels``,
+        a captured index could silently resolve to a different frame (or
+        out of range).  A widget reference stays unambiguous - the apply
+        side just checks it still exists.
+        """
         def fetch() -> None:
-            img = ThumbnailService.fetch_image(thumb_url, size=(64, 64))
+            img = ThumbnailService.fetch_image(thumb_url, size=(px(64), px(64)))
             if img is not None:
-                self.root.after(0, lambda: self._apply_cover(frame_idx, img))
+                try:
+                    self.root.after(0, lambda: self._apply_cover(cover_label, img))
+                except Exception:
+                    logger.debug("Window closed during cover download", exc_info=True)
 
         threading.Thread(target=fetch, daemon=True).start()
 
-    def _apply_cover(self, frame_idx: int, img) -> None:
-        if frame_idx not in self.active_log_labels:
-            return
-        cover_label = self.active_log_labels[frame_idx].get("cover")
-        if not cover_label:
-            return
+    def _apply_cover(self, cover_label: tk.Label, img) -> None:
         try:
+            if not cover_label.winfo_exists():
+                return
             tk_img = ThumbnailService.to_photoimage(img)
         except Exception as e:
             logger.error(f"Failed to create cover PhotoImage: {e}")
             return
-        cover_label.configure(image=tk_img)
-        self.frame_img_refs.setdefault(id(cover_label), []).append(tk_img)
+        try:
+            cover_label.configure(image=tk_img)
+        except tk.TclError:
+            # Widget destroyed between winfo_exists() and configure().
+            return
+        # Replace, not append: every reload otherwise piles a new
+        # PhotoImage reference onto the same label, leaking them for the
+        # life of the frame.  The label now displays the new image, so the
+        # old one can be released immediately.
+        self.frame_img_refs[cover_label] = [tk_img]
 
     # ------------------------------------------------------------------
     # Database / log label helpers
@@ -381,9 +462,18 @@ class MainWindow:
     ) -> None:
         """Start importing tracks in a background thread."""
         def on_done(name: str, count: int, status_text: str) -> None:
-            self.root.after(
-                0, self._on_import_done, name, count, status_text, frame_idx
-            )
+            try:
+                self.root.after(
+                    0, self._on_import_done, name, count, status_text, frame_idx
+                )
+            except Exception:
+                # App quit while the import ran - the after() call comes
+                # from the sync worker thread and fails against a
+                # destroyed root.  The result matters only for the UI.
+                logger.debug(
+                    "App is shutting down; dropped import-done update",
+                    exc_info=True,
+                )
 
         self._sync_service.import_tracks(
             playlist_name, platform, playlist_id, on_done
@@ -401,22 +491,41 @@ class MainWindow:
         count: int,
         status_text: str,
         frame_idx: int | None = None,
-    ) -> None:
-        if frame_idx is None:
+    ) -> int | None:
+        """Handle a finished track import; returns the resolved frame index.
+
+        The captured ``frame_idx`` can be stale after close_main_frame()
+        renumbered the frames - accept it only if it still belongs to
+        *playlist_name*, otherwise fall back to resolving by name so a
+        finished import never updates a different frame's labels.
+        """
+        if frame_idx is not None:
+            in_range = frame_idx < len(self.playlist_name_labels)
+            matches_name = (
+                in_range
+                and self.playlist_name_labels[frame_idx].cget("text")
+                == playlist_name
+            )
+            if not (matches_name and frame_idx in self.active_log_labels):
+                frame_idx = self._find_frame_index_by_name(playlist_name)
+        else:
             frame_idx = self._find_frame_index_by_name(playlist_name)
         if frame_idx is None or frame_idx not in self.active_log_labels:
-            return
+            return None
         status_label = self.active_log_labels[frame_idx]["status"]
         if count > 0:
             status_label.config(text="OK", background=C["label_playlist_good_bg"])
         elif status_text == "Error":
             status_label.config(text=status_text, background=C["label_playlist_error_bg"])
         else:
-            status_label.config(text=status_text, background=C["label_playlist_good_bg"])
+            # Nothing imported - "No tracks" (empty playlist or a swallowed
+            # platform error) and "0 new" (all duplicates) are not successes.
+            status_label.config(text=status_text, background=C["label_playlist_warn_bg"])
         self._update_log_labels_from_db(
             frame_idx, playlist_name, self.frame_platforms[frame_idx]
         )
         logger.info("Import finished for '%s': %s", playlist_name, status_text)
+        return frame_idx
 
     def _on_reload_done(
         self,
@@ -426,11 +535,11 @@ class MainWindow:
         thumb_url: str | None,
         frame_idx: int | None = None,
     ) -> None:
-        self._on_import_done(playlist_name, count, status_text, frame_idx)
-        if frame_idx is None:
-            frame_idx = self._find_frame_index_by_name(playlist_name)
+        frame_idx = self._on_import_done(playlist_name, count, status_text, frame_idx)
         if frame_idx is not None and thumb_url:
-            self._set_playlist_cover(frame_idx, thumb_url)
+            cover_label = self.active_log_labels[frame_idx].get("cover")
+            if cover_label:
+                self._set_playlist_cover(cover_label, thumb_url)
 
     # ------------------------------------------------------------------
     # Keybind setup (called once after __init__)
@@ -444,21 +553,34 @@ class MainWindow:
         """
         labels = self.active_log_labels[frame_idx]
 
+        def _set(widget, **kwargs) -> None:
+            """Configure *widget* if it still exists.
+
+            The flow runs on a worker thread and the frame can be closed
+            while it is in flight - touching a destroyed widget raises
+            TclError from the ``after`` callback.
+            """
+            try:
+                if widget.winfo_exists():
+                    widget.configure(**kwargs)
+            except tk.TclError:
+                pass
+
         def on_status(text: str, background: str) -> None:
-            labels["status"].config(text=text, background=background)
+            _set(labels["status"], text=text, background=background)
 
         def on_song_info(artist: str, name: str) -> None:
-            labels["artist"].config(text=artist)
-            labels["name"].config(text=name)
+            _set(labels["artist"], text=artist)
+            _set(labels["name"], text=name)
 
         def on_entry_state(state: str) -> None:
-            labels["keybind_entry"].config(state=state)
+            _set(labels["keybind_entry"], state=state)
 
         def on_reset(entry_state: str) -> None:
-            labels["keybind_entry"].config(state=entry_state)
-            labels["status"].config(text="", background=C["frame_playlist_bg"])
-            labels["artist"].config(text="")
-            labels["name"].config(text="")
+            _set(labels["keybind_entry"], state=entry_state)
+            _set(labels["status"], text="", background=C["frame_playlist_bg"])
+            _set(labels["artist"], text="")
+            _set(labels["name"], text="")
 
         return KeybindCallbacks(
             on_status=on_status,
@@ -485,18 +607,24 @@ class MainWindow:
                         entry.config(state="normal")
                         entry.insert(0, hotkey)
                         entry.config(state="readonly")
-                        self.kc.register_hotkey(
+                        displaced = self.kc.register_hotkey(
                             name,
                             hotkey,
                             self._make_keybind_callbacks(i),
                             platform=platform,
                         )
+                        if displaced:
+                            # Self-heal stale stores: a displaced playlist's
+                            # persisted hotkey no longer fires anything.
+                            self._clear_displaced_keybind(displaced)
 
                     self._update_log_labels_from_db(i, name, platform)
 
                     thumb_url = playlist.get("thumbnail_url", "")
                     if thumb_url:
-                        self._set_playlist_cover(i, thumb_url)
+                        cover_label = self.active_log_labels[i].get("cover")
+                        if cover_label:
+                            self._set_playlist_cover(cover_label, thumb_url)
 
     # ------------------------------------------------------------------
     # Drag-to-move window
@@ -529,12 +657,16 @@ class MainWindow:
         Some Wayland compositors unmap the XWayland window on minimize
         without ever setting WM_STATE Iconic (plan.md W4), so once the
         retries run out, a window that is still unmapped (and not
-        withdrawn) is treated as a minimize too.
+        withdrawn) is treated as a minimize too - but only on Wayland
+        sessions.  On X11 an unmap that never turns "iconic" is not a
+        minimize (e.g. a slow WM still completing a restore), and hiding
+        the window would yank it out from under the user, so X11 waits
+        for the iconic state exclusively.
         """
         if event.widget is not self.root:
             return
 
-        def _maybe_hide(attempts: int = 6) -> None:
+        def _maybe_hide(attempts: int = 10) -> None:
             self._hide_after_id = None
             tray_ok = (
                 self.tray_service is not None and self.tray_service.available
@@ -549,7 +681,9 @@ class MainWindow:
             if state == "withdrawn":
                 # Our own withdraw() (or an external one) - not a minimize.
                 return
-            if state == "iconic" or (attempts == 0 and not viewable):
+            if state == "iconic" or (
+                is_wayland_session() and attempts == 0 and not viewable
+            ):
                 self.root.withdraw()
             elif attempts > 0:
                 # WM hasn't settled the minimize yet - try again shortly.
@@ -578,6 +712,16 @@ class MainWindow:
     def set_hide_to_tray(self, enabled: bool) -> None:
         """Live-apply the hide-to-tray setting (called from Settings)."""
         self._hide_to_tray = enabled
+
+    def set_auto_resize(self, enabled: bool) -> None:
+        """Live-apply the auto-resize setting (called from Settings).
+
+        The flag is read on every frame add/close, so without this
+        callback a Settings toggle would only take effect after restart.
+        """
+        self._auto_resize_enabled = enabled
+        if enabled:
+            self._auto_resize()
 
     def show_from_tray(self) -> None:
         """Restore/raise the main window (tray "Open app" + default click).
@@ -608,20 +752,14 @@ class MainWindow:
             col = i % 2
             row = (i // 2) + 1
 
-            main_bg = C["frame_main_bg"]
             frame_playlist_bg = C["frame_playlist_bg"]
             label_playlist_bg = C["label_playlist_bg"]
-            label_playlist_fg = C["label_playlist_fg"]
             label_playlist_name_bg = C["label_playlist_name_bg"]
             label_playlist_name_fg = C["label_playlist_name_fg"]
             label_playlist_log_bg = C["label_playlist_log_bg"]
             label_playlist_log_fg = C["label_playlist_log_fg"]
             label_playlist_good_bg = C["label_playlist_good_bg"]
             label_playlist_good_fg = C["label_playlist_good_fg"]
-            label_playlist_warn_bg = C["label_playlist_warn_bg"]
-            label_playlist_warn_fg = C["label_playlist_warn_fg"]
-            label_playlist_error_bg = C["label_playlist_error_bg"]
-            label_playlist_error_fg = C["label_playlist_error_fg"]
             button_playlist_bg = C["button_playlist_bg"]
             button_playlist_fg = C["button_playlist_fg"]
             button_playlist_a_bg = C["button_playlist_a_bg"]
@@ -629,12 +767,21 @@ class MainWindow:
             entry_playlist_bg = C["entry_playlist_bg"]
             entry_playlist_fg = C["entry_playlist_fg"]
             entry_playlist_ro_bg = C["entry_playlist_ro_bg"]
-            btn_close_bg = C["button_close_bg"]
-            btn_close_abg = C["button_close_a_bg"]
-            btn_close_fg = C["button_close_fg"]
-            btn_close_a_fg = C["button_close_a_fg"]
 
-            main_frame = tk.Frame(self.root, width=320, background=frame_playlist_bg)
+            # Fixed-size card: grid_propagate(False) + explicit scaled size
+            # means text never makes the card grow (long names clip inside
+            # instead).  Rows/columns use weights so inner frames stretch
+            # and the weighted column absorbs/clips overflow text.
+            main_frame = tk.Frame(
+                self.root,
+                width=px(CARD_W_BASE),
+                height=px(CARD_H_BASE),
+                background=frame_playlist_bg,
+            )
+            main_frame.grid_propagate(False)
+            main_frame.grid_rowconfigure(0, weight=1)
+            main_frame.grid_rowconfigure(1, weight=1)
+            main_frame.grid_columnconfigure(0, weight=1)
             main_header_frame = tk.Frame(main_frame, background=frame_playlist_bg)
             main_log_frame = tk.Frame(main_frame, background=frame_playlist_bg)
 
@@ -646,7 +793,7 @@ class MainWindow:
             playlist_name = tk.Label(
                 main_header_frame,
                 text=f"row:{row} col:{col}",
-                font="Noto, 12",
+                font=ui_font(12),
                 background=label_playlist_name_bg,
                 foreground=label_playlist_name_fg,
                 width=25,
@@ -665,16 +812,20 @@ class MainWindow:
 
             playlist_keybind = tk.Entry(
                 main_header_frame,
-                font="Noto, 12",
+                font=ui_font(12),
                 justify="center",
                 background=entry_playlist_bg,
                 foreground=entry_playlist_fg,
                 readonlybackground=entry_playlist_ro_bg,
                 state="readonly",
             )
+            # Capture the frame widget, not its index: close_main_frame()
+            # renumbers self.frames after deleting a frame, and a captured
+            # index would then point at the wrong playlist (or out of range,
+            # silently disabling the reload button).
             playlist_keybind.bind(
                 "<Button-1>",
-                lambda e, frame_idx=len(self.frames): self._start_recording(frame_idx),
+                lambda e, f=main_frame: self._start_recording(self.frames.index(f)),
             )
 
             reload_database = tk.Button(
@@ -685,13 +836,15 @@ class MainWindow:
                 foreground=button_playlist_fg,
                 activebackground=button_playlist_a_bg,
                 activeforeground=button_playlist_a_fg,
-                command=lambda idx=len(self.frames): self._on_reload_requested(idx),
+                command=lambda f=main_frame: self._on_reload_requested(
+                    self.frames.index(f)
+                ),
             )
 
             log_artist = tk.Label(
                 main_log_frame,
                 text="log_artist placeholder",
-                font="Noto, 12",
+                font=ui_font(12),
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
                 width=8,
@@ -700,7 +853,7 @@ class MainWindow:
             log_helper_1 = tk.Label(
                 main_log_frame,
                 text="-",
-                font="Noto, 12",
+                font=ui_font(12),
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
                 anchor="w",
@@ -708,7 +861,7 @@ class MainWindow:
             log_name = tk.Label(
                 main_log_frame,
                 text="log_name placeholder",
-                font="Noto, 12",
+                font=ui_font(12),
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
                 width=18,
@@ -717,7 +870,7 @@ class MainWindow:
             log_helper_2 = tk.Label(
                 main_log_frame,
                 text="|",
-                font="Noto, 12",
+                font=ui_font(12),
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
                 anchor="w",
@@ -725,7 +878,7 @@ class MainWindow:
             log_log = tk.Label(
                 main_log_frame,
                 text="Waiting",
-                font="Noto, 12",
+                font=ui_font(12),
                 background=label_playlist_good_bg,
                 foreground=label_playlist_good_fg,
                 width=5,
@@ -747,8 +900,14 @@ class MainWindow:
                 "cover": playlist_cover,
             }
 
-            main_header_frame.grid(row=0, column=0, columnspan=2)
-            main_log_frame.grid(row=1, column=0)
+            # Weighted name column: absorbs/clips long text instead of
+            # letting the card grow (the card itself never grows - see the
+            # grid_propagate(False) above).
+            main_header_frame.grid_columnconfigure(1, weight=1)
+            main_log_frame.grid_columnconfigure(2, weight=1)
+
+            main_header_frame.grid(row=0, column=0, sticky="nsew")
+            main_log_frame.grid(row=1, column=0, sticky="nsew")
 
             playlist_cover.grid(row=0, column=0, sticky="ne", rowspan=2)
             playlist_name.grid(row=0, column=1, sticky="nswe")
@@ -778,7 +937,7 @@ class MainWindow:
             playlist_name = self.playlist_name_labels[index].cget("text")
             platform = self.frame_platforms[index]
 
-            self.kc.unregister_hotkey(playlist_name)
+            self.kc.unregister_hotkey(playlist_name, platform=platform)
             if self._recording_frame_idx == index:
                 self.kc.stop_recording()
                 self._recording_frame_idx = None
@@ -787,6 +946,17 @@ class MainWindow:
             self.frame_positions.pop(index)
             self.playlist_name_labels.pop(index)
             self.frame_platforms.pop(index)
+
+            # Release the cover-image references for the closing frame so the
+            # PhotoImages can be garbage-collected (they were keyed by the
+            # cover label widget in _apply_cover).
+            closing_labels = self.active_log_labels.get(index)
+            if closing_labels is not None:
+                cover = closing_labels.get("cover")
+                if cover is not None:
+                    refs = self.frame_img_refs.pop(cover, None)
+                    if refs:
+                        refs.clear()
 
             if index in self.active_log_labels:
                 del self.active_log_labels[index]
@@ -799,9 +969,13 @@ class MainWindow:
                     new_active_log_labels[old_idx] = labels_dict
             self.active_log_labels = new_active_log_labels
 
-            if frame in self.frame_img_refs:
-                self.frame_img_refs[frame].clear()
-                del self.frame_img_refs[frame]
+            # The recording target's frame is still open, just shifted down
+            # by one - keep the state index in sync with the renumbering.
+            if (
+                self._recording_frame_idx is not None
+                and self._recording_frame_idx > index
+            ):
+                self._recording_frame_idx -= 1
 
             PlaylistStore.delete_playlist(playlist_name, platform=platform)
             DatabaseManager.delete_playlist_db(playlist_name, platform)
@@ -821,24 +995,12 @@ class MainWindow:
     @staticmethod
     def _read_auto_resize_setting() -> bool:
         """Read the auto-resize setting once."""
-        try:
-            ensure_settings_file()
-            cfg = ConfigParser()
-            cfg.read(str(_settings_path))
-            return cfg.getboolean("auto_resize", "is_true", fallback=False)
-        except Exception:
-            return False
+        return get_setting("auto_resize", False)
 
     @staticmethod
     def _read_hide_to_tray_setting() -> bool:
         """Read the hide-to-tray setting once."""
-        try:
-            ensure_settings_file()
-            cfg = ConfigParser()
-            cfg.read(str(_settings_path))
-            return cfg.getboolean("hide_to_tray", "is_true", fallback=False)
-        except Exception:
-            return False
+        return get_setting("hide_to_tray", False)
 
     def _auto_resize(self) -> None:
         """Resize the window to fit playlist frames."""
@@ -862,6 +1024,34 @@ class MainWindow:
     # Keybind recording
     # ------------------------------------------------------------------
 
+    def _clear_displaced_keybind(self, displaced: dict) -> None:
+        """Clear a hotkey that was just taken over by another playlist.
+
+        Recording the same combo on playlist B silently displaces playlist
+        A's binding (``KeybindRegistry.register`` returns the displaced
+        info).  A's entry must stop showing the stolen combo and its
+        persisted keybind must be cleared - otherwise the app would
+        display a hotkey that fires B, and a restart would resurrect the
+        collision (leaving the combo bound to nothing once B's frame is
+        closed).
+        """
+        name = displaced.get("playlist_name")
+        platform = displaced.get("platform", PLATFORM_YOUTUBE_MUSIC)
+        if not name:
+            return
+        for i, label in enumerate(self.playlist_name_labels):
+            if label.cget("text") == name and self.frame_platforms[i] == platform:
+                entry = self.active_log_labels.get(i, {}).get("keybind_entry")
+                if entry is not None:
+                    try:
+                        entry.config(state="normal")
+                        entry.delete(0, tk.END)
+                        entry.config(state="readonly")
+                    except tk.TclError:
+                        pass
+                break
+        PlaylistStore.update_keybind(name, platform, "")
+
     def _start_recording(self, frame_idx: int) -> str:
         if frame_idx >= len(self.playlist_name_labels):
             return "break"
@@ -871,6 +1061,7 @@ class MainWindow:
             self._stop_recording(self._recording_frame_idx)
 
         self._recording_frame_idx = frame_idx
+        recording_frame = self.frames[frame_idx]
         entry = self.active_log_labels[frame_idx]["keybind_entry"]
         entry.config(
             state="normal",
@@ -879,17 +1070,44 @@ class MainWindow:
         )
         entry.delete(0, tk.END)
 
+        def _live_index() -> int | None:
+            # close_main_frame() renumbers self.frames after deleting a
+            # frame; resolve the recording frame's current index at
+            # callback time so a mid-recording close can't commit against
+            # the wrong playlist (or IndexError when out of range).
+            try:
+                return self.frames.index(recording_frame)
+            except ValueError:
+                return None
+
         def on_combo(combo: str) -> None:
             entry.config(state="normal")
             entry.delete(0, tk.END)
             entry.insert(0, combo)
 
         def on_stop() -> None:
+            cur_idx = _live_index()
+            if cur_idx is None:
+                self._recording_frame_idx = None
+                return
+            # Only commit the empty keybind if this frame was still the
+            # active recording target when the stop fired.
+            was_recording_here = self._recording_frame_idx == cur_idx
             self._recording_frame_idx = None
             entry.config(
                 state="readonly", readonlybackground=C["entry_playlist_ro_bg"]
             )
             entry.delete(0, tk.END)
+            if not was_recording_here:
+                return
+            # Escape / focus-out during recording: commit the empty combo so
+            # the previously registered hotkey is removed and the store
+            # matches what the entry now shows - a stale hotkey firing with
+            # a blank entry is confusing.
+            playlist_name = self.playlist_name_labels[cur_idx].cget("text")
+            platform = self.frame_platforms[cur_idx]
+            PlaylistStore.update_keybind(playlist_name, platform, "")
+            self.kc.unregister_hotkey(playlist_name, platform=platform)
 
         self.kc.start_recording(on_combo, on_stop=on_stop)
         return "break"
@@ -912,15 +1130,17 @@ class MainWindow:
         if combo:
             entry.insert(0, combo)
             PlaylistStore.update_keybind(playlist_name, platform, combo)
-            self.kc.register_hotkey(
+            displaced = self.kc.register_hotkey(
                 playlist_name,
                 combo,
                 self._make_keybind_callbacks(frame_idx),
                 platform=platform,
             )
+            if displaced:
+                self._clear_displaced_keybind(displaced)
         else:
             PlaylistStore.update_keybind(playlist_name, platform, "")
-            self.kc.unregister_hotkey(playlist_name)
+            self.kc.unregister_hotkey(playlist_name, platform=platform)
 
     def _on_root_click(self, event) -> None:
         if self._recording_frame_idx is not None:
@@ -951,15 +1171,23 @@ class MainWindow:
         def on_done(
             name: str, count: int, status_text: str, thumb_url: str | None
         ) -> None:
-            self.root.after(
-                0,
-                self._on_reload_done,
-                name,
-                count,
-                status_text,
-                thumb_url,
-                frame_idx,
-            )
+            try:
+                self.root.after(
+                    0,
+                    self._on_reload_done,
+                    name,
+                    count,
+                    status_text,
+                    thumb_url,
+                    frame_idx,
+                )
+            except Exception:
+                # App quit while the reload ran - after() comes from the
+                # sync worker thread and fails against a destroyed root.
+                logger.debug(
+                    "App is shutting down; dropped reload-done update",
+                    exc_info=True,
+                )
         try:
             DatabaseManager.close_thread_connections()
         except Exception as e:

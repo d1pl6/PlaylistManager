@@ -1,32 +1,31 @@
 import logging
 import tkinter as tk
 from configparser import ConfigParser
+from tkinter import ttk
 
 from ui.settings_theme_ui import show_theme_dialog
 from utils.config import (
     ensure_settings_file,
+    get_setting_value,
+    set_setting,
+    set_setting_value,
     SETTINGS_PATH as _settings_path,
 )
+from utils.scaling import UI_SCALE_PRESETS, ui_font
 from utils.theme import C
-from utils.window import center_window, resize_window
+from utils.window import center_window
 
 logger = logging.getLogger(__name__)
 
 
 def _toggle_setting(section, var):
-    ensure_settings_file()
-    cfg = ConfigParser()
-    cfg.read(str(_settings_path))
-    if section not in cfg:
-        # Only create the section if missing - don't wipe the other
-        # sections (a bare section assignment replaces them).
-        cfg[section] = {}
-    cfg[section]["is_true"] = "yes" if var.get() else "no"
-    with open(_settings_path, "w", encoding="utf-8") as f:
-        cfg.write(f)
+    try:
+        set_setting(section, bool(var.get()))
+    except Exception as e:
+        logger.error("Failed to write settings file: %s", e)
 
 
-def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, tray_available=None, on_tray_toggle=None):
+def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, tray_available=None, on_tray_toggle=None, on_auto_resize_toggle=None):
     """Show the settings dialog.
 
     Args:
@@ -39,10 +38,12 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
             checkbutton is disabled.
         on_tray_toggle: optional callback applied live with the new
             hide-to-tray state (bool) when the checkbox changes.
+        on_auto_resize_toggle: optional callback applied live with the
+            new auto-resize state (bool) when the checkbox changes -
+            without it the toggle only takes effect after a restart.
     """
     theme_win_bg = C["frame_main_bg"]
     theme_header_bg = C["frame_head_bg"]
-    theme_label_bg = C["label_def_bg"]
     theme_label_fg = C["label_def_fg"]
     theme_check_bg = C["checkbutton_bg"]
     theme_check_fg = C["checkbutton_fg"]
@@ -61,7 +62,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         text="Settings",
         background=theme_header_bg,
         foreground=theme_label_fg,
-        font=("Noto", 12),
+        font=ui_font(12),
     ).pack(fill="both", pady=5, padx=5)
 
     ensure_settings_file()
@@ -74,7 +75,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         global_var_value = 1 if cfg.getboolean("global_listener", "is_true", fallback=True) else 0
         tray_var_value = 1 if cfg.getboolean("hide_to_tray", "is_true", fallback=False) else 0
     except Exception as e:
-        logger.error("Error loading config, defaulting to yes: %s", e)
+        logger.error("Error loading settings, using defaults: %s", e)
         update_var_value = 1
         center_var_value = 1
         resize_var_value = 0
@@ -95,7 +96,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         selectcolor=theme_check_select,
         activebackground=theme_check_abg,
         activeforeground=theme_check_afg,
-        font=("Noto", 10),
+        font=ui_font(10),
         command=lambda: _toggle_setting("update_check", update_var),
         variable=update_var,
     ).pack(fill="both")
@@ -108,13 +109,18 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         selectcolor=theme_check_select,
         activebackground=theme_check_abg,
         activeforeground=theme_check_afg,
-        font=("Noto", 10),
+        font=ui_font(10),
         command=lambda: (
             _toggle_setting("center_windows", center_var),
             center_var.get() and center_window(win),
         ),
         variable=center_var,
     ).pack(fill="both")
+
+    def _on_auto_resize_toggle():
+        _toggle_setting("auto_resize", resize_var)
+        if on_auto_resize_toggle is not None:
+            on_auto_resize_toggle(resize_var.get() == 1)
 
     tk.Checkbutton(
         win,
@@ -124,11 +130,8 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         selectcolor=theme_check_select,
         activebackground=theme_check_abg,
         activeforeground=theme_check_afg,
-        font=("Noto", 10),
-        command=lambda: (
-            _toggle_setting("auto_resize", resize_var),
-            resize_var.get() and resize_window(parent)
-        ),
+        font=ui_font(10),
+        command=_on_auto_resize_toggle,
         variable=resize_var,
     ).pack(fill="both")
 
@@ -145,7 +148,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         selectcolor=theme_check_select,
         activebackground=theme_check_abg,
         activeforeground=theme_check_afg,
-        font=("Noto", 10),
+        font=ui_font(10),
         command=_on_global_toggle,
         variable=global_var,
     ).pack(fill="both")
@@ -163,7 +166,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         selectcolor=theme_check_select,
         activebackground=theme_check_abg,
         activeforeground=theme_check_afg,
-        font=("Noto", 10),
+        font=ui_font(10),
         command=_on_tray_toggle,
         variable=tray_var,
     )
@@ -172,6 +175,48 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
     if not getattr(tray_available, "available", False):
         tray_ck.configure(state="disabled")
 
+    # --- UI scale (profile) ---------------------------------------------
+    def _on_ui_scale_change(value: str) -> None:
+        try:
+            set_setting_value("ui_scale", "value", value)
+        except Exception as e:
+            logger.error("Failed to write ui_scale setting: %s", e)
+        # V1: applies on next launch (see screen.md §7 "Apply timing").
+
+    scale_row = tk.Frame(win, background=theme_check_bg)
+    scale_row.pack(fill="both", padx=4, pady=(2, 0))
+    tk.Label(
+        scale_row,
+        text="UI scale:",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(10),
+    ).pack(side="left", padx=(6, 4), pady=4)
+
+    scale_var = tk.StringVar(
+        value=get_setting_value("ui_scale", "value", "auto")
+    )
+    scale_combo = ttk.Combobox(
+        scale_row,
+        textvariable=scale_var,
+        values=UI_SCALE_PRESETS,
+        state="readonly",
+        width=6,
+        font=ui_font(10),
+    )
+    scale_combo.pack(side="left", padx=(0, 6), pady=4)
+    scale_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_ui_scale_change(scale_var.get()),
+    )
+    tk.Label(
+        scale_row,
+        text="(restart to apply; auto follows the display)",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(9),
+    ).pack(side="left", padx=(0, 6))
+
     tk.Button(
         win,
         text="Theme Settings",
@@ -179,7 +224,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         background=C["button_main_bg"],
         activebackground=C["button_main_a_bg"],
         foreground=C["button_main_fg"],
-        font=("Noto", 10),
+        font=ui_font(10),
         bd=0,
     ).pack(fill="both", padx=4, pady=4)
 

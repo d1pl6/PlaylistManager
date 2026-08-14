@@ -94,6 +94,7 @@ class PlaylistSyncService:
         """
         if not playlist_id:
             logger.warning("No playlist_id for '%s', cannot reload", playlist_name)
+            on_done(playlist_name, 0, "No tracks", None)
             return
 
         integration = self.integrations.get(platform)
@@ -180,10 +181,16 @@ class PlaylistSyncService:
             platform, integration, playlist_id, thumb_url
         )
 
+        # Fetch the tracks BEFORE deleting the local database.  The details
+        # check above proves the playlist is reachable, but a track-fetch
+        # failure right after the delete (network flake) would still destroy
+        # the cached tracks - and the fetch is the slowest step, so the old
+        # DB keeps serving reads until the swap.  add_songs_bulk consumes the
+        # already-fetched list, so nothing is fetched twice.
+        tracks = integration.get_playlist_tracks(playlist_id)
+
         DatabaseManager.delete_playlist_db(playlist_name, platform)
         logger.info("Deleted database for '%s'", playlist_name)
-
-        tracks = integration.get_playlist_tracks(playlist_id)
 
         # Persist the thumbnail regardless of the track import -
         # an empty playlist must still get its cover refreshed.

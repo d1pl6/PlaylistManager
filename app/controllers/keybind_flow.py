@@ -4,6 +4,8 @@ import re
 from typing import TYPE_CHECKING, Callable, Dict, Optional
 from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from services.song_manager import SongManager
+from utils.logging_config import trace_log
+from integrations.music_youtube.music_youtube_receiver import extract_video_id
 
 if TYPE_CHECKING:
     from ytmusicapi import YTMusic
@@ -43,19 +45,16 @@ class KeybindFlowController:
         self.url_receiver = url_receiver
         self._playlist_id_cache: Dict[str, str] = {}
 
-    def _invalidate_playlist_cache(self) -> None:
-        """Clear the playlist ID cache (e.g. after re-auth)."""
-        self._playlist_id_cache.clear()
-
     def execute_flow(
         self,
         playlist_name: str,
         on_status: Callable[[str], None],
         on_error: Callable[[str], None],
-        on_success: Callable[[Dict], None],
-        url: Optional[str] = None,
-        song_data: Optional[Dict] = None,
-    ) -> None:
+            on_success: Callable[[Dict], None],
+            url: Optional[str] = None,
+            song_data: Optional[Dict] = None,
+            playlist_id: Optional[str] = None,
+        ) -> None:
         """
         Execute the complete keybind workflow.
 
@@ -69,8 +68,12 @@ class KeybindFlowController:
                 captures one URL and reuses it for several playlists).
             song_data: Pre-fetched song details. When given, the ytmusicapi
                 fetch is skipped (the CLI fetches once and shares the result).
+            playlist_id: Known playlist ID from the store. When given, the
+                by-name library scan is skipped (the ID is cached instead).
+                Without it (legacy entries) the library is scanned once per
+                playlist name.
 
-        Note: the platform-first invariant is preserved in every mode — the song
+        Note: the platform-first invariant is preserved in every mode - the song
         is added to the platform API before the local database, and a platform
         failure never leaves a "successful" local entry behind.
         """
@@ -87,8 +90,7 @@ class KeybindFlowController:
 
             # Validate URL
             on_status("Valid")
-            from integrations.music_youtube.music_youtube_receiver import URLReceiverManager as _RM
-            video_id = _RM._extract_video_id(url)
+            video_id = extract_video_id(url)
             if video_id is None:
                 raise ValueError("Failed to extract video ID from URL")
 
@@ -96,7 +98,7 @@ class KeybindFlowController:
             if song_data is None:
                 on_status("Fetch")
                 song_data = self.fetch_song_details(video_id)
-            logger.debug(f"Song data: {song_data}")
+            trace_log(logger, "Song data: %s", song_data)
 
             # Check if song exists
             on_status("Check")
@@ -117,13 +119,25 @@ class KeybindFlowController:
 
             # Add to YouTube Music playlist first (platform API)
             on_status("Sync")
-            playlist_id = self._get_playlist_id(playlist_name)
+            playlist_id = self._get_playlist_id(playlist_name, playlist_id)
             logger.debug(f"YouTube Music playlist ID: {playlist_id}")
             if playlist_id is None:
                 raise RuntimeError(
                     f"Could not find YouTube Music playlist '{playlist_name}'"
                 )
-            self.yt_music.add_playlist_items(playlist_id, [video_id])
+            result = self.yt_music.add_playlist_items(playlist_id, [video_id])
+            # ytmusicapi returns a plain status string in some versions and
+            # {"status": ...} in others; a failed add (duplicate with
+            # duplicates=False, unknown video) comes back as a non-SUCCEEDED
+            # status instead of raising.  Surfacing it keeps the platform-first
+            # invariant: the song must not be written to the local DB when the
+            # platform rejected it.
+            status = result.get("status") if isinstance(result, dict) else result
+            if not status or "SUCCEEDED" not in str(status):
+                raise RuntimeError(
+                    f"YouTube Music rejected adding video '{video_id}' "
+                    f"(status: {status!r})"
+                )
             logger.info(f"Added {video_id} to YouTube Music playlist {playlist_id}")
 
             # Add to local database (so platform failure doesn't
@@ -184,7 +198,7 @@ class KeybindFlowController:
             TimeoutError: If no URL received within timeout
         """
         url = self.url_receiver.get_received_url(timeout=timeout)
-        logger.debug(f"Received URL from receiver")
+        logger.debug("Received URL from receiver")
         return url
 
     def fetch_song_details(self, video_id: str) -> Dict:
@@ -311,16 +325,21 @@ class KeybindFlowController:
             return []
 
 
-    def _get_playlist_id(self, playlist_name: str) -> Optional[str]:
+    def _get_playlist_id(self, playlist_name: str, known_id: Optional[str] = None) -> Optional[str]:
         """
         Get YouTube Music playlist ID by name, with caching.
 
         The cache avoids a network call on every keybind press since
-        playlist IDs rarely change within a session. The cache is
-        invalidated on re-auth via _invalidate_playlist_cache().
+        playlist IDs rarely change within a session.  Re-auth replaces the
+        whole flow object (and with it the cache), so no explicit
+        invalidation is needed.
 
         Args:
             playlist_name: Name of the playlist
+            known_id: Playlist ID already known by the caller (from the
+                store, where it was persisted at add-playlist time).  When
+                given, no platform round trip happens - the value is cached
+                for the session.
 
         Returns:
             Playlist ID or None if not found
@@ -329,8 +348,15 @@ class KeybindFlowController:
         if cached is not None:
             return cached
 
+        if known_id:
+            self._playlist_id_cache[playlist_name] = known_id
+            return known_id
+
         try:
-            playlists = self.yt_music.get_library_playlists()
+            # limit=None scans the whole library: the patched
+            # get_library_playlists defaults to the first page (~25),
+            # which would silently fail for any playlist beyond it.
+            playlists = self.yt_music.get_library_playlists(limit=None)
             for playlist in playlists:
                 if playlist.get("title") == playlist_name:
                     pid = playlist.get("playlistId")
@@ -359,8 +385,8 @@ def _strip_channel_suffix(name: str) -> str:
     "Various Artists - Topic" etc.
     """
 
-    # Strip " - Topic", " - Topic", "– Topic" and similar variants
-    cleaned = re.sub(r"\s*[-–-]\s*Topic\s*$", "", name, flags=re.IGNORECASE).strip()
+    # Strip " - Topic", "– Topic", "— Topic" and similar variants
+    cleaned = re.sub(r"\s*[-–—]\s*Topic\s*$", "", name, flags=re.IGNORECASE).strip()
     return cleaned
 
 
@@ -374,15 +400,15 @@ class SpotifyFlowController:
         self.song_manager = song_manager
         self._playlist_id_cache: Dict[str, str] = {}
 
-    def _invalidate_playlist_cache(self) -> None:
-        """Clear the playlist ID cache (e.g. after re-auth)."""
-        self._playlist_id_cache.clear()
-
-    def _get_playlist_id(self, playlist_name: str) -> Optional[str]:
+    def _get_playlist_id(self, playlist_name: str, known_id: Optional[str] = None) -> Optional[str]:
         """Get Spotify playlist ID by name, with caching."""
         cached = self._playlist_id_cache.get(playlist_name)
         if cached is not None:
             return cached
+
+        if known_id:
+            self._playlist_id_cache[playlist_name] = known_id
+            return known_id
 
         try:
             pid = self.spotify_integration.get_playlist_id_by_name(playlist_name)
@@ -399,7 +425,20 @@ class SpotifyFlowController:
         on_status: Callable[[str], None],
         on_error: Callable[[str], None],
         on_success: Callable[[Dict], None],
+        url: Optional[str] = None,
+        song_data: Optional[Dict] = None,
+        playlist_id: Optional[str] = None,
     ) -> None:
+        """Execute the add-to-playlist flow for the currently playing track.
+
+        The ``url``, ``song_data`` and ``playlist_id`` kwargs exist only so
+        the CLI batch driver (:func:`cli._run_flow`) can call every flow
+        uniformly - the Spotify flow reads the currently-playing track from
+        the API itself, so ``url``/``song_data`` are ignored; ``playlist_id``
+        skips the by-name playlist lookup when the store already knows it.
+        Without them the CLI's keyword call would raise TypeError and every
+        Spotify add would fail.
+        """
         try:
             on_status("Fetch")
             playing = self.spotify_integration.get_currently_playing()
@@ -422,8 +461,15 @@ class SpotifyFlowController:
             }
 
             on_status("Check")
-            if self.song_manager.song_exists_by_info(
-                playlist_name, title, artists, duration, platform=PLATFORM_SPOTIFY
+            # Exact track_id check - NOT the info-match heuristic.  A
+            # (title, artists, duration) match can be a different track with
+            # identical metadata ("Intro" by the same artist), which would be
+            # reported as already-present and never added to the playlist.
+            # The track_id is stable for Spotify, so matching it is exact;
+            # add_song_by_info keeps the info-match as its INSERT-side
+            # fallback for metadata drift.
+            if self.song_manager.song_exists(
+                playlist_name, track_id, platform=PLATFORM_SPOTIFY
             ):
                 on_success({
                     "status": "exists",
@@ -434,7 +480,7 @@ class SpotifyFlowController:
 
             # Add to Spotify playlist first (platform API)
             on_status("Sync")
-            playlist_id = self._get_playlist_id(playlist_name)
+            playlist_id = self._get_playlist_id(playlist_name, playlist_id)
             if playlist_id is None:
                 raise RuntimeError(
                     f"Could not find Spotify playlist '{playlist_name}'"

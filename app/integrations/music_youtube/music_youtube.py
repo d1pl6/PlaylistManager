@@ -53,6 +53,11 @@ def _patched_get_library_playlists(self, limit: int | None = 25):
                 items = items[1:]
 
             playlists = parse_content_list(items, parse_playlist)
+            # Bound the result to `limit` even when the first browse page
+            # already exceeds it - a negative remaining_limit would make
+            # get_continuations bail and return the whole first page.
+            if limit is not None and len(playlists) >= limit:
+                return playlists[:limit]
             if "continuations" in results:
                 remaining_limit = None if limit is None else (limit - len(playlists))
                 request_func = lambda additionalParams: self._send_request(
@@ -125,7 +130,12 @@ class YouTubeAuthManager:
             return False
 
     def setup_auth(self) -> bool:
-        """Authenticate using browser.json (preferred)"""
+        """Authenticate using browser.json (preferred).
+
+        A failed attempt must leave the manager unauthenticated - never
+        reuse a client built from a now-deleted or replaced browser.json.
+        """
+        self.yt_music = None
         try:
             browser_file = self._find_browser_file()
             if browser_file is not None:
@@ -143,8 +153,8 @@ class YouTubeAuthManager:
     def get_yt_music(self):
         if not self.is_authenticated():
             raise RuntimeError(
-                "Not authenticated. Call setup_auth() first. "
-                "If this is your first time, run the CLI command shown in the logs."
+                "Not authenticated. Open Settings → Login → YouTube Music "
+                "and run `ytmusicapi browser` in the terminal that opens."
             )
         if self.yt_music is None:
             raise RuntimeError("YouTube Music client not initialised")

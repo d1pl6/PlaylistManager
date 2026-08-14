@@ -1,5 +1,10 @@
-from configparser import ConfigParser
+import logging
+import os
+import tempfile
+from configparser import ConfigParser, Error as ConfigParseError
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 SETTINGS_PATH = Path(__file__).resolve().parents[2] / "cfg" / "settings.ini"
 
@@ -9,6 +14,7 @@ DEFAULT_SETTINGS = {
     "auto_resize": {"is_true": "no"},
     "global_listener": {"is_true": "yes"},
     "hide_to_tray": {"is_true": "no"},
+    "ui_scale": {"value": "auto"},
 }
 
 THEME_PATH = Path(__file__).resolve().parents[2] / "cfg" / "theme.ini"
@@ -74,11 +80,56 @@ DEFAULT_THEME = {
 }
 
 
+def _write_ini_file(path: Path, cfg: ConfigParser) -> None:
+    """Atomically persist *cfg* to *path*.
+
+    Writes to a temp file in the same directory, fsyncs, then
+    ``os.replace()``s it over the target.  An in-place ``open(path, "w")``
+    truncates the file first, so a crash or drive error mid-write leaves a
+    truncated INI behind - and a truncated ``theme.ini`` raises at import
+    time (``load_theme()`` runs at module import), taking the whole app down.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            cfg.write(f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _safe_read_config(cfg: ConfigParser, path: Path) -> ConfigParser:
+    """Read *path* into *cfg*, returning a fresh empty parser on parse failure.
+
+    ``ConfigParser.read()`` raises on malformed INIs (unterminated section
+    headers, missing section headers) and - worse - keeps the sections it
+    parsed *before* the error, so the caller must never reuse the partial
+    parser.  A corrupt theme.ini/settings.ini (hand edit, external tool,
+    drive glitch on the exFAT disk) must not take the app down - the
+    settings are cosmetic and every ``ensure_*`` caller self-heals by
+    merging defaults over the returned parser and rewriting the file.
+    """
+    try:
+        cfg.read(str(path))
+    except ConfigParseError as e:
+        logger.warning(
+            "Failed to parse %s (%s) - falling back to defaults", path, e
+        )
+        return ConfigParser()
+    return cfg
+
+
 def ensure_theme_file() -> None:
-    THEME_PATH.parent.mkdir(parents=True, exist_ok=True)
     cfg = ConfigParser()
     if THEME_PATH.exists():
-        cfg.read(str(THEME_PATH))
+        cfg = _safe_read_config(cfg, THEME_PATH)
     changed = False
     for section, values in DEFAULT_THEME.items():
         if section not in cfg:
@@ -90,26 +141,17 @@ def ensure_theme_file() -> None:
                     cfg[section][key] = value
                     changed = True
     if not THEME_PATH.exists() or changed:
-        with open(THEME_PATH, "w", encoding="utf-8") as f:
-            cfg.write(f)
-
-
-def get_theme_value(section: str, option: str, fallback: str) -> str:
-    ensure_theme_file()
-    cfg = ConfigParser()
-    cfg.read(str(THEME_PATH))
-    return cfg.get(section, option, fallback=fallback)
+        _write_ini_file(THEME_PATH, cfg)
 
 
 def set_theme_value(section: str, option: str, value: str) -> None:
-    ensure_theme_file()
+    ensure_theme_file()  # heals a corrupt/missing file and merges defaults
     cfg = ConfigParser()
-    cfg.read(str(THEME_PATH))
+    cfg = _safe_read_config(cfg, THEME_PATH)
     if section not in cfg:
         cfg[section] = {}
     cfg[section][option] = value
-    with open(THEME_PATH, "w", encoding="utf-8") as f:
-        cfg.write(f)
+    _write_ini_file(THEME_PATH, cfg)
 
 
 THEME_PRESETS = {
@@ -176,12 +218,10 @@ THEME_PRESETS = {
 
 
 def restore_theme_defaults() -> None:
-    ensure_theme_file()
     cfg = ConfigParser()
     for section, values in DEFAULT_THEME.items():
         cfg[section] = values
-    with open(THEME_PATH, "w", encoding="utf-8") as f:
-        cfg.write(f)
+    _write_ini_file(THEME_PATH, cfg)
 
 
 def apply_theme_preset(preset: str) -> None:
@@ -192,18 +232,16 @@ def apply_theme_preset(preset: str) -> None:
     if not values:
         return
     cfg = ConfigParser()
-    cfg.read(str(THEME_PATH))
+    cfg = _safe_read_config(cfg, THEME_PATH)
     for section, options in values.items():
         cfg[section] = options
-    with open(THEME_PATH, "w", encoding="utf-8") as f:
-        cfg.write(f)
+    _write_ini_file(THEME_PATH, cfg)
 
 
 def ensure_settings_file() -> None:
-    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     cfg = ConfigParser()
     if SETTINGS_PATH.exists():
-        cfg.read(str(SETTINGS_PATH))
+        cfg = _safe_read_config(cfg, SETTINGS_PATH)
     changed = False
     for section, values in DEFAULT_SETTINGS.items():
         if section not in cfg:
@@ -215,5 +253,59 @@ def ensure_settings_file() -> None:
                     cfg[section][key] = value
                     changed = True
     if not SETTINGS_PATH.exists() or changed:
-        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
-            cfg.write(f)
+        _write_ini_file(SETTINGS_PATH, cfg)
+
+
+def get_setting(section: str, fallback: bool = True) -> bool:
+    """Read one boolean settings section (default *fallback* on any error)."""
+    ensure_settings_file()
+    cfg = ConfigParser()
+    try:
+        cfg.read(str(SETTINGS_PATH))
+        return cfg.getboolean(section, "is_true", fallback=fallback)
+    except Exception:
+        return fallback
+
+
+def set_setting(section: str, enabled: bool) -> None:
+    """Write one boolean settings section, preserving every other section.
+
+    Unknown or legacy sections in settings.ini (e.g. ``toggle_frameless``)
+    are left untouched.
+    """
+    ensure_settings_file()
+    cfg = ConfigParser()
+    cfg.read(str(SETTINGS_PATH))
+    if section not in cfg:
+        cfg[section] = {}
+    cfg[section]["is_true"] = "yes" if enabled else "no"
+    _write_ini_file(SETTINGS_PATH, cfg)
+
+
+def get_setting_value(section: str, option: str, fallback: str = "") -> str:
+    """Read one arbitrary (non-boolean) setting option.
+
+    Like :func:`get_setting` but for value options (e.g. ``ui_scale``),
+    which have no ``is_true`` key.  Returns *fallback* on any error.
+    """
+    ensure_settings_file()
+    cfg = ConfigParser()
+    try:
+        cfg.read(str(SETTINGS_PATH))
+        return cfg.get(section, option, fallback=fallback)
+    except Exception:
+        return fallback
+
+
+def set_setting_value(section: str, option: str, value: str) -> None:
+    """Write one arbitrary setting option, preserving every other section.
+
+    Unknown or legacy sections in settings.ini are left untouched.
+    """
+    ensure_settings_file()
+    cfg = ConfigParser()
+    cfg.read(str(SETTINGS_PATH))
+    if section not in cfg:
+        cfg[section] = {}
+    cfg[section][option] = value
+    _write_ini_file(SETTINGS_PATH, cfg)

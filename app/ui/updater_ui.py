@@ -2,6 +2,7 @@ import tkinter as tk
 import webbrowser
 
 from _version import __version__
+from utils.scaling import ui_font
 from utils.window import center_window
 from utils.theme import C
 
@@ -34,7 +35,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
     tk.Label(
         frame,
         text=f"PlaylistManager v{latest_version} is available!",
-        font=("Noto", 14, "bold"),
+        font=ui_font(14, "bold"),
         background=theme_frame_bg,
         foreground=theme_title_fg,
     ).pack(anchor="w")
@@ -42,7 +43,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
     tk.Label(
         frame,
         text=f"Current version: v{__version__}",
-        font=("Noto", 10),
+        font=ui_font(10),
         background=theme_frame_bg,
         foreground=theme_subtitle_fg,
     ).pack(anchor="w", pady=(0, 10))
@@ -56,7 +57,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
         text_widget = tk.Text(
             text_frame,
             wrap="word",
-            font=("Noto", 10),
+            font=ui_font(10),
             background=theme_text_bg,
             foreground=theme_text_fg,
             relief="flat",
@@ -75,10 +76,14 @@ def show_update_dialog(parent, latest_version, download_url, body):
     btn_frame = tk.Frame(frame, background=theme_frame_bg)
     btn_frame.pack(fill="x")
 
+    def _download():
+        if webbrowser.open(download_url):
+            win.destroy()
+
     tk.Button(
         btn_frame,
         text="Download",
-        font=("Noto", 10),
+        font=ui_font(10),
         background=theme_download_bg,
         activebackground=theme_download_abg,
         foreground=theme_download_fg,
@@ -86,13 +91,13 @@ def show_update_dialog(parent, latest_version, download_url, body):
         relief="flat",
         cursor="hand2",
         padx=16,
-        command=lambda: (webbrowser.open(download_url), win.destroy()),
+        command=_download,
     ).pack(side="right", padx=(8, 0))
 
     tk.Button(
         btn_frame,
         text="Close",
-        font=("Noto", 10),
+        font=ui_font(10),
         background=theme_close_bg,
         activebackground=theme_close_abg,
         foreground=theme_close_fg,

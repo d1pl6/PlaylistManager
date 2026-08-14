@@ -9,6 +9,7 @@ import threading
 import logging
 from typing import Callable, Dict, Optional, Set
 
+from constants import PLATFORM_YOUTUBE_MUSIC
 from utils.key_mapping import parse_hotkey
 
 logger = logging.getLogger(__name__)
@@ -67,46 +68,90 @@ class KeybindRegistry:
         hotkey: str,
         callbacks: KeybindCallbacks,
         platform: str,
-    ):
+    ) -> Optional[Dict]:
         """Register a keybind + callbacks for *playlist_name*.
 
-        Replaces any previous registration for the same playlist name.
-        """
-        self.unregister(playlist_name)
-        if not hotkey:
-            return
-        with self._lock:
-            existing = self._keybind_map.get(hotkey)
-            if existing is not None and existing["playlist_name"] != playlist_name:
-                # Two playlists can't share one hotkey - the new binding
-                # silently wins, which is confusing.  Make it visible.
-                logger.warning(
-                    "Hotkey '%s' is already bound to playlist '%s' - "
-                    "replacing its binding with '%s'",
-                    hotkey, existing["playlist_name"], playlist_name,
-                )
-            self._keybind_map[hotkey] = {
-                "playlist_name": playlist_name,
-                "callbacks": callbacks,
-                "platform": platform,
-                "_parsed": parse_hotkey(hotkey),
-            }
-        logger.info(
-            "Registered keybind '%s' for playlist '%s' (platform=%s)",
-            hotkey, playlist_name, platform,
-        )
+        Playlists are identified by ``(playlist_name, platform)`` so the
+        same name on two platforms keeps two independent bindings.
+        Replaces any previous registration for that combination.
 
-    def unregister(self, playlist_name: str):
-        """Remove all keybinds registered for *playlist_name*."""
+        Returns the binding info of a *different* playlist that owned
+        *hotkey* before this registration (its binding is now displaced),
+        or None when nothing was displaced.  Callers should clear the
+        displaced playlist's persisted hotkey so the store cannot
+        resurrect a binding that no longer fires anything.
+        """
+        self.unregister(playlist_name, platform=platform)
+        displaced = None
+        if hotkey:
+            with self._lock:
+                existing = self._keybind_map.get(hotkey)
+                if existing is not None and (
+                    existing["playlist_name"] != playlist_name
+                    or existing.get("platform", PLATFORM_YOUTUBE_MUSIC) != platform
+                ):
+                    displaced = existing
+                    # Two playlists can't share one hotkey - the new binding
+                    # silently wins, which is confusing.  Make it visible.
+                    logger.warning(
+                        "Hotkey '%s' is already bound to playlist '%s' (%s) - "
+                        "replacing its binding with '%s' (%s)",
+                        hotkey,
+                        existing["playlist_name"],
+                        existing.get("platform", PLATFORM_YOUTUBE_MUSIC),
+                        playlist_name,
+                        platform,
+                    )
+                self._keybind_map[hotkey] = {
+                    "playlist_name": playlist_name,
+                    "callbacks": callbacks,
+                    "platform": platform,
+                    "_parsed": parse_hotkey(hotkey),
+                }
+            logger.info(
+                "Registered keybind '%s' for playlist '%s' (platform=%s)",
+                hotkey, playlist_name, platform,
+            )
+        return displaced
+
+    def unregister(self, playlist_name: str, platform: str = ""):
+        """Remove keybinds registered for *playlist_name*.
+
+        With *platform* given, only that platform's binding is removed,
+        leaving a same-named playlist on the other platform intact.
+        """
         with self._lock:
             to_remove = [
                 k
                 for k, v in self._keybind_map.items()
                 if v["playlist_name"] == playlist_name
+                and (
+                    not platform
+                    or v.get("platform", PLATFORM_YOUTUBE_MUSIC) == platform
+                )
             ]
             for k in to_remove:
                 del self._keybind_map[k]
                 logger.info("Unregistered keybind '%s' for playlist '%s'", k, playlist_name)
+
+    def find(self, playlist_name: str, platform: str = "") -> Optional[Dict]:
+        """Return the current binding info for *playlist_name*.
+
+        With *platform* given, only that platform's binding matches.
+        Returns None when no binding is registered for the combination.
+
+        Used to validate a queued keybind event at execution time: the
+        frame may have been closed (or the hotkey re-bound) between the
+        registry match and the ``after(0, ...)`` dispatch.
+        """
+        with self._lock:
+            for info in self._keybind_map.values():
+                if info["playlist_name"] == playlist_name and (
+                    not platform
+                    or info.get("platform", PLATFORM_YOUTUBE_MUSIC) == platform
+                ):
+                    return info
+        return None
 
     def match(self, pressed_keys: Set[str]) -> Optional[tuple]:
         """Return the best (specificity, hotkey_str, info) or *None*.

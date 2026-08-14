@@ -36,30 +36,47 @@ def parse_playlist_url(url: str) -> Tuple[str, str]:
     if not url:
         raise ValueError("Empty URL")
 
-    # Spotify URI form: spotify:playlist:<id>
-    if url.startswith("spotify:"):
+    # Spotify URI form: spotify:playlist:<id> (strip any ?query/#fragment).
+    # Scheme and type token are matched case-insensitively (RFC 3986); the
+    # ID keeps its case (Spotify IDs are case-sensitive base62).
+    if url.lower().startswith("spotify:"):
         parts = url.split(":")
-        if len(parts) >= 3 and parts[1] == "playlist" and parts[2]:
-            return PLATFORM_SPOTIFY, parts[2].split("?")[0]
+        if len(parts) >= 3 and parts[1].lower() == "playlist" and parts[2]:
+            return PLATFORM_SPOTIFY, parts[2].split("?")[0].split("#")[0]
         raise _unsupported(url)
 
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise _unsupported(url)
 
+    # urlparse normalizes the scheme and hostname but not the path - compare
+    # path segments case-insensitively so pasted/typed URL variants work.
     host = parsed.hostname.lower()
     path = parsed.path.rstrip("/")
 
-    # YouTube: /playlist?list=<id> on music.youtube.com or (www.)youtube.com
-    if host in ("music.youtube.com", "www.youtube.com", "youtube.com"):
-        if path == "/playlist":
+    # youtu.be shortlinks are always song URLs, never playlists.
+    if host == "youtu.be":
+        raise ValueError(
+            "That is a song URL, not a playlist URL - use "
+            "'playlistmanager -a' to add the currently-playing song"
+        )
+
+    # YouTube: /playlist?list=<id> on music.youtube.com, (www.)youtube.com or
+    # m.youtube.com (mobile web).
+    if host in (
+        "music.youtube.com",
+        "www.youtube.com",
+        "youtube.com",
+        "m.youtube.com",
+    ):
+        if path.lower() == "/playlist":
             list_id = (parse_qs(parsed.query).get("list") or [""])[0]
             if not list_id:
                 raise ValueError(
                     f"No 'list' query parameter in YouTube URL '{url}'"
                 )
             return PLATFORM_YOUTUBE_MUSIC, list_id
-        if path.startswith("/watch"):
+        if path.lower().startswith("/watch"):
             raise ValueError(
                 "That is a song URL, not a playlist URL - use "
                 "'playlistmanager -a' to add the currently-playing song"
@@ -69,17 +86,19 @@ def parse_playlist_url(url: str) -> Tuple[str, str]:
         )
 
     # Spotify: /playlist/<id>, optionally prefixed by a locale segment:
-    # /playlist/<id>, /intl-<locale>/playlist/<id>
+    # /playlist/<id>, /intl-<locale>/playlist/<id>. The "playlist" token is
+    # matched case-insensitively, but the ID keeps its original case (Spotify
+    # IDs are case-sensitive base62).
     if host == "open.spotify.com":
         segments = [s for s in path.split("/") if s]
         try:
-            idx = segments.index("playlist")
+            idx = [s.lower() for s in segments].index("playlist")
         except ValueError:
             raise ValueError(
                 f"Unrecognized Spotify URL '{url}' - expected /playlist/<id>"
             )
         if len(segments) <= idx + 1 or not segments[idx + 1]:
             raise ValueError(f"No playlist ID in Spotify URL '{url}'")
-        return PLATFORM_SPOTIFY, segments[idx + 1].split("?")[0]
+        return PLATFORM_SPOTIFY, segments[idx + 1]
 
     raise _unsupported(url)

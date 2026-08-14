@@ -12,6 +12,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
+from utils.scaling import px, ui_font
 from utils.theme import C
 from utils.thumbnail import ThumbnailService
 
@@ -49,7 +50,7 @@ class PlaylistDialog:
             text="Select a Playlist below",
             background=dialog_bg,
             foreground=label_fg,
-            font="Noto, 12",
+            font=ui_font(12),
         ).pack(side="left", anchor="w")
 
         tk.Button(
@@ -58,7 +59,7 @@ class PlaylistDialog:
             background=close_bg,
             foreground=close_fg,
             activebackground=close_a_bg,
-            font="Noto, 12",
+            font=ui_font(12),
             command=self.cancel,
         ).pack(side="right", anchor="e")
 
@@ -98,7 +99,12 @@ class PlaylistDialog:
                 foreground=btn_fg,
                 activebackground=btn_a_bg,
                 activeforeground=btn_a_fg,
-                width=40,
+                # NOTE: on an image-only button, Tk reads -width in PIXELS,
+                # not characters. px(40) matches the thumbnail size so the
+                # placeholder is stable and the image is never clipped
+                # (a char-width constant would cap the button at 40px and
+                # cut the scaled thumbnail).
+                width=px(40),
                 command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
             )
             btn.pack(pady=5, padx=5)
@@ -109,7 +115,7 @@ class PlaylistDialog:
                 foreground=btn_fg,
                 activebackground=btn_a_bg,
                 activeforeground=btn_a_fg,
-                font="Noto, 11",
+                font=ui_font(11),
                 width=40,
                 command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
             ).pack(pady=5)
@@ -123,6 +129,11 @@ class PlaylistDialog:
         scrollable_frame.bind("<MouseWheel>", self._on_mouse_wheel)
         scrollable_frame.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
         scrollable_frame.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
+        # Also scroll when the wheel is over the bare canvas (a short list
+        # doesn't cover the full scroll area).
+        self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
+        self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
+        self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
         for child in scrollable_frame.winfo_children():
             child.bind("<MouseWheel>", self._on_mouse_wheel)
             child.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
@@ -131,20 +142,31 @@ class PlaylistDialog:
     def _load_thumb_async(self, button: tk.Button, thumb_url: str) -> None:
         """Download the cover in a worker; apply the PhotoImage on the main thread."""
         def _run() -> None:
-            img = ThumbnailService.fetch_image(thumb_url, size=(40, 40))
+            img = ThumbnailService.fetch_image(thumb_url, size=(px(40), px(40)))
             if img is not None:
-                self.parent.after(0, lambda: self._apply_thumb(button, img))
+                try:
+                    self.parent.after(0, lambda: self._apply_thumb(button, img))
+                except Exception:
+                    logger.debug("Dialog closed during thumbnail download", exc_info=True)
 
         threading.Thread(target=_run, daemon=True).start()
 
     def _apply_thumb(self, button: tk.Button, img) -> None:
         try:
+            if not button.winfo_exists():
+                # Dialog was closed before the download finished.
+                return
             photo = ThumbnailService.to_photoimage(img)
         except Exception as e:
             logger.error(f"Failed to create dialog thumbnail: {e}")
             return
-        self.img_refs.append(photo)
-        button.configure(image=photo)
+        try:
+            button.configure(image=photo)
+            self.img_refs.append(photo)
+        except tk.TclError as e:
+            # The dialog can be destroyed between the winfo_exists() check
+            # and configure() - swallow the race, not a real failure.
+            logger.debug("Dialog closed before thumbnail could be applied: %s", e)
 
     def _on_playlist_click(self, playlist_name, playlist_id, thumb_url=None):
         self.close()

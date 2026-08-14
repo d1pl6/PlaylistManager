@@ -25,10 +25,15 @@ from utils.key_mapping import (
 )
 from utils.platform import is_wayland_session
 from controllers.keybind_registry import KeybindCallbacks, KeybindRegistry
+from services.playlist_store import PlaylistStore
 from services.song_manager import SongManager
 from utils.theme import C
 
 logger = logging.getLogger(__name__)
+
+# Sentinel for update_credentials - distinguishes "don't touch this
+# client" from "explicitly clear it" (None).
+_UNSET = object()
 
 
 class KeybindController:
@@ -38,7 +43,12 @@ class KeybindController:
         self.yt = yt_client
         self.spotify_integration = spotify_integration
         self.song_manager: Optional[SongManager] = None
-        self.keybind_thread: Optional[threading.Thread] = None
+
+        # Guards the single in-flight flow.  Acquired synchronously here on
+        # the main thread BEFORE the flow thread starts, released when the
+        # flow ends - closing the race where two keybind events in the same
+        # event-loop tick could both pass the busy check.
+        self._flow_busy = threading.Lock()
 
         # Flow controllers - lazily created on first keybind trigger
         self._keybind_flow = None
@@ -67,20 +77,25 @@ class KeybindController:
     # Credentials
     # ------------------------------------------------------------------
 
-    def update_credentials(self, yt_client=None, spotify_integration=None):
+    def update_credentials(self, yt_client=_UNSET, spotify_integration=_UNSET):
         """Update API clients and invalidate active flow controllers.
 
         Called from the UI thread after re-authentication.  The flow
         controllers are set to None so they will be lazily re-created
         on the next keybind trigger with the new credentials.
 
+        Passing ``None`` for a client explicitly **clears** it - after a
+        failed re-auth a stale authenticated client must not keep being
+        used silently (flows then report "not authenticated" instead).
+        Omit the argument to leave that client untouched.
+
         The old URL receiver is stopped to free port 5000 before a new
         receiver is created on the next keybind.
         """
         self.stop_receiver()
-        if yt_client is not None:
+        if yt_client is not _UNSET:
             self.yt = yt_client
-        if spotify_integration is not None:
+        if spotify_integration is not _UNSET:
             self.spotify_integration = spotify_integration
         self._keybind_flow = None
         self._spotify_flow = None
@@ -276,11 +291,16 @@ class KeybindController:
         hotkey: str,
         callbacks: KeybindCallbacks,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
-    ):
-        self.registry.register(playlist_name, hotkey, callbacks, platform)
+    ) -> Optional[Dict]:
+        """Register *hotkey* for *playlist_name*; see KeybindRegistry.register.
 
-    def unregister_hotkey(self, playlist_name: str):
-        self.registry.unregister(playlist_name)
+        Returns the binding info displaced by this registration (a
+        different playlist that owned the same hotkey), or None.
+        """
+        return self.registry.register(playlist_name, hotkey, callbacks, platform)
+
+    def unregister_hotkey(self, playlist_name: str, platform: str = ""):
+        self.registry.unregister(playlist_name, platform=platform)
 
     def _check_hotkeys(self):
         with self._pressed_keys_lock:
@@ -292,9 +312,17 @@ class KeybindController:
             callbacks = info["callbacks"]
             platform = info.get("platform", PLATFORM_YOUTUBE_MUSIC)
             if self._root:
-                self._root.after(
-                    0, self.handle_keybind, playlist_name, callbacks, platform,
-                )
+                try:
+                    self._root.after(
+                        0, self.handle_keybind, playlist_name, callbacks, platform,
+                    )
+                except Exception as e:
+                    # _check_hotkeys also runs on the pynput listener
+                    # thread; after() raises "main thread is not in main
+                    # loop" when a key lands outside the mainloop
+                    # (startup/shutdown window).  A stray key must not
+                    # kill the listener.
+                    logger.debug("Failed to schedule keybind dispatch: %s", e)
 
     # ------------------------------------------------------------------
     # Flow execution
@@ -311,10 +339,31 @@ class KeybindController:
         All UI updates go through *callbacks* so the controller never
         touches tkinter widgets directly.
         """
-        if self.keybind_thread is not None and self.keybind_thread.is_alive():
+        if not self._flow_busy.acquire(blocking=False):
             callbacks.on_status("Busy", C["label_playlist_warn_bg"])
             logger.warning("Flow already in progress, ignoring keybind")
             return
+
+        # The match + after(0, ...) dispatch is asynchronous - the frame
+        # may have been closed (or its hotkey re-bound) while the event
+        # was queued.  Running the flow anyway would add the song to a
+        # playlist the user removed from the window and resurrect its
+        # deleted local DB file, so drop stale events.
+        current = self.registry.find(playlist_name, platform)
+        if current is None or current.get("callbacks") is not callbacks:
+            logger.debug(
+                "Keybind for '%s' (%s) is no longer active, dropping event",
+                playlist_name, platform,
+            )
+            self._flow_busy.release()
+            return
+
+        # Resolve the stored playlist ID so the flow does not re-scan the
+        # platform library by name (a full-library network round trip) - the
+        # store persisted the ID at add-playlist time.  Legacy entries have
+        # none, and the flow then falls back to the by-name scan.
+        entry = PlaylistStore.find_playlist(playlist_name, platform=platform)
+        stored_playlist_id = (entry or {}).get("playlist_id") or None
 
         callbacks.on_entry_state("readonly")
         callbacks.on_status("Loading", C["label_playlist_warn_bg"])
@@ -322,21 +371,40 @@ class KeybindController:
 
         if not self._ensure_initialized(platform, callbacks):
             callbacks.on_reset("readonly")
+            self._flow_busy.release()
             return
 
+        def _schedule_ui(fn):
+            """Marshal *fn* to the main thread; drop it if the app is gone.
+
+            The flow runs on a worker thread and can outlive the mainloop
+            (a quit during the ~30 s receiver wait).  ``after`` raises
+            "main thread is not in main loop" / "application has been
+            destroyed" in that window, and an uncaught raise here would
+            escape execute_flow's error handler and kill the flow thread
+            with a traceback during shutdown.  Same guard as
+            ``_check_hotkeys``.
+            """
+            if self._root is None:
+                return
+            try:
+                self._root.after(0, fn)
+            except Exception:
+                logger.debug("App is shutting down; dropped flow UI update")
+
         def on_status(msg):
-            def _apply():
-                callbacks.on_status(msg, C["label_playlist_warn_bg"])
-            if self._root is not None:
-                self._root.after(0, _apply)
+            _schedule_ui(
+                lambda: callbacks.on_status(msg, C["label_playlist_warn_bg"])
+            )
 
         def on_error(error_msg):
-            def _apply():
-                callbacks.on_reset("readonly")
-                callbacks.on_status("Error", C["label_playlist_error_bg"])
             logger.error(f"Keybind flow error: {error_msg}")
-            if self._root is not None:
-                self._root.after(0, _apply)
+            _schedule_ui(
+                lambda: (
+                    callbacks.on_reset("readonly"),
+                    callbacks.on_status("Error", C["label_playlist_error_bg"]),
+                )
+            )
 
         def on_success(result):
             def _apply():
@@ -361,7 +429,7 @@ class KeybindController:
                 callbacks.on_entry_state("readonly")
 
             if self._root is not None:
-                self._root.after(0, _apply)
+                _schedule_ui(_apply)
             else:
                 logger.warning(
                     "Cannot apply success result: root window unavailable"
@@ -374,21 +442,24 @@ class KeybindController:
                         on_error("Spotify not initialized")
                         return
                     self._spotify_flow.execute_flow(
-                        playlist_name, on_status, on_error, on_success
+                        playlist_name, on_status, on_error, on_success,
+                        playlist_id=stored_playlist_id,
                     )
                 else:
                     if self._keybind_flow is None:
                         on_error("Flow not initialized")
                         return
                     self._keybind_flow.execute_flow(
-                        playlist_name, on_status, on_error, on_success
+                        playlist_name, on_status, on_error, on_success,
+                        playlist_id=stored_playlist_id,
                     )
             except Exception as e:
                 logger.error(f"Keybind flow exception: {e}", exc_info=True)
                 on_error(str(e))
+            finally:
+                self._flow_busy.release()
 
-        self.keybind_thread = threading.Thread(target=run_flow, daemon=True)
-        self.keybind_thread.start()
+        threading.Thread(target=run_flow, daemon=True).start()
 
     def _ensure_initialized(
         self, platform: str, callbacks: KeybindCallbacks
@@ -477,4 +548,3 @@ class KeybindController:
         self._keybind_flow = None
         self._spotify_flow = None
         self.spotify_integration = None
-        self.keybind_thread = None

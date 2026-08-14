@@ -18,6 +18,8 @@ creates the Tk object.
 
 import io
 import logging
+import threading
+import time
 from typing import Dict, List, Optional, Tuple
 
 import requests
@@ -26,8 +28,46 @@ from PIL import Image, ImageTk
 logger = logging.getLogger(__name__)
 
 
+# Reused across fetches: keeps TCP/TLS connections alive between dialog
+# opens instead of a fresh handshake per thumbnail.  requests.Session is
+# thread-safe for concurrent get() calls (bounded by _fetch_semaphore).
+_session = requests.Session()
+
+
 class ThumbnailService:
     """Fetch, resize, and create PhotoImage objects from thumbnail URLs."""
+
+    # Bounds app-wide thumbnail concurrency: the playlist picker spawns one
+    # worker per entry, and a large library would otherwise open dozens of
+    # parallel connections on every dialog open.
+    _fetch_semaphore = threading.BoundedSemaphore(4)
+
+    _cache_lock = threading.Lock()
+    _cache: Dict[Tuple[str, Tuple[int, int]], Tuple[float, Image.Image]] = {}
+    _CACHE_TTL_SECONDS = 600
+    _CACHE_MAX_ENTRIES = 256
+
+    @staticmethod
+    def _cover_fit(img: Image.Image, size: Tuple[int, int]) -> Image.Image:
+        """Scale *img* to cover *size* preserving aspect, then center-crop.
+
+        A plain ``resize(size)`` stretches non-square sources - e.g. 16:9
+        YouTube playlist covers - into the square display box.  Cover-fit
+        leaves square sources untouched and crops the overflow from
+        landscape/portrait ones instead.
+        """
+        target_w, target_h = size
+        w, h = img.size
+        if target_w <= 0 or target_h <= 0 or w <= 0 or h <= 0:
+            return img
+        scale = max(target_w / w, target_h / h)
+        new_w = max(round(w * scale), target_w)
+        new_h = max(round(h * scale), target_h)
+        if (new_w, new_h) != (w, h):
+            img = img.resize((new_w, new_h), Image.Resampling.BICUBIC)
+        left = (new_w - target_w) // 2
+        top = (new_h - target_h) // 2
+        return img.crop((left, top, left + target_w, top + target_h))
 
     @staticmethod
     def get_smallest_thumbnail(thumbnails: Optional[List[Dict]]) -> Optional[str]:
@@ -67,13 +107,14 @@ class ThumbnailService:
         thumb_url: Optional[str],
         size: Tuple[int, int] = (64, 64),
     ) -> Optional[Image.Image]:
-        """Download and resize a thumbnail into a plain PIL image.
+        """Download and cover-fit a thumbnail into a plain PIL image.
 
         Thread-safe - no Tk objects are created here.  Returns *None*
         on any failure so callers don't need to catch exceptions.
 
         Handles HTTP to HTTPS upgrade, network errors, and invalid image
-        data.
+        data.  The image is scaled to *size* preserving aspect ratio and
+        center-cropped (see :meth:`_cover_fit`).
         """
         if not thumb_url:
             return None
@@ -84,16 +125,49 @@ class ThumbnailService:
             logger.warning("Rejected non-HTTPS thumbnail URL: %s", thumb_url)
             return None
 
-        try:
-            resp = requests.get(thumb_url, timeout=10)
-            resp.raise_for_status()
-            return Image.open(io.BytesIO(resp.content)).resize(size)
-        except requests.RequestException as e:
-            logger.error("Network error fetching thumbnail from %s: %s", thumb_url, e)
-            return None
-        except Exception as e:
-            logger.error("Failed to fetch thumbnail from %s: %s", thumb_url, e)
-            return None
+        key = (thumb_url, size)
+        with ThumbnailService._cache_lock:
+            hit = ThumbnailService._cache.get(key)
+            if hit is not None:
+                ts, cached = hit
+                if time.monotonic() - ts < ThumbnailService._CACHE_TTL_SECONDS:
+                    return cached.copy()
+                del ThumbnailService._cache[key]
+
+        with ThumbnailService._fetch_semaphore:
+            try:
+                resp = _session.get(thumb_url, timeout=10)
+                resp.raise_for_status()
+                img = ThumbnailService._cover_fit(
+                    Image.open(io.BytesIO(resp.content)), size
+                )
+            except requests.RequestException as e:
+                logger.error("Network error fetching thumbnail from %s: %s", thumb_url, e)
+                return None
+            except Exception as e:
+                logger.error("Failed to fetch thumbnail from %s: %s", thumb_url, e)
+                return None
+
+        with ThumbnailService._cache_lock:
+            now = time.monotonic()
+            # Drop expired entries first so a long session of distinct
+            # thumbnails can't accumulate stale images that are never
+            # accessed again (they were only evicted on a future hit).
+            expired = [
+                k
+                for k, (ts, _) in ThumbnailService._cache.items()
+                if now - ts >= ThumbnailService._CACHE_TTL_SECONDS
+            ]
+            for k in expired:
+                del ThumbnailService._cache[k]
+            if len(ThumbnailService._cache) >= ThumbnailService._CACHE_MAX_ENTRIES:
+                oldest = min(
+                    ThumbnailService._cache,
+                    key=lambda k: ThumbnailService._cache[k][0],
+                )
+                del ThumbnailService._cache[oldest]
+            ThumbnailService._cache[key] = (now, img.copy())
+        return img
 
     @staticmethod
     def to_photoimage(img: Image.Image) -> ImageTk.PhotoImage:

@@ -22,6 +22,22 @@ from constants import FLASK_RECEIVER_PORT
 
 logger = logging.getLogger(__name__)
 
+YT_MUSIC_URL_PATTERN = r"https://music\.youtube\.com/watch\?v=([\w-]+)"
+
+
+def extract_video_id(url: Optional[str]) -> Optional[str]:
+    """Validate and extract the video ID from a YouTube Music URL.
+
+    Returns the video ID string, or None if the URL is not a valid
+    YouTube Music watch URL (or not a string at all).
+    """
+    if not url or not isinstance(url, str):
+        return None
+    match = re.match(YT_MUSIC_URL_PATTERN, url)
+    if not match:
+        return None
+    return match.group(1)
+
 
 class _RateLimiter:
     def __init__(self, max_requests: int = 10, window_seconds: int = 60):
@@ -53,8 +69,6 @@ class URLReceiverManager:
     The server is short-lived (up to ~30 s per keybind press) and binds to
     localhost only, so plain HTTP is acceptable.
     """
-
-    YT_MUSIC_URL_PATTERN = r"https://music\.youtube\.com/watch\?v=([\w-]+)"
 
     def __init__(
         self,
@@ -108,9 +122,12 @@ class URLReceiverManager:
         @app.route("/status", methods=["GET"])
         def _status():
             """Extension polls this to know when to send a URL."""
-            return jsonify(
-                {"ready": self._waiting_for_url, "token": self._token}
-            )
+            with self._state_lock:
+                ready = self._waiting_for_url
+                # Only expose the per-run token once the flow is actually
+                # waiting - a stale token between flows is needless surface.
+                token = self._token if ready else None
+            return jsonify({"ready": ready, "token": token})
 
         @app.route("/receive-url", methods=["POST", "OPTIONS"])
         def _receive_url():
@@ -135,12 +152,18 @@ class URLReceiverManager:
                 if not url:
                     return jsonify({"error": "No URL provided"}), 400
 
-                video_id = self._extract_video_id(url)
+                video_id = extract_video_id(url)
                 if video_id is None:
                     return jsonify({"error": "Invalid YouTube Music URL"}), 400
 
                 with self._state_lock:
                     self._waiting_for_url = False
+                    # Invalidate the token the moment the URL is consumed,
+                    # not just at stop(): between consumption and the
+                    # flow's stop() call there is no legitimate second
+                    # receiver, so a duplicate POST in that window must
+                    # get 403 rather than enqueue a stale URL.
+                    self._token = None
                     self.url_queue.put(url)
 
                 logger.debug(f"Received valid YouTube Music URL: {video_id}")
@@ -161,18 +184,6 @@ class URLReceiverManager:
                 return jsonify({"error": "Internal server error"}), 500
 
         self.app = app
-
-    @staticmethod
-    def _extract_video_id(url: str) -> str | None:
-        """Validate and extract the video ID from a YouTube Music URL.
-
-        Returns the video ID string, or None if the URL is not a valid
-        YouTube Music watch URL.
-        """
-        match = re.match(URLReceiverManager.YT_MUSIC_URL_PATTERN, url)
-        if not match:
-            return None
-        return match.group(1)
 
     def set_waiting(self, waiting: bool) -> None:
         """Control whether the /status endpoint reports ready.
@@ -233,18 +244,34 @@ class URLReceiverManager:
             raise
 
     def stop(self) -> None:
-        """Stop the Flask server gracefully."""
+        """Stop the Flask server gracefully.
+
+        ``_running`` is cleared and the flow sentinel is queued *before*
+        ``shutdown()``: a shutdown failure cannot wedge the receiver in
+        the "running" state (which would make every later flow report
+        "already running" and wait on a dead server), and a flow blocked
+        in :meth:`get_received_url` aborts promptly even when an
+        in-flight ``/receive-url`` request would otherwise deliver a URL
+        to a flow that was meant to be aborted.
+        """
         if not self._running:
             return
 
         with self._state_lock:
             self._waiting_for_url = False
             self._token = None
+
+        self._running = False
+        # Wake a flow blocked in get_received_url() so it aborts promptly
+        # instead of holding the flow lock until its timeout expires (e.g.
+        # update_credentials stops the receiver mid-wait).  The sentinel
+        # (None) is drained by set_waiting(True) before the next flow
+        # starts.
+        self.url_queue.put(None)
         try:
             if self._server:
                 self._server.shutdown()
                 self._server = None
-            self._running = False
             logger.info("Stopped URL receiver")
         except Exception as e:
             logger.error(f"Error stopping URL receiver: {e}")
@@ -263,6 +290,10 @@ class URLReceiverManager:
 
         try:
             url = self.url_queue.get(timeout=timeout)
+            if url is None:
+                raise RuntimeError(
+                    "URL receiver stopped while waiting for a URL"
+                )
             logger.debug("Retrieved URL from queue")
             return url
         except Empty:

@@ -20,7 +20,12 @@ The theme can change at runtime (Settings -> Theme), so two rules apply:
 
 from configparser import ConfigParser
 
-from utils.config import DEFAULT_THEME, THEME_PATH, ensure_theme_file
+from utils.config import (
+    DEFAULT_THEME,
+    THEME_PATH,
+    _safe_read_config,
+    ensure_theme_file,
+)
 
 #: palette name -> (ini section, ini option).  Names must match ``theme.txt``
 #: and every entry must resolve to an option that exists in ``cfg/theme.ini``.
@@ -88,7 +93,7 @@ def load_theme() -> None:
     """
     ensure_theme_file()
     cfg = ConfigParser()
-    cfg.read(str(THEME_PATH))
+    cfg = _safe_read_config(cfg, THEME_PATH)
     for name, (section, option) in THEME_MAP.items():
         default = DEFAULT_THEME.get(section, {}).get(option, "#000000")
         C[name] = cfg.get(section, option, fallback=default)
