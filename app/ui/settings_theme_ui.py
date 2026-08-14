@@ -258,4 +258,10 @@ def show_theme_dialog(parent, on_theme_change=None):
             grandchild.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
             grandchild.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
 
+    # Also scroll when the wheel is over the bare canvas (a short theme
+    # doesn't cover the full scroll area) - mirrors playlist_dialog.py.
+    canvas.bind("<MouseWheel>", _on_mousewheel)
+    canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+    canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
+
     center_window(win)

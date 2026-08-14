@@ -1,5 +1,6 @@
 import tkinter as tk
 import webbrowser
+from tkinter import messagebox
 
 from _version import __version__
 from utils.scaling import ui_font
@@ -79,6 +80,13 @@ def show_update_dialog(parent, latest_version, download_url, body):
     def _download():
         if webbrowser.open(download_url):
             win.destroy()
+        else:
+            messagebox.showerror(
+                "PlaylistManager",
+                "Could not open a browser. Download manually from:\n"
+                + download_url,
+                parent=win,
+            )
 
     tk.Button(
         btn_frame,

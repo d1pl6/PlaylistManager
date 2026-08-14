@@ -10,6 +10,7 @@ thread).
 import logging
 import threading
 import tkinter as tk
+from queue import Empty, Queue
 from tkinter import ttk
 
 from utils.scaling import px, ui_font
@@ -17,6 +18,12 @@ from utils.theme import C
 from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
+
+#: Bounded thumbnail fetch concurrency (the queue holds the backlog, so a
+#: large library spawns 4 workers instead of one thread per playlist).
+_THUMB_WORKERS = 4
+#: Queue sentinel telling a worker to exit.
+_WORKER_STOP = object()
 
 
 class PlaylistDialog:
@@ -27,6 +34,12 @@ class PlaylistDialog:
         self.choose_frame = None
         self.canvas = None
         self.img_refs = []
+        # Bounded thumbnail pipeline: jobs are queued and consumed by a few
+        # daemon workers instead of one thread per playlist (a 100+ item
+        # library would otherwise pile up 100 threads on the fetch semaphore).
+        self._thumb_tasks: "Queue" = Queue()
+        for _ in range(_THUMB_WORKERS):
+            threading.Thread(target=self._thumb_worker, daemon=True).start()
 
     def show(self, playlists):
         dialog_bg = C["frame_main_bg"]
@@ -41,6 +54,14 @@ class PlaylistDialog:
 
         self.choose_frame = tk.Frame(self.parent, background=dialog_bg)
         self.choose_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        # The picker overlays the root grid's row 1, which normally holds
+        # the (fixed-size, top-anchored) playlist cards and is unweighted.
+        # Give that row a weight while the picker is up so it fills the
+        # window; close() reverts it so the card layout is untouched.
+        try:
+            self.parent.grid_rowconfigure(1, weight=1)
+        except tk.TclError:
+            pass
 
         title_frame = tk.Frame(self.choose_frame, background=dialog_bg)
         title_frame.pack(pady=5)
@@ -72,7 +93,6 @@ class PlaylistDialog:
         scrollable_frame = tk.Frame(
             self.canvas,
             background=dialog_bg,
-            cursor="hand2",
             border=1,
             relief="solid",
         )
@@ -104,6 +124,7 @@ class PlaylistDialog:
                 # placeholder is stable and the image is never clipped
                 # (a char-width constant would cap the button at 40px and
                 # cut the scaled thumbnail).
+                cursor="hand2",
                 width=px(40),
                 command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
             )
@@ -116,6 +137,7 @@ class PlaylistDialog:
                 activebackground=btn_a_bg,
                 activeforeground=btn_a_fg,
                 font=ui_font(11),
+                cursor="hand2",
                 width=40,
                 command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
             ).pack(pady=5)
@@ -140,16 +162,37 @@ class PlaylistDialog:
             child.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
 
     def _load_thumb_async(self, button: tk.Button, thumb_url: str) -> None:
-        """Download the cover in a worker; apply the PhotoImage on the main thread."""
-        def _run() -> None:
-            img = ThumbnailService.fetch_image(thumb_url, size=(px(40), px(40)))
+        """Queue a cover download; the PhotoImage is applied on the main thread."""
+        self._thumb_tasks.put((button, thumb_url))
+
+    def _thumb_worker(self) -> None:
+        """Consume queued cover jobs (daemon).  Network + PIL run here; the
+        resulting image is handed to the main thread via a guarded after()."""
+        while True:
+            item = self._thumb_tasks.get()
+            if item is _WORKER_STOP:
+                self._thumb_tasks.task_done()
+                return
+            button, thumb_url = item
+            try:
+                img = ThumbnailService.fetch_image(
+                    thumb_url, size=(px(40), px(40))
+                )
+            except Exception as e:
+                logger.debug("Thumbnail download failed: %s", e)
+                img = None
             if img is not None:
                 try:
-                    self.parent.after(0, lambda: self._apply_thumb(button, img))
+                    # Default-arg capture: the lambda must bind THIS item's
+                    # button/image, not the loop cells (reassigned on the
+                    # next get() before the main loop may run this).
+                    self.parent.after(
+                        0,
+                        lambda b=button, im=img: self._apply_thumb(b, im),
+                    )
                 except Exception:
                     logger.debug("Dialog closed during thumbnail download", exc_info=True)
-
-        threading.Thread(target=_run, daemon=True).start()
+            self._thumb_tasks.task_done()
 
     def _apply_thumb(self, button: tk.Button, img) -> None:
         try:
@@ -178,6 +221,22 @@ class PlaylistDialog:
         self.close()
 
     def close(self):
+        # Stop the thumbnail workers: drop queued jobs, then signal each
+        # worker to exit.  A fetch already in flight finishes and hits the
+        # guarded after() against the destroyed dialog - a no-op.
+        try:
+            while True:
+                self._thumb_tasks.get_nowait()
+                self._thumb_tasks.task_done()
+        except Empty:
+            pass
+        for _ in range(_THUMB_WORKERS):
+            self._thumb_tasks.put(_WORKER_STOP)
+        # Revert the temporary row weight so the card layout is unaffected.
+        try:
+            self.parent.grid_rowconfigure(1, weight=0)
+        except tk.TclError:
+            pass
         if self.choose_frame:
             try:
                 self.choose_frame.destroy()

@@ -354,11 +354,16 @@ def _on_spotify(parent, on_success):
             status_label.config(text="All fields are required", foreground="red")
             return
         status_label.config(text="Testing...", foreground="white")
-        btn_test.config(state="disabled")
+        _set_busy(True)
 
         def run():
             result = auth_setup.verify_spotify_credentials(**creds)
-            win.after(0, _test_done, result)
+            try:
+                win.after(0, _test_done, result)
+            except Exception:
+                # App quit (or dialog destroyed) while the verify round
+                # trip was in flight - nothing to schedule against.
+                logger.debug("Login dialog closed during verification", exc_info=True)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -371,7 +376,7 @@ def _on_spotify(parent, on_success):
                 return
         except tk.TclError:
             return
-        btn_test.config(state="normal")
+        _set_busy(False)
         if result.get("ok"):
             status_label.config(
                 text=f"OK: {result['display_name']}",
@@ -387,11 +392,16 @@ def _on_spotify(parent, on_success):
             status_label.config(text="All fields are required", foreground="red")
             return
         status_label.config(text="Verifying...", foreground="white")
-        btn_save.config(state="disabled")
+        _set_busy(True)
 
         def run():
             result = auth_setup.save_and_verify_spotify_credentials(**creds)
-            win.after(0, _save_done, result)
+            try:
+                win.after(0, _save_done, result)
+            except Exception:
+                # App quit (or dialog destroyed) while the verify round
+                # trip was in flight - nothing to schedule against.
+                logger.debug("Login dialog closed during verification", exc_info=True)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -401,7 +411,7 @@ def _on_spotify(parent, on_success):
                 return
         except tk.TclError:
             return
-        btn_save.config(state="normal")
+        _set_busy(False)
         if result.get("ok"):
             status_label.config(
                 text=f"OK: {result['display_name']}",
@@ -445,5 +455,15 @@ def _on_spotify(parent, on_success):
         command=save_credentials,
     )
     btn_save.pack(side="right")
+
+    def _set_busy(busy: bool) -> None:
+        """Disable/enable every credential button while a verify round trip
+        is in flight - Test and Save must never run concurrently (Spotify's
+        refresh-token rotation makes a second concurrent /v1/me fail, and a
+        delete mid-verify races the file write)."""
+        state = "disabled" if busy else "normal"
+        btn_test.config(state=state)
+        btn_save.config(state=state)
+        btn_delete.config(state=state)
 
     center_window(win)
