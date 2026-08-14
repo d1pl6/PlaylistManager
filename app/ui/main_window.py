@@ -117,7 +117,6 @@ class MainWindow:
         self.loading_img = IconService.get(loading_img_path, 32)
 
         self.root.grid_rowconfigure(0, weight=0)
-        self.root.grid_rowconfigure(1, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=1)
 
@@ -885,7 +884,7 @@ class MainWindow:
                 anchor="w",
             )
 
-            main_frame.grid(row=row, column=col)
+            main_frame.grid(row=row, column=col, sticky="ne" if col == 1 else "nw", pady=(5,0), padx=2.5)
             self.frames.append(main_frame)
             self.frame_positions.append((row, col))
             self.playlist_name_labels.append(playlist_name)
@@ -929,7 +928,7 @@ class MainWindow:
 
     def _show_main_content(self) -> None:
         for frame, (row, col) in zip(self.frames, self.frame_positions):
-            frame.grid(row=row, column=col)
+            frame.grid(row=row, column=col, sticky="ne" if col == 1 else "nw", pady=(5,0), padx=2.5)
 
     def close_main_frame(self, frame) -> None:
         try:
@@ -1017,7 +1016,7 @@ class MainWindow:
             col = i % 2
             row = (i // 2) + 1
             self.frame_positions.append((row, col))
-            frame.grid(row=row, column=col)
+            frame.grid(row=row, column=col, sticky="ne" if col == 1 else "nw", pady=(5,0), padx=2.5)
         logger.debug("Reordered frames after deletion")
 
     # ------------------------------------------------------------------
