@@ -22,7 +22,7 @@ from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from utils.scaling import ui_font
 from utils.icons import IconService
 from utils.window import center_window
-from utils.theme import C
+from utils.theme import C, btn_colors
 from utils.logging_config import user_log
 
 logger = logging.getLogger(__name__)
@@ -245,13 +245,13 @@ def _on_spotify(parent, on_success):
     entry_fg = C["entry_default_fg"]
     button_close_bg = C["button_close_bg"]
     button_close_fg = C["button_close_fg"]
-    button_close_a_bg = C["button_close_a_bg"]
+    button_close_btn = btn_colors(button_close_bg, button_close_fg)
     btn_test_bg = C["button_main_bg"]
-    btn_test_abg = C["button_main_a_bg"]
     btn_test_fg = C["button_main_fg"]
+    btn_test_btn = btn_colors(btn_test_bg, btn_test_fg)
     button_save_bg = C["button_save_bg"]
     button_save_fg = C["button_save_fg"]
-    button_save_a_bg = C["button_save_a_bg"]
+    button_save_btn = btn_colors(button_save_bg, button_save_fg)
     frame_bg = C["frame_main_bg"]
 
     existing = auth_setup.load_spotify_credentials()
@@ -427,9 +427,7 @@ def _on_spotify(parent, on_success):
         btn_frame,
         text="Delete",
         cursor="hand2",
-        background=button_close_bg,
-        foreground=button_close_fg,
-        activebackground=button_close_a_bg,
+        **button_close_btn,
         font=ui_font(10),
         highlightthickness=0,
         relief="raised",
@@ -441,9 +439,7 @@ def _on_spotify(parent, on_success):
         btn_frame,
         text="Test",
         cursor="hand2",
-        background=btn_test_bg,
-        foreground=btn_test_fg,
-        activebackground=btn_test_abg,
+        **btn_test_btn,
         font=ui_font(10),
         highlightthickness=0,
         relief="raised",
@@ -455,9 +451,7 @@ def _on_spotify(parent, on_success):
         btn_frame,
         text="Save",
         cursor="hand2",
-        background=button_save_bg,
-        foreground=button_save_fg,
-        activebackground=button_save_a_bg,
+        **button_save_btn,
         font=ui_font(10),
         highlightthickness=0,
         relief="raised",

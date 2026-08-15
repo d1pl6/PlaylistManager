@@ -10,7 +10,7 @@ from utils.config import (
     THEME_PATH,
 )
 from utils.scaling import px, ui_font
-from utils.theme import C
+from utils.theme import C, hover_bg, readable_fg, btn_colors
 from utils.window import center_window
 
 
@@ -22,8 +22,8 @@ def show_theme_dialog(parent, on_theme_change=None):
     label_bg = C["label_def_bg"]
     label_fg = C["label_def_fg"]
     button_bg = C["button_main_bg"]
-    button_abg = C["button_main_a_bg"]
     button_fg = C["button_main_fg"]
+    button_btn = btn_colors(button_bg, button_fg)
 
 
     win = tk.Toplevel(parent)
@@ -102,50 +102,10 @@ def show_theme_dialog(parent, on_theme_change=None):
 
     color_buttons: list = []
 
-    def _luminance(hex_color: str) -> float:
-        """Relative luminance (0..1) of a #RRGGBB color; dark-assumption fallback."""
-        h = hex_color.lstrip("#")
-        if len(h) != 6:
-            return 0.0  # named color: assume dark, use white text
-        r, g, b = (int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-    def _hover_bg(value: str) -> str:
-        """Hover background for a swatch: a shade of *value*.
-
-        Light colors are darkened toward black, dark colors lightened toward
-        white, so the hover state is always visibly different from the swatch
-        itself.  A pure ``#ffffff`` / ``#000000`` (or near-pure) value would
-        make an inverted hover color identical (or nearly identical) to the
-        swatch, giving no feedback.  Named colors fall back to no hover
-        change - theme values from the picker and presets are always hex.
-        """
-        h = value.lstrip("#")
-        if len(h) != 6:
-            return value
-        channels = [int(h[i : i + 2], 16) for i in (0, 2, 4)]
-        if _luminance(value) >= 0.6:
-            shaded = [int(c * 0.75) for c in channels]  # light -> darker
-        else:
-            shaded = [int(c + (255 - c) * 0.25) for c in channels]  # dark -> lighter
-        return "#{:02x}{:02x}{:02x}".format(*shaded)
-
     def _style_button(btn, value) -> None:
-        """Apply a color to a swatch button (bg + readable fg, hover included).
-
-        Tk's default activeforeground is black and its default
-        activebackground a light gray, so without explicit values a hovered
-        swatch flashes gray with black text on top of the themed color.  The
-        hover background is a shade of the swatch color (see _hover_bg) so
-        hovering always reads as a change.
-        """
-        fg = "#000000" if _luminance(value) >= 0.6 else "#ffffff"
-        btn.config(
-            background=value,
-            activebackground=_hover_bg(value),
-            foreground=fg,
-            activeforeground=fg,
-        )
+        """Apply a color to a swatch button (bg + readable fg, hover included)."""
+        fg = readable_fg(value)
+        btn.config(**btn_colors(value, fg))
 
     def _create_theme_button(label_text, section, option, default):
         frame = tk.Frame(inner, background=win_bg)
@@ -221,32 +181,21 @@ def show_theme_dialog(parent, on_theme_change=None):
     _create_theme_button("Checkbutton background", "checkbutton", "background", "#303030")
     _create_theme_button("Checkbutton foreground", "checkbutton", "foreground", "#DADADA")
     _create_theme_button("Checkbutton selectcolor", "checkbutton", "selectcolor", "#505050")
-    _create_theme_button("Checkbutton activebackground", "checkbutton", "activebackground", "#404040")
-    _create_theme_button("Checkbutton activeforeground", "checkbutton", "activeforeground", "#FFFFFF")
 
     _create_theme_button("Button header background", "button_header", "background", "#6C6C6C")
     _create_theme_button("Button header foreground", "button_header", "foreground", "#FFFFFF")
-    _create_theme_button("Button header activebackground", "button_header", "activebackground", "#868686")
 
     _create_theme_button("Button main background", "button_main", "background", "#3A3A3A")
     _create_theme_button("Button main foreground", "button_main", "foreground", "#D7D7D7")
-    _create_theme_button("Button main activebackground", "button_main", "activebackground", "#555555")
-    _create_theme_button("Button main activeforeground", "button_main", "activeforeground", "#FFFFFF")
 
     _create_theme_button("Button playlist background", "button_playlist", "background", "#3A3A3A")
     _create_theme_button("Button playlist foreground", "button_playlist", "foreground", "#D7D7D7")
-    _create_theme_button("Button playlist activebackground", "button_playlist", "activebackground", "#555555")
-    _create_theme_button("Button playlist activeforeground", "button_playlist", "activeforeground", "#FFFFFF")
 
     _create_theme_button("Button close background", "button_close", "background", "#160000")
     _create_theme_button("Button close foreground", "button_close", "foreground", "#FFFFFF")
-    _create_theme_button("Button close activebackground", "button_close", "activebackground", "#390000")
-    _create_theme_button("Button close activeforeground", "button_close", "activeforeground", "#FFFFFF")
 
     _create_theme_button("Button save background", "button_save", "background", "#004304")
     _create_theme_button("Button save foreground", "button_save", "foreground", "#D7D7D7")
-    _create_theme_button("Button save activebackground", "button_save", "activebackground", "#006B07")
-    _create_theme_button("Button save activeforeground", "button_save", "activeforeground", "#FFFFFF")
 
     _create_theme_button("Entry default background", "entry_default", "background", "#404040")
     _create_theme_button("Entry default foreground", "entry_default", "foreground", "#FFFFFF")
@@ -269,10 +218,7 @@ def show_theme_dialog(parent, on_theme_change=None):
         cursor="hand2",
         font=ui_font(10),
         command=lambda: (_apply_preset("white"), _fire_change()),
-        background="#EDEDED",
-        activebackground="#D2D2D2",
-        foreground="#1A1A1A",
-        activeforeground="#1A1A1A",
+        **btn_colors("#EDEDED", "#1A1A1A"),
         highlightthickness=0,
         relief="raised",
         bd=0,
@@ -284,10 +230,7 @@ def show_theme_dialog(parent, on_theme_change=None):
         cursor="hand2",
         font=ui_font(10),
         command=lambda: (_restore_defaults(), _fire_change()),
-        background=button_bg,
-        activebackground=button_abg,
-        foreground=button_fg,
-        activeforeground=button_fg,
+        **button_btn,
         highlightthickness=0,
         relief="raised",
         bd=0,

@@ -51,27 +51,16 @@ THEME_MAP = {
     "checkbutton_bg": ("checkbutton", "background"),
     "checkbutton_fg": ("checkbutton", "foreground"),
     "checkbutton_selector": ("checkbutton", "selectcolor"),
-    "checkbutton_a_bg": ("checkbutton", "activebackground"),
-    "checkbutton_a_fg": ("checkbutton", "activeforeground"),
     "button_head_bg": ("button_header", "background"),
     "button_head_fg": ("button_header", "foreground"),
-    "button_head_a_bg": ("button_header", "activebackground"),
     "button_main_bg": ("button_main", "background"),
     "button_main_fg": ("button_main", "foreground"),
-    "button_main_a_bg": ("button_main", "activebackground"),
-    "button_main_a_fg": ("button_main", "activeforeground"),
     "button_playlist_bg": ("button_playlist", "background"),
     "button_playlist_fg": ("button_playlist", "foreground"),
-    "button_playlist_a_bg": ("button_playlist", "activebackground"),
-    "button_playlist_a_fg": ("button_playlist", "activeforeground"),
     "button_close_bg": ("button_close", "background"),
     "button_close_fg": ("button_close", "foreground"),
-    "button_close_a_bg": ("button_close", "activebackground"),
-    "button_close_a_fg": ("button_close", "activeforeground"),
     "button_save_bg": ("button_save", "background"),
     "button_save_fg": ("button_save", "foreground"),
-    "button_save_a_bg": ("button_save", "activebackground"),
-    "button_save_a_fg": ("button_save", "activeforeground"),
     "entry_default_bg": ("entry_default", "background"),
     "entry_default_fg": ("entry_default", "foreground"),
     "entry_default_ro_bg": ("entry_default", "readonlybackground"),
@@ -82,6 +71,62 @@ THEME_MAP = {
 
 #: Flat palette: palette name -> colour string.  Populated by :func:`load_theme`.
 C: dict[str, str] = {}
+
+
+def luminance(hex_color: str) -> float:
+    """Relative luminance (0..1) of a ``#RRGGBB`` colour; 0.0 for named colours.
+
+    Named colours (Tk accepts e.g. ``"red"``) are assumed dark, so callers
+    pick white text on them.
+    """
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return 0.0
+    r, g, b = (int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def readable_fg(background: str) -> str:
+    """Black or white foreground readable on *background*."""
+    return "#000000" if luminance(background) >= 0.6 else "#ffffff"
+
+
+def hover_bg(color: str) -> str:
+    """Hover background for *color*: a shade of the colour itself.
+
+    Light colours are darkened toward black, dark colours lightened toward
+    white, so the hover state is always visibly different from the resting
+    one.  A pure ``#ffffff``/``#000000`` (or near-pure) value would make an
+    inverted hover colour identical (or nearly identical) to the swatch,
+    giving no feedback.  Named colours fall back to no hover change - theme
+    values from the picker and presets are always hex.
+    """
+    h = color.lstrip("#")
+    if len(h) != 6:
+        return color
+    channels = [int(h[i : i + 2], 16) for i in (0, 2, 4)]
+    if luminance(color) >= 0.6:
+        shaded = [int(c * 0.75) for c in channels]  # light -> darker
+    else:
+        shaded = [int(c + (255 - c) * 0.25) for c in channels]  # dark -> lighter
+    return "#{:02x}{:02x}{:02x}".format(*shaded)
+
+
+def btn_colors(background: str, foreground: str) -> dict[str, str]:
+    """Theme kwargs for a ``tk.Button``/``tk.Checkbutton``.
+
+    The hover state (``activebackground``/``activeforeground``) is derived
+    from the resting colours (:func:`hover_bg`, foreground unchanged), so
+    the palette needs no separate ``*_a_bg``/``*_a_fg`` keys.  Use as::
+
+        tk.Button(frame, text="Go", **btn_colors(C["button_main_bg"], C["button_main_fg"]))
+    """
+    return {
+        "background": background,
+        "activebackground": hover_bg(background),
+        "foreground": foreground,
+        "activeforeground": foreground,
+    }
 
 
 def load_theme() -> None:

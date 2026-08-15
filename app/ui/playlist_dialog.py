@@ -14,7 +14,7 @@ from queue import Empty, Queue
 from tkinter import ttk
 
 from utils.scaling import px, ui_font
-from utils.theme import C
+from utils.theme import C, btn_colors
 from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
@@ -46,18 +46,13 @@ class PlaylistDialog:
         label_fg = C["label_def_fg"]
         btn_bg = C["button_playlist_bg"]
         btn_fg = C["button_playlist_fg"]
-        btn_a_bg = C["button_playlist_a_bg"]
-        btn_a_fg = C["button_playlist_a_fg"]
+        btn_btn = btn_colors(btn_bg, btn_fg)
         close_bg = C["button_head_bg"]
         close_fg = C["button_head_fg"]
-        close_a_bg = C["button_head_a_bg"]
+        close_btn = btn_colors(close_bg, close_fg)
 
         self.choose_frame = tk.Frame(self.parent, background=dialog_bg)
         self.choose_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
-        # The picker overlays the root grid's row 1, which normally holds
-        # the (fixed-size, top-anchored) playlist cards and is unweighted.
-        # Give that row a weight while the picker is up so it fills the
-        # window; close() reverts it so the card layout is untouched.
         try:
             self.parent.grid_rowconfigure(1, weight=1)
         except tk.TclError:
@@ -77,9 +72,8 @@ class PlaylistDialog:
         tk.Button(
             title_frame,
             text="Close",
-            background=close_bg,
-            foreground=close_fg,
-            activebackground=close_a_bg,
+            cursor="hand2",
+            **close_btn,
             font=ui_font(12),
             highlightthickness=0,
             relief="raised",
@@ -117,31 +111,21 @@ class PlaylistDialog:
             btn = tk.Button(
                 scrollable_frame,
                 image="",
-                background=btn_bg,
-                foreground=btn_fg,
-                activebackground=btn_a_bg,
-                activeforeground=btn_a_fg,
-                # NOTE: on an image-only button, Tk reads -width in PIXELS,
-                # not characters. px(40) matches the thumbnail size so the
-                # placeholder is stable and the image is never clipped
-                # (a char-width constant would cap the button at 40px and
-                # cut the scaled thumbnail).
                 cursor="hand2",
+                **btn_btn,
                 width=px(40),
                 highlightthickness=0,
                 relief="raised",
                 command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
             )
             btn.pack(pady=5, padx=5)
+
             tk.Button(
                 scrollable_frame,
                 text=playlist_name,
-                background=btn_bg,
-                foreground=btn_fg,
-                activebackground=btn_a_bg,
-                activeforeground=btn_a_fg,
-                font=ui_font(11),
                 cursor="hand2",
+                **btn_btn,
+                font=ui_font(11),
                 width=40,
                 highlightthickness=0,
                 relief="raised",
@@ -157,8 +141,6 @@ class PlaylistDialog:
         scrollable_frame.bind("<MouseWheel>", self._on_mouse_wheel)
         scrollable_frame.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
         scrollable_frame.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
-        # Also scroll when the wheel is over the bare canvas (a short list
-        # doesn't cover the full scroll area).
         self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
         self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
         self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
@@ -189,9 +171,6 @@ class PlaylistDialog:
                 img = None
             if img is not None:
                 try:
-                    # Default-arg capture: the lambda must bind THIS item's
-                    # button/image, not the loop cells (reassigned on the
-                    # next get() before the main loop may run this).
                     self.parent.after(
                         0,
                         lambda b=button, im=img: self._apply_thumb(b, im),
@@ -227,9 +206,6 @@ class PlaylistDialog:
         self.close()
 
     def close(self):
-        # Stop the thumbnail workers: drop queued jobs, then signal each
-        # worker to exit.  A fetch already in flight finishes and hits the
-        # guarded after() against the destroyed dialog - a no-op.
         try:
             while True:
                 self._thumb_tasks.get_nowait()
@@ -238,7 +214,6 @@ class PlaylistDialog:
             pass
         for _ in range(_THUMB_WORKERS):
             self._thumb_tasks.put(_WORKER_STOP)
-        # Revert the temporary row weight so the card layout is unaffected.
         try:
             self.parent.grid_rowconfigure(1, weight=0)
         except tk.TclError:
@@ -246,8 +221,9 @@ class PlaylistDialog:
         if self.choose_frame:
             try:
                 self.choose_frame.destroy()
-            except Exception as e:
-                logger.error(f"Failed to destroy choose_frame: {e}")
+            except Exception:
+                pass
+            self.choose_frame = None
         self.img_refs.clear()
 
     def _on_canvas_configure(self, event):

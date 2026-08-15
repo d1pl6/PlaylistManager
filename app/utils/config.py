@@ -37,37 +37,26 @@ DEFAULT_THEME = {
         "background": "#303030",
         "foreground": "#DADADA",
         "selectcolor": "#505050",
-        "activebackground": "#404040",
-        "activeforeground": "#FFFFFF",
     },
     "button_header": {
         "background": "#6C6C6C",
         "foreground": "#FFFFFF",
-        "activebackground": "#868686",
     },
     "button_main": {
         "background": "#3A3A3A",
         "foreground": "#D7D7D7",
-        "activebackground": "#555555",
-        "activeforeground": "#FFFFFF",
     },
     "button_playlist": {
         "background": "#3A3A3A",
         "foreground": "#D7D7D7",
-        "activebackground": "#555555",
-        "activeforeground": "#FFFFFF",
     },
     "button_close": {
         "background": "#160000",
         "foreground": "#FFFFFF",
-        "activebackground": "#390000",
-        "activeforeground": "#FFFFFF"
     },
     "button_save": {
         "background": "#004304",
         "foreground": "#D7D7D7",
-        "activebackground": "#006B07",
-        "activeforeground": "#FFFFFF"
     },
     "entry_default": {
         "background": "#404040",
@@ -173,37 +162,26 @@ THEME_PRESETS = {
             "background": "#F0F0F0",
             "foreground": "#222222",
             "selectcolor": "#D9D9D9",
-            "activebackground": "#E0E0E0",
-            "activeforeground": "#000000",
         },
         "button_header": {
             "background": "#D0D0D0",
             "foreground": "#000000",
-            "activebackground": "#BEBEBE",
         },
         "button_main": {
             "background": "#E6E6E6",
             "foreground": "#222222",
-            "activebackground": "#D2D2D2",
-            "activeforeground": "#000000",
         },
         "button_playlist": {
             "background": "#E6E6E6",
             "foreground": "#222222",
-            "activebackground": "#D2D2D2",
-            "activeforeground": "#000000",
         },
         "button_close": {
             "background": "#F4DADA",
             "foreground": "#000000",
-            "activebackground": "#E7BABA",
-            "activeforeground": "#000000",
         },
         "button_save": {
             "background": "#004304",
             "foreground": "#D7D7D7",
-            "activebackground": "#006B07",
-            "activeforeground": "#FFFFFF"
         },
         "entry_default": {
             "background": "#FFFFFF",

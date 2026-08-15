@@ -5,7 +5,7 @@ from tkinter import messagebox
 from _version import __version__
 from utils.scaling import ui_font
 from utils.window import center_window
-from utils.theme import C
+from utils.theme import C, btn_colors
 
 
 def show_update_dialog(parent, latest_version, download_url, body):
@@ -16,11 +16,11 @@ def show_update_dialog(parent, latest_version, download_url, body):
     theme_text_bg = C["frame_main_bg"]
     theme_text_fg = C["label_def_fg"]
     theme_download_bg = C["button_main_bg"]
-    theme_download_abg = C["button_main_a_bg"]
     theme_download_fg = C["button_main_fg"]
+    theme_download_btn = btn_colors(theme_download_bg, theme_download_fg)
     theme_close_bg = C["button_head_bg"]
-    theme_close_abg = C["button_head_a_bg"]
     theme_close_fg = C["button_head_fg"]
+    theme_close_btn = btn_colors(theme_close_bg, theme_close_fg)
 
     win = tk.Toplevel(parent)
     win.title("Update Available")
@@ -92,10 +92,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
         btn_frame,
         text="Download",
         font=ui_font(10),
-        background=theme_download_bg,
-        activebackground=theme_download_abg,
-        foreground=theme_download_fg,
-        activeforeground=theme_download_fg,
+        **theme_download_btn,
         cursor="hand2",
         padx=16,
         highlightthickness=0,
@@ -107,10 +104,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
         btn_frame,
         text="Close",
         font=ui_font(10),
-        background=theme_close_bg,
-        activebackground=theme_close_abg,
-        foreground=theme_close_fg,
-        activeforeground=theme_close_fg,
+        **theme_close_btn,
         cursor="hand2",
         padx=16,
         highlightthickness=0,

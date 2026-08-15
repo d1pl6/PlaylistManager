@@ -26,7 +26,7 @@ from ui.playlist_dialog import PlaylistDialog
 from ui.settings_ui import show_settings_dialog
 from utils.window import center_window, resize_window
 from utils.config import get_setting, get_setting_value
-from utils.theme import C, load_theme
+from utils.theme import C, load_theme, btn_colors
 from utils.platform import is_wayland_session
 
 logger = logging.getLogger(__name__)
@@ -158,8 +158,7 @@ class MainWindow:
         for widget in self.header_frame.winfo_children():
             if isinstance(widget, tk.Button):
                 widget.configure(
-                    background=C["button_head_bg"],
-                    activebackground=C["button_head_a_bg"],
+                    **btn_colors(C["button_head_bg"], C["button_head_fg"])
                 )
 
         frame_playlist_bg = C["frame_playlist_bg"]
@@ -209,10 +208,9 @@ class MainWindow:
                         )
                     elif isinstance(widget, tk.Button):
                         widget.configure(
-                            background=C["button_playlist_bg"],
-                            foreground=C["button_playlist_fg"],
-                            activebackground=C["button_playlist_a_bg"],
-                            activeforeground=C["button_playlist_a_fg"],
+                            **btn_colors(
+                                C["button_playlist_bg"], C["button_playlist_fg"]
+                            )
                         )
 
     # ------------------------------------------------------------------
@@ -220,8 +218,7 @@ class MainWindow:
     # ------------------------------------------------------------------
 
     def _create_widgets(self) -> None:
-        btn_header_bg = C["button_head_bg"]
-        btn_header_abg = C["button_head_a_bg"]
+        btn_header_colors = btn_colors(C["button_head_bg"], C["button_head_fg"])
 
         login_img_path = assets_dir / "login.png"
         self.login_img = IconService.get(login_img_path, 32)
@@ -229,8 +226,7 @@ class MainWindow:
             self.header_frame,
             image=self.login_img,
             cursor="hand2",
-            background=btn_header_bg,
-            activebackground=btn_header_abg,
+            **btn_header_colors,
             highlightthickness=0,
             relief="raised",
             command=lambda: show_login_dialog(
@@ -244,8 +240,7 @@ class MainWindow:
             self.header_frame,
             image=self.add_playlist_img,
             cursor="hand2",
-            background=btn_header_bg,
-            activebackground=btn_header_abg,
+            **btn_header_colors,
             highlightthickness=0,
             relief="raised",
             command=self._open_playlist_dialog,
@@ -257,8 +252,7 @@ class MainWindow:
             self.header_frame,
             image=self.open_settings_img,
             cursor="hand2",
-            background=btn_header_bg,
-            activebackground=btn_header_abg,
+            **btn_header_colors,
             highlightthickness=0,
             relief="raised",
             command=lambda: show_settings_dialog(
@@ -298,13 +292,8 @@ class MainWindow:
         """
         win_bg = C["frame_main_bg"]
         label_fg = C["label_def_fg"]
-        btn_bg = C["button_main_bg"]
-        btn_fg = C["button_main_fg"]
-        btn_a_bg = C["button_main_a_bg"]
-        btn_a_fg = C["button_main_a_fg"]
-        cancel_bg = C["button_head_bg"]
-        cancel_fg = C["button_head_fg"]
-        cancel_a_bg = C["button_head_a_bg"]
+        btn_cols = btn_colors(C["button_main_bg"], C["button_main_fg"])
+        cancel_cols = btn_colors(C["button_head_bg"], C["button_head_fg"])
 
         def _do_cancel() -> None:
             if on_cancel:
@@ -329,10 +318,7 @@ class MainWindow:
             tk.Button(
                 win,
                 text=integration.display_name,
-                background=btn_bg,
-                foreground=btn_fg,
-                activebackground=btn_a_bg,
-                activeforeground=btn_a_fg,
+                **btn_cols,
                 highlightthickness=0,
                 relief="raised",
                 font=ui_font(11),
@@ -343,9 +329,7 @@ class MainWindow:
         tk.Button(
             win,
             text="Cancel",
-            background=cancel_bg,
-            foreground=cancel_fg,
-            activebackground=cancel_a_bg,
+            **cancel_cols,
             highlightthickness=0,
             relief="raised",
             font=ui_font(10),
@@ -562,10 +546,7 @@ class MainWindow:
         frame_playlist_bg = C["frame_playlist_bg"]
         label_playlist_log_bg = C["label_playlist_log_bg"]
         label_playlist_log_fg = C["label_playlist_log_fg"]
-        button_playlist_bg = C["button_playlist_bg"]
-        button_playlist_fg = C["button_playlist_fg"]
-        button_playlist_a_bg = C["button_playlist_a_bg"]
-        button_playlist_a_fg = C["button_playlist_a_fg"]
+        remove_cols = btn_colors(C["button_playlist_bg"], C["button_playlist_fg"])
 
         showcase = tk.Frame(main_frame, background=frame_playlist_bg)
         showcase.grid_columnconfigure(1, weight=1)
@@ -586,6 +567,7 @@ class MainWindow:
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
                 anchor="w",
+                width=64,
             )
             artists = song.get("artists", [])
             artists_str = (
@@ -598,15 +580,13 @@ class MainWindow:
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
                 anchor="w",
+                width=64,
             )
             remove_btn = tk.Button(
                 showcase,
                 image=self.close_playlist_img,
                 cursor="hand2",
-                background=button_playlist_bg,
-                foreground=button_playlist_fg,
-                activebackground=button_playlist_a_bg,
-                activeforeground=button_playlist_a_fg,
+                **remove_cols,
                 highlightthickness=0,
                 relief="raised",
                 command=lambda f=main_frame, sid=song.get("id"), tid=song.get("track_id"): (
@@ -1191,8 +1171,7 @@ class MainWindow:
             label_playlist_good_fg = C["label_playlist_good_fg"]
             button_playlist_bg = C["button_playlist_bg"]
             button_playlist_fg = C["button_playlist_fg"]
-            button_playlist_a_bg = C["button_playlist_a_bg"]
-            button_playlist_a_fg = C["button_playlist_a_fg"]
+            button_playlist_btn = btn_colors(button_playlist_bg, button_playlist_fg)
             entry_playlist_bg = C["entry_playlist_bg"]
             entry_playlist_fg = C["entry_playlist_fg"]
             entry_playlist_ro_bg = C["entry_playlist_ro_bg"]
@@ -1215,7 +1194,7 @@ class MainWindow:
             main_frame.grid_rowconfigure(2, weight=0)
             main_frame.grid_columnconfigure(0, weight=1)
             main_header_frame = tk.Frame(main_frame, background=frame_playlist_bg)
-            main_log_frame = tk.Frame(main_frame, background=frame_playlist_bg)
+            main_log_frame = tk.Frame(main_frame, background=frame_playlist_bg, width=px(CARD_W_BASE))
 
             playlist_cover = tk.Label(
                 main_header_frame,
@@ -1235,10 +1214,7 @@ class MainWindow:
                 main_header_frame,
                 image=self.close_playlist_img,
                 cursor="hand2",
-                background=button_playlist_bg,
-                foreground=button_playlist_fg,
-                activebackground=button_playlist_a_bg,
-                activeforeground=button_playlist_a_fg,
+                **button_playlist_btn,
                 highlightthickness=0,
                 relief="raised",
                 command=lambda f=main_frame: self.close_main_frame(f),
@@ -1266,10 +1242,7 @@ class MainWindow:
                 main_header_frame,
                 image=self.reload_database_img,
                 cursor="hand2",
-                background=button_playlist_bg,
-                foreground=button_playlist_fg,
-                activebackground=button_playlist_a_bg,
-                activeforeground=button_playlist_a_fg,
+                **button_playlist_btn,
                 highlightthickness=0,
                 relief="raised",
                 command=lambda f=main_frame: self._on_reload_requested(
@@ -1283,7 +1256,6 @@ class MainWindow:
                 font=ui_font(12),
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
-                width=8,
                 anchor="w",
             )
             log_helper_1 = tk.Label(
@@ -1300,7 +1272,6 @@ class MainWindow:
                 font=ui_font(12),
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
-                width=18,
                 anchor="w",
             )
             log_helper_2 = tk.Label(
@@ -1311,13 +1282,12 @@ class MainWindow:
                 foreground=label_playlist_log_fg,
                 anchor="w",
             )
-            log_log = tk.Label(
+            log_status = tk.Label(
                 main_log_frame,
                 text="Waiting",
                 font=ui_font(12),
                 background=label_playlist_good_bg,
                 foreground=label_playlist_good_fg,
-                width=5,
                 anchor="w",
             )
 
@@ -1331,7 +1301,7 @@ class MainWindow:
             self.active_log_labels[frame_idx] = {
                 "artist": log_artist,
                 "name": log_name,
-                "status": log_log,
+                "status": log_status,
                 "keybind_entry": playlist_keybind,
                 "cover": playlist_cover,
             }
@@ -1351,11 +1321,11 @@ class MainWindow:
             playlist_keybind.grid(row=1, column=1, sticky="nswe")
             reload_database.grid(row=1, column=2, sticky="ne")
 
-            log_artist.grid(row=0, column=0, padx=(0, 2))
-            log_helper_1.grid(row=0, column=1)
-            log_name.grid(row=0, column=2)
-            log_helper_2.grid(row=0, column=3)
-            log_log.grid(row=0, column=4, padx=(0, 2))
+            log_artist.grid(row=0, column=0, padx=(0, 2), sticky="nswe")
+            log_helper_1.grid(row=0, column=1, sticky="nswe")
+            log_name.grid(row=0, column=2, sticky="nswe")
+            log_helper_2.grid(row=0, column=3, sticky="nswe")
+            log_status.grid(row=0, column=4, padx=(0, 2), sticky="nswe")
 
             # Per-frame state the showcase helpers read.  Widgets, not
             # indices: close_main_frame() renumbers the frame lists, but
