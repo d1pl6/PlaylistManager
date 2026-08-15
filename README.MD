@@ -5,9 +5,12 @@ Add songs that you're currently listening to your chosen playlists or liked trac
 # About
 I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage. Since i'm not using streaming platforms much, i'm using ai to create same app but on pyton.
 
-# Features
-- Easily add songs to playlists across multiple platforms
-- Pluggable integration system for adding more platforms
+# Integrations
+For now only available
+- YouTube Music
+- Spotify (not tested)
+
+See [INTEGRATIONS.MD](INTEGRATIONS.MD)
 
 # Install
 Requires Python 3.10+
@@ -204,12 +207,6 @@ GNOME
 
 `Settings → Keyboard → Custom Shortcuts → Command`
 
-# Integrations
-For now only available
-- YouTube Music
-- Spotify (not tested)
-
-See [INTEGRATIONS.MD](INTEGRATIONS.MD)
 
 # License
 PlaylistManager is licensed under the GNU-GPL-2.0-or-later. If you did not get a copy, please see <https://www.gnu.org/licenses/>.

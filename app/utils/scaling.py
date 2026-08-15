@@ -143,11 +143,16 @@ def px(n: float) -> int:
     return max(1, round(n * _scale))
 
 
-def ui_font(size: int, weight: str = "", family: str = "Noto") -> Tuple[str, ...]:
+def ui_font(size: int, weight: str = "", family: str = "") -> Tuple[str, ...]:
     """Tk ``font=`` spec for one point size, applying the profile multiplier.
 
+    ``family`` defaults to ``""``, which makes Tk use its default font
+    family.  (A hardcoded family like "Noto" is fragile: it is not a real
+    family name, and Tk's fuzzy fallback picks whichever installed font
+    matches best - or the Tk default when nothing does.)
+
     In auto mode ``font_mult`` is 1.0 and this returns the plain
-    ``("Noto", size)`` — fonts are already rendered at the display scale by
+    ``("", size)`` — fonts are already rendered at the display scale by
     fontconfig, so no manual adjustment (double-scaling trap).
     """
     scaled = size if _font_mult == 1.0 else round(size * _font_mult)

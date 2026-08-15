@@ -34,7 +34,8 @@ _TK_KEY_MAP = {
     "Alt_L": "alt",
     "Alt_R": "alt",
     "Alt": "alt",
-    "Alt_gr": "alt",
+    # AltGr deliberately omitted - matches the pynput map: it is a distinct
+    # modifier on European layouts and must not be conflated with Alt.
     "Shift_L": "shift",
     "Shift_R": "shift",
     "Shift": "shift",

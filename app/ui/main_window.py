@@ -1455,13 +1455,13 @@ class MainWindow:
 
     @staticmethod
     def _read_showcase_count_setting() -> int:
-        """Read the showcase count once; clamp to [0, 20].
+        """Read the showcase count once; clamp to [0, 10].
 
         0 (the default) turns the showcase off entirely.
         """
         try:
             raw = get_setting_value("showcase", "count", "0")
-            return min(20, max(0, int(str(raw).strip())))
+            return min(10, max(0, int(str(raw).strip())))
         except (ValueError, TypeError):
             return 0
 
@@ -1500,7 +1500,7 @@ class MainWindow:
         explicit count decrease shrinks the window back to the cards).
         """
         try:
-            self._showcase_count = min(20, max(0, int(count)))
+            self._showcase_count = min(10, max(0, int(count)))
         except (ValueError, TypeError):
             return
         for frame_idx in list(self.active_log_labels):

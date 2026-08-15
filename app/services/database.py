@@ -155,11 +155,14 @@ class DatabaseManager:
     def delete_platform_databases(platform: str) -> int:
         """Delete every playlist database for *platform*.
 
-        Closes every thread's cached connections first (they would
-        otherwise recreate the deleted files on the next write) then
-        removes every ``*.db``, ``*.db-wal`` and ``*.db-shm`` under
-        ``db/<platform>/`` and rmdirs the platform directory when it is
-        empty.  Best-effort: per-file errors are logged and skipped.
+        Drops every thread's cached connection for the platform from the
+        registry first (they would otherwise recreate the deleted files on
+        the next write), then removes every ``*.db``, ``*.db-wal`` and
+        ``*.db-shm`` under ``db/<platform>/`` and rmdirs the platform
+        directory when it is empty.  Connections are dropped without
+        closing - sqlite3 only lets the owning thread close its own handle
+        (each owner closes it when its ``with`` block exits).  Best-effort:
+        per-file errors are logged and skipped.
         Returns the number of files removed.
         """
         with DatabaseManager._connections_lock:

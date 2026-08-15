@@ -313,8 +313,16 @@ def run_add(spec: str) -> int:
 
     song_manager = SongManager()
 
-    yt_targets = [t for t in targets if t[1].get("platform") == PLATFORM_YOUTUBE_MUSIC]
-    sp_targets = [t for t in targets if t[1].get("platform") == PLATFORM_SPOTIFY]
+    # Legacy registry entries predate the "platform" field - default them to
+    # YouTube Music, matching the per-target resolution in the loop below.
+    yt_targets = [
+        t
+        for t in targets
+        if (t[1].get("platform") or PLATFORM_YOUTUBE_MUSIC) == PLATFORM_YOUTUBE_MUSIC
+    ]
+    sp_targets = [
+        t for t in targets if (t[1].get("platform") or PLATFORM_YOUTUBE_MUSIC) == PLATFORM_SPOTIFY
+    ]
 
     yt = _init_yt_music() if yt_targets else None
     sp_integration = _init_spotify() if sp_targets else None
@@ -338,7 +346,6 @@ def run_add(spec: str) -> int:
 
         sp_flow = SpotifyFlowController(sp_integration, song_manager)
 
-    successes = 0
     failures = 0
     for number, entry in targets:
         platform = entry.get("platform") or PLATFORM_YOUTUBE_MUSIC
@@ -372,12 +379,11 @@ def run_add(spec: str) -> int:
         line = f'#{number} "{name}" ({platform}): {message}'
         if ok:
             print(line, flush=True)
-            successes += 1
         else:
             print(line, file=sys.stderr, flush=True)
             failures += 1
 
-    return 0 if successes else 1
+    return 0 if failures == 0 else 1
 
 
 def run_add_url(url: str) -> int:
@@ -645,7 +651,7 @@ def run_login(
         client_secret = _prompt("Client secret: ", hidden=True)
     if not refresh_token:
         stored = _stored_refresh_token()
-        prompt_value = _prompt("Refresh token (3600s default): ", hidden=True)
+        prompt_value = _prompt("Refresh token (leave empty to reuse stored): ", hidden=True)
         refresh_token = prompt_value or stored
     if not client_id or not client_secret or not refresh_token:
         print(

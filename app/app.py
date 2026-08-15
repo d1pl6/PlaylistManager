@@ -270,13 +270,10 @@ class App:
                         "mainloop not running or app shutting down",
                     )
             elif error:
-                logger.warning(error)
-                try:
-                    self.root.after(0, messagebox.showwarning, "Update Check Failed", error)
-                except Exception:
-                    logger.debug(
-                        "Update warning not shown: mainloop not running or app shutting down"
-                    )
+                # No modal: an offline/blocked network at startup would pop
+                # an unavoidable dialog on every launch.  USER level keeps it
+                # visible in normal runs without stealing focus.
+                user_log(logger, "Update check failed: %s", error)
 
         updater.check(on_result)
 
