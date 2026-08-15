@@ -15,6 +15,8 @@ DEFAULT_SETTINGS = {
     "global_listener": {"is_true": "yes"},
     "hide_to_tray": {"is_true": "no"},
     "ui_scale": {"value": "auto"},
+    "showcase": {"count": "0"},          # int, 0 = off, N = show last N added songs
+    "showcase_log": {"is_true": "yes"},  # show the log_artist/log_name/log_log row
 }
 
 THEME_PATH = Path(__file__).resolve().parents[2] / "cfg" / "theme.ini"

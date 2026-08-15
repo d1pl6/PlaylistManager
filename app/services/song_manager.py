@@ -633,6 +633,51 @@ class SongManager:
             logger.error(f"Error getting latest song from {playlist_name}: {e}")
             return None
 
+    def get_latest_songs(
+        self,
+        playlist_name: str,
+        limit: int,
+        platform: str = PLATFORM_YOUTUBE_MUSIC,
+    ) -> List[Dict]:
+        """Get the most recently added songs from the playlist.
+
+        Args:
+            playlist_name: Name of the playlist
+            limit: Maximum number of songs to return
+            platform: Platform identifier for the per-platform DB
+
+        Returns a list of up to *limit* song dicts, **newest first**
+        (``ORDER BY id DESC`` - the same ordering as :meth:`get_latest_song`,
+        monotonic with ``added_at`` and immune to same-second timestamp
+        ties).  Each dict has keys (id, title, artists, thumbnail_url,
+        duration, track_id).  Returns ``[]`` on sqlite errors.
+        """
+        try:
+            with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id, title, artists, thumbnail_url, duration, track_id "
+                    "FROM songs ORDER BY id DESC LIMIT ?",
+                    (limit,),
+                )
+                songs = []
+                for row in cursor.fetchall():
+                    songs.append(
+                        {
+                            "id": row[0],
+                            "title": row[1],
+                            "artists": json.loads(row[2]),
+                            "thumbnail_url": row[3],
+                            "duration": row[4],
+                            "track_id": row[5],
+                        }
+                    )
+                return songs
+
+        except sqlite3.Error as e:
+            logger.error(f"Error getting latest songs from {playlist_name}: {e}")
+            return []
+
     def get_song_count(
         self,
         playlist_name: str,

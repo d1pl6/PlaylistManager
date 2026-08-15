@@ -25,7 +25,7 @@ from ui.login_ui import show_login_dialog
 from ui.playlist_dialog import PlaylistDialog
 from ui.settings_ui import show_settings_dialog
 from utils.window import center_window, resize_window
-from utils.config import get_setting
+from utils.config import get_setting, get_setting_value
 from utils.theme import C, load_theme
 from utils.platform import is_wayland_session
 
@@ -48,6 +48,13 @@ loading_img_path = assets_dir / "hourglass.png"
 # track titles clip inside instead of ballooning the window at high scale.
 CARD_W_BASE = 320
 CARD_H_BASE = 96
+# Showcase geometry: each song block is two font-12 lines (name + artists,
+# ~46 px) plus the thumbnail's 2 px top padding = 48 px; a 40 px thumbnail
+# fits in that block.  The log row is one font-12 line (~23 px), so a card
+# with the log hidden shrinks by that much.  (46 would clip the last row's
+# bottom edge once the card grows beyond a couple of songs.)
+SONG_UNIT_H_BASE = 48
+LOG_ROW_H_BASE = 23
 
 
 class MainWindow:
@@ -75,6 +82,8 @@ class MainWindow:
 
         self._auto_resize_enabled = self._read_auto_resize_setting()
         self._hide_to_tray = self._read_hide_to_tray_setting()
+        self._showcase_count = self._read_showcase_count_setting()
+        self._show_log = self._read_show_log_setting()
 
         # Set by App._start_tray() once the window exists; None when no
         # tray backend is available.
@@ -115,6 +124,7 @@ class MainWindow:
         self.close_playlist_img = IconService.get(close_playlist_img_path, 16)
         self.reload_database_img = IconService.get(reload_database_img_path, 16)
         self.loading_img = IconService.get(loading_img_path, 32)
+        self.song_placeholder_img = self._load_song_placeholder()
 
         self.root.grid_rowconfigure(0, weight=0)
         self.root.grid_columnconfigure(0, weight=1)
@@ -254,6 +264,8 @@ class MainWindow:
                 tray_available=self.tray_service,
                 on_tray_toggle=self.set_hide_to_tray,
                 on_auto_resize_toggle=self.set_auto_resize,
+                on_showcase_count_change=self.set_showcase_count,
+                on_showcase_log_change=self.set_showcase_log,
             ),
         )
 
@@ -429,6 +441,332 @@ class MainWindow:
         self.frame_img_refs[cover_label] = [tk_img]
 
     # ------------------------------------------------------------------
+    # Showcase (last-N-songs section of a playlist card)
+    # ------------------------------------------------------------------
+
+    def _load_song_placeholder(self):
+        """Load the song-thumbnail placeholder, falling back defensively.
+
+        ``assets/album_img.png`` is gitignored, so a fresh clone does not
+        have it - never let its absence crash startup.
+        """
+        album_path = assets_dir / "album_img.png"
+        try:
+            return IconService.get(album_path, 40)
+        except FileNotFoundError:
+            logger.debug(
+                "album_img.png placeholder missing; falling back to playlist_image.png"
+            )
+            # 40 px, not the 64 px cover: a 64 px image in the 40 px slot
+            # would inflate the thumbnail column on a fresh clone.
+            return IconService.get(playlist_cover_img_path, 40)
+
+    def _prune_frame_imgs(self, container) -> None:
+        """Release every PhotoImage ref held for labels inside *container*.
+
+        The cover and showcase-thumbnail refs are keyed by their Label
+        widgets in ``frame_img_refs``; before a frame (or its showcase
+        section) is destroyed the refs must be popped and cleared or the
+        PhotoImages stay alive for the process lifetime.
+        """
+        for child in container.winfo_children():
+            if isinstance(child, tk.Label):
+                refs = self.frame_img_refs.pop(child, None)
+                if refs:
+                    refs.clear()
+            elif isinstance(child, tk.Frame):
+                self._prune_frame_imgs(child)
+
+    def _fetch_song_thumb(self, thumb_label: tk.Label, thumb_url: str) -> None:
+        """Download a song thumbnail in a background thread (showcase rows).
+
+        Same pattern as :meth:`_set_playlist_cover`: fetch on a worker,
+        marshal the plain PIL image to the main thread where
+        :meth:`_apply_cover` builds the PhotoImage (tkinter is not
+        thread-safe).
+        """
+        def fetch() -> None:
+            img = ThumbnailService.fetch_image(thumb_url, size=(px(40), px(40)))
+            if img is not None:
+                try:
+                    self.root.after(0, lambda: self._apply_cover(thumb_label, img))
+                except Exception:
+                    logger.debug(
+                        "Window closed during song thumb download", exc_info=True
+                    )
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _refresh_showcase(
+        self, frame_idx: int, playlist_name: str, platform: str
+    ) -> None:
+        """Rebuild the last-N-songs showcase section of a playlist card.
+
+        DB-driven and cheap: re-reads the newest songs whenever song data
+        changes (startup, import/reload, hotkey add, removal, settings).
+        The section is destroyed and rebuilt so rows always match the
+        database and no stale widgets linger.
+        """
+        try:
+            main_frame = self.frames[frame_idx]
+        except IndexError:
+            return
+
+        # Drop the previous showcase section (and its thumbnails).
+        old_showcase = getattr(main_frame, "showcase_frame", None)
+        if old_showcase is not None:
+            self._prune_frame_imgs(old_showcase)
+            old_showcase.destroy()
+            main_frame.showcase_frame = None
+
+        rows = []
+        if self._showcase_count > 0:
+            rows = SongManager().get_latest_songs(
+                playlist_name, self._showcase_count, platform=platform
+            )
+
+        main_frame.showcase_rows = len(rows)
+        if rows:
+            showcase_frame = self._build_showcase_frame(main_frame, rows)
+            showcase_frame.grid(row=2, column=0, sticky="nsew")
+            main_frame.showcase_frame = showcase_frame
+            for thumb_label, url in showcase_frame._thumb_jobs:
+                self._fetch_song_thumb(thumb_label, url)
+
+        self._update_card_height(frame_idx)
+
+    def _build_showcase_frame(self, main_frame: tk.Frame, songs: list) -> tk.Frame:
+        """Create the song rows inside a fresh showcase frame.
+
+        Returns the frame; the caller grids it.  Each song is a two-row
+        block: thumbnail (rowspan 2) | name / artists | remove button -
+        mirroring the header's cover/name/button layout.  Pending
+        thumbnail fetches are stashed as ``(label, url)`` tuples on
+        ``_thumb_jobs`` for the caller to start.
+        """
+        frame_playlist_bg = C["frame_playlist_bg"]
+        label_playlist_log_bg = C["label_playlist_log_bg"]
+        label_playlist_log_fg = C["label_playlist_log_fg"]
+        button_playlist_bg = C["button_playlist_bg"]
+        button_playlist_fg = C["button_playlist_fg"]
+        button_playlist_a_bg = C["button_playlist_a_bg"]
+        button_playlist_a_fg = C["button_playlist_a_fg"]
+
+        showcase = tk.Frame(main_frame, background=frame_playlist_bg, padx=2, borderwidth=2, relief="solid")
+        showcase.grid_columnconfigure(1, weight=1)
+
+        jobs = []
+        for row_idx, song in enumerate(songs):
+            grid_row = row_idx * 2
+
+            thumb = tk.Label(
+                showcase,
+                image=self.song_placeholder_img,
+                background=label_playlist_log_bg,
+            )
+            song_name = tk.Label(
+                showcase,
+                text=song.get("title", ""),
+                font=ui_font(12),
+                background=label_playlist_log_bg,
+                foreground=label_playlist_log_fg,
+                anchor="w",
+            )
+            artists = song.get("artists", [])
+            artists_str = (
+                ", ".join(artists[:2]) if isinstance(artists, list) else str(artists)
+            )
+            song_artists = tk.Label(
+                showcase,
+                text=artists_str,
+                font=ui_font(12),
+                background=label_playlist_log_bg,
+                foreground=label_playlist_log_fg,
+                anchor="w",
+            )
+            remove_btn = tk.Button(
+                showcase,
+                image=self.close_playlist_img,
+                cursor="hand2",
+                background=button_playlist_bg,
+                foreground=button_playlist_fg,
+                activebackground=button_playlist_a_bg,
+                activeforeground=button_playlist_a_fg,
+                command=lambda f=main_frame, sid=song.get("id"), tid=song.get("track_id"): (
+                    self._on_remove_song(f, sid, tid)
+                ),
+            )
+
+            thumb.grid(
+                row=grid_row, column=0, rowspan=2, sticky="nsew",
+                padx=(0, 2), pady=(2, 0),
+            )
+            song_name.grid(row=grid_row, column=1, sticky="nsew")
+            remove_btn.grid(row=grid_row, column=2, rowspan=2, sticky="ne")
+            song_artists.grid(row=grid_row + 1, column=1, sticky="nsew")
+
+            url = song.get("thumbnail_url") or ""
+            if url:
+                jobs.append((thumb, url))
+
+        showcase._thumb_jobs = jobs
+        return showcase
+
+    def _on_remove_song(
+        self, main_frame: tk.Frame, song_id: int, track_id: str
+    ) -> None:
+        """Remove one song: platform API first, then the local DB.
+
+        Mirrors the add-flow invariant: a platform failure must not leave
+        a local-only "success" - the track is still in the platform
+        playlist and the next reload would re-import it anyway.  Runs on
+        a worker thread (memory: platform round trips must never block
+        the tkinter main thread).
+        """
+        try:
+            frame_idx = self.frames.index(main_frame)
+        except ValueError:
+            return
+        if frame_idx >= len(self.playlist_name_labels):
+            return
+        playlist_name = self.playlist_name_labels[frame_idx].cget("text")
+        platform = self.frame_platforms[frame_idx]
+        labels = self.active_log_labels.get(frame_idx)
+        if labels is None:
+            return
+        status_label = labels["status"]
+
+        # One removal in flight per frame; also refuse while a reload is
+        # running (a reload starting mid-remove could re-import the track).
+        if getattr(main_frame, "_removing", False) or getattr(
+            main_frame, "_syncing", False
+        ):
+            return
+        if not track_id or not song_id:
+            # Legacy DB row without a platform id - nothing to remove
+            # platform-side, so nothing may be deleted locally either.
+            status_label.config(
+                text="Error", background=C["label_playlist_error_bg"]
+            )
+            return
+        main_frame._removing = True
+
+        status_label.config(text="Removing", background=C["label_playlist_warn_bg"])
+
+        buttons = self._frame_buttons(main_frame)
+        for btn in buttons:
+            try:
+                btn.config(state="disabled")
+            except tk.TclError:
+                pass
+
+        playlist_data = PlaylistStore.find_playlist(playlist_name, platform)
+        playlist_id = playlist_data.get("playlist_id", "") if playlist_data else ""
+        integration = self.integrations.get(platform) if self.integrations else None
+
+        def work() -> None:
+            ok = False
+            if not playlist_id:
+                logger.error(
+                    "No playlist_id for '%s' (%s); cannot remove track %s",
+                    playlist_name, platform, track_id,
+                )
+            elif integration is None or not integration.is_authenticated():
+                logger.error(
+                    "Integration %s not authenticated; cannot remove track %s",
+                    platform, track_id,
+                )
+            else:
+                ok = integration.remove_track(playlist_id, track_id)
+                if ok:
+                    SongManager().delete_song(
+                        playlist_name, song_id, platform=platform
+                    )
+
+            def done() -> None:
+                main_frame._removing = False
+                try:
+                    if not main_frame.winfo_exists():
+                        return
+                except tk.TclError:
+                    return
+                for btn in buttons:
+                    try:
+                        btn.config(state="normal")
+                    except tk.TclError:
+                        pass
+                if ok:
+                    status_label.config(
+                        text="Removed", background=C["label_playlist_good_bg"]
+                    )
+                    try:
+                        cur_idx = self.frames.index(main_frame)
+                        pname = self.playlist_name_labels[cur_idx].cget("text")
+                        self._refresh_showcase(
+                            cur_idx, pname, self.frame_platforms[cur_idx]
+                        )
+                    except (ValueError, IndexError):
+                        pass
+                else:
+                    status_label.config(
+                        text="Error", background=C["label_playlist_error_bg"]
+                    )
+
+            try:
+                self.root.after(0, done)
+            except Exception:
+                logger.debug(
+                    "App is shutting down; dropped remove-done update",
+                    exc_info=True,
+                )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    @staticmethod
+    def _frame_buttons(main_frame: tk.Frame) -> list:
+        """All Button widgets inside a card (close/reload + showcase removes)."""
+        buttons = []
+        for child in main_frame.winfo_children():
+            if isinstance(child, tk.Frame):
+                for widget in child.winfo_children():
+                    if isinstance(widget, tk.Button):
+                        buttons.append(widget)
+        return buttons
+
+    def _update_card_height(self, frame_idx: int) -> None:
+        """Recompute a card's fixed height from its current showcase state.
+
+        ``card_height = px(CARD_H_BASE) + rows * px(SONG_UNIT_H_BASE)``,
+        minus one log row when the log row is hidden.  A card with no
+        rows reserves no space - it grows as songs are added and shrinks
+        when they are removed.
+        """
+        try:
+            main_frame = self.frames[frame_idx]
+        except IndexError:
+            return
+        rows = getattr(main_frame, "showcase_rows", 0)
+        height = px(CARD_H_BASE) + rows * px(SONG_UNIT_H_BASE)
+        if not self._show_log:
+            height -= px(LOG_ROW_H_BASE)
+        main_frame.config(height=max(px(CARD_H_BASE) - px(LOG_ROW_H_BASE), height))
+
+    def _apply_log_visibility(self, frame_idx: int) -> None:
+        """Show or hide the artist/name/status log row of a card."""
+        try:
+            main_frame = self.frames[frame_idx]
+        except IndexError:
+            return
+        log_frame = getattr(main_frame, "main_log_frame", None)
+        if log_frame is None:
+            return
+        if self._show_log:
+            log_frame.grid()
+        else:
+            log_frame.grid_remove()
+        self._update_card_height(frame_idx)
+
+    # ------------------------------------------------------------------
     # Database / log label helpers
     # ------------------------------------------------------------------
 
@@ -511,6 +849,14 @@ class MainWindow:
             frame_idx = self._find_frame_index_by_name(playlist_name)
         if frame_idx is None or frame_idx not in self.active_log_labels:
             return None
+        # The frame's reload sync finished (import or reload completion) -
+        # allow remove clicks again.  Guarded: the frame may have been
+        # closed and recreated, in which case the flag is already unset.
+        try:
+            main_frame = self.frames[frame_idx]
+            main_frame._syncing = False
+        except IndexError:
+            pass
         status_label = self.active_log_labels[frame_idx]["status"]
         if count > 0:
             status_label.config(text="OK", background=C["label_playlist_good_bg"])
@@ -521,6 +867,11 @@ class MainWindow:
             # platform error) and "0 new" (all duplicates) are not successes.
             status_label.config(text=status_text, background=C["label_playlist_warn_bg"])
         self._update_log_labels_from_db(
+            frame_idx, playlist_name, self.frame_platforms[frame_idx]
+        )
+        # Import/reload changed the song set - rebuild the showcase rows
+        # (this also covers the _on_reload_done path, which routes here).
+        self._refresh_showcase(
             frame_idx, playlist_name, self.frame_platforms[frame_idx]
         )
         logger.info("Import finished for '%s': %s", playlist_name, status_text)
@@ -551,6 +902,10 @@ class MainWindow:
         accessed from the main thread).
         """
         labels = self.active_log_labels[frame_idx]
+        # Capture the frame widget, not the index: the callbacks object can
+        # outlive close_main_frame() renumbering, so on_song_added resolves
+        # the live index at callback time (memory: never capture an index).
+        main_frame = self.frames[frame_idx]
 
         def _set(widget, **kwargs) -> None:
             """Configure *widget* if it still exists.
@@ -581,11 +936,28 @@ class MainWindow:
             _set(labels["artist"], text="")
             _set(labels["name"], text="")
 
+        def on_song_added() -> None:
+            # Runs on the main thread (the flow schedules _apply there).
+            # Resolve the frame's live index - the frame may have been
+            # closed or renumbered since the callbacks were created.
+            try:
+                cur_idx = self.frames.index(main_frame)
+            except ValueError:
+                return
+            try:
+                playlist_name = self.playlist_name_labels[cur_idx].cget("text")
+            except (IndexError, tk.TclError):
+                return
+            self._refresh_showcase(
+                cur_idx, playlist_name, self.frame_platforms[cur_idx]
+            )
+
         return KeybindCallbacks(
             on_status=on_status,
             on_song_info=on_song_info,
             on_entry_state=on_entry_state,
             on_reset=on_reset,
+            on_song_added=on_song_added,
         )
 
     def setup(self) -> None:
@@ -618,6 +990,7 @@ class MainWindow:
                             self._clear_displaced_keybind(displaced)
 
                     self._update_log_labels_from_db(i, name, platform)
+                    self._refresh_showcase(i, name, platform)
 
                     thumb_url = playlist.get("thumbnail_url", "")
                     if thumb_url:
@@ -780,6 +1153,7 @@ class MainWindow:
             main_frame.grid_propagate(False)
             main_frame.grid_rowconfigure(0, weight=1)
             main_frame.grid_rowconfigure(1, weight=1)
+            main_frame.grid_rowconfigure(2, weight=0)
             main_frame.grid_columnconfigure(0, weight=1)
             main_header_frame = tk.Frame(main_frame, background=frame_playlist_bg)
             main_log_frame = tk.Frame(main_frame, background=frame_playlist_bg)
@@ -920,6 +1294,16 @@ class MainWindow:
             log_helper_2.grid(row=0, column=3)
             log_log.grid(row=0, column=4, padx=(0, 2))
 
+            # Per-frame state the showcase helpers read.  Widgets, not
+            # indices: close_main_frame() renumbers the frame lists, but
+            # attributes travel with the widget itself.
+            main_frame.showcase_rows = 0
+            main_frame.showcase_frame = None
+            main_frame.main_log_frame = main_log_frame
+            if not self._show_log:
+                main_log_frame.grid_remove()
+            self._update_card_height(i)
+
         self._auto_resize()
 
     def _hide_main_content(self) -> None:
@@ -946,16 +1330,13 @@ class MainWindow:
             self.playlist_name_labels.pop(index)
             self.frame_platforms.pop(index)
 
-            # Release the cover-image references for the closing frame so the
-            # PhotoImages can be garbage-collected (they were keyed by the
-            # cover label widget in _apply_cover).
+            # Release the PhotoImage references for the closing frame's
+            # labels (cover + showcase thumbnails - keyed by widget in
+            # _apply_cover) so they can be garbage-collected before the
+            # widgets are destroyed.
+            self._prune_frame_imgs(frame)
+
             closing_labels = self.active_log_labels.get(index)
-            if closing_labels is not None:
-                cover = closing_labels.get("cover")
-                if cover is not None:
-                    refs = self.frame_img_refs.pop(cover, None)
-                    if refs:
-                        refs.clear()
 
             if index in self.active_log_labels:
                 del self.active_log_labels[index]
@@ -1000,6 +1381,49 @@ class MainWindow:
     def _read_hide_to_tray_setting() -> bool:
         """Read the hide-to-tray setting once."""
         return get_setting("hide_to_tray", False)
+
+    @staticmethod
+    def _read_showcase_count_setting() -> int:
+        """Read the showcase count once; clamp to [0, 20].
+
+        0 (the default) turns the showcase off entirely.
+        """
+        try:
+            raw = get_setting_value("showcase", "count", "0")
+            return min(20, max(0, int(str(raw).strip())))
+        except (ValueError, TypeError):
+            return 0
+
+    @staticmethod
+    def _read_show_log_setting() -> bool:
+        """Read the show-log-row setting once."""
+        return get_setting("showcase_log", True)
+
+    def set_showcase_count(self, count: int) -> None:
+        """Live-apply the showcase count (called from the Settings dialog).
+
+        Rebuilds every card's showcase section in place - no window
+        rebuild.  Falls back to a full rebuild when no frames exist yet.
+        """
+        try:
+            self._showcase_count = min(20, max(0, int(count)))
+        except (ValueError, TypeError):
+            return
+        for frame_idx in list(self.active_log_labels):
+            try:
+                playlist_name = self.playlist_name_labels[frame_idx].cget("text")
+                platform = self.frame_platforms[frame_idx]
+            except (IndexError, tk.TclError):
+                continue
+            self._refresh_showcase(frame_idx, playlist_name, platform)
+        self._auto_resize()
+
+    def set_showcase_log(self, show: bool) -> None:
+        """Live-apply the show-log-row setting (called from Settings)."""
+        self._show_log = bool(show)
+        for frame_idx in list(self.active_log_labels):
+            self._apply_log_visibility(frame_idx)
+        self._auto_resize()
 
     def _auto_resize(self) -> None:
         """Resize the window to fit playlist frames."""
@@ -1163,6 +1587,12 @@ class MainWindow:
         if not playlist_id:
             logger.warning("No playlist_id for '%s', cannot reload", playlist_name)
             return
+
+        # Prevent a remove click mid-reload from racing the re-import
+        # (_on_remove_song checks this flag; the reload button is not
+        # disabled - the flag is the guard).
+        main_frame = self.frames[frame_idx]
+        main_frame._syncing = True
 
         status_label = self.active_log_labels[frame_idx]["status"]
         status_label.config(text="Sync", background=C["label_playlist_warn_bg"])

@@ -428,6 +428,12 @@ class KeybindController:
 
                 callbacks.on_entry_state("readonly")
 
+                # A new song landed in the DB - let the UI refresh any
+                # song-derived sections (showcase).  "exists" results are
+                # skipped above: the song data did not change.
+                if status == "added":
+                    callbacks.on_song_added()
+
             if self._root is not None:
                 _schedule_ui(_apply)
             else:

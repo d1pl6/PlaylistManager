@@ -249,6 +249,42 @@ class SpotifyAPI:
                 return False
         return success
 
+    def remove_track_from_playlist(self, playlist_id: str, track_id: str) -> bool:
+        """Remove a single track via DELETE /v1/playlists/{id}/tracks.
+
+        Mirrors the 401 refresh+retry and ``>= 400 -> None`` handling of
+        :meth:`add_tracks_to_playlist`.  Returns True only when Spotify
+        confirmed the removal (200 + snapshot_id body).
+        """
+        url = f"{SPOTIFY_API_BASE}/playlists/{playlist_id}/tracks"
+        try:
+            resp = self._session.delete(
+                url,
+                headers=self._get_headers(),
+                json={"tracks": [{"uri": f"spotify:track:{track_id}"}]},
+            )
+            if resp.status_code == 401:
+                if not self._refresh_access_token():
+                    logger.error("Failed to refresh token for track removal")
+                    return False
+                resp = self._session.delete(
+                    url,
+                    headers=self._get_headers(),
+                    json={"tracks": [{"uri": f"spotify:track:{track_id}"}]},
+                )
+            if resp.status_code in (200, 201, 202):
+                logger.info(
+                    f"Removed track {track_id} from playlist {playlist_id}"
+                )
+                return True
+            logger.error(
+                f"Failed to remove track: {resp.status_code} {resp.text[:200]}"
+            )
+            return False
+        except Exception as e:
+            logger.error(f"Error removing track from playlist: {e}")
+            return False
+
     def get_playlist_id_by_name(self, name: str) -> Optional[str]:
         playlists = self.get_playlists(limit=50)
         for playlist in playlists:

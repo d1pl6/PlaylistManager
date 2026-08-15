@@ -49,6 +49,14 @@ class BaseIntegration:
         """
         return []
 
+    def remove_track(self, playlist_id: str, track_id: str) -> bool:
+        """Remove one track from a platform playlist.
+
+        Returns True only when the platform confirmed the removal.
+        The default returns False - implementations must override.
+        """
+        return False
+
 
 class IntegrationRegistry:
     def __init__(self):
@@ -132,6 +140,24 @@ class YouTubeMusicIntegration(BaseIntegration):
         except Exception as e:
             logger.error(f"YouTube Music: failed to get playlist tracks: {e}")
             return []
+
+    def remove_track(self, playlist_id: str, track_id: str) -> bool:
+        if not self.yt_client:
+            return False
+        try:
+            self.yt_client.remove_playlist_items(
+                playlist_id, [{"videoId": track_id}]
+            )
+            logger.info(
+                "YouTube Music: removed track %s from playlist %s",
+                track_id, playlist_id,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                f"YouTube Music: failed to remove track {track_id}: {e}"
+            )
+            return False
 
 
 class SpotifyIntegration(BaseIntegration):
@@ -219,3 +245,8 @@ class SpotifyIntegration(BaseIntegration):
         if not self.spotify_api:
             return False
         return self.spotify_api.add_tracks_to_playlist(playlist_id, track_ids)
+
+    def remove_track(self, playlist_id: str, track_id: str) -> bool:
+        if not self.spotify_api:
+            return False
+        return self.spotify_api.remove_track_from_playlist(playlist_id, track_id)
