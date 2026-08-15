@@ -8,7 +8,7 @@ I couldn't find something similar so i did it. First it used Electron, but i did
 # Integrations
 For now only available
 - YouTube Music
-- Spotify (not tested)
+- Spotify
 
 See [INTEGRATIONS.MD](INTEGRATIONS.MD)
 
@@ -77,7 +77,7 @@ apt install -y python3-pystray
 ```
 
 > [!NOTE]
-> `python3-ytmusicapi` and `python3-pystray` are only packaged for Debian *sid/testing* and recent Ubuntu releases (universe). On Debian stable or older Ubuntu, use `pip install ytmusicapi pystray` (or `pip install ".[all]"`) instead.
+> `python3-ytmusicapi` is only packaged for Debian *testing/unstable* (not in stable); `python3-pystray` has been packaged since bookworm. On Debian stable, `apt install python3-pystray` and `pip install ytmusicapi` (or `pip install ".[all]"`) instead.
 
 > [!NOTE]
 > **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
@@ -120,15 +120,17 @@ python -m app --logout spotify            # delete spotify.json + registry entri
 
 - `--login youtube_music` opens the auth folder and a terminal for the `ytmusicapi browser`
   flow; manual instructions are printed when no terminal emulator is installed. `--login
-  spotify` needs the three credential options - they are written, verified against the
-  Spotify API, and rolled back (deleted) on verification failure.
+  spotify` takes the three credential options (or prompts for them interactively when
+  omitted; an empty refresh-token prompt reuses the stored token). Credentials are
+  verified against the Spotify API first and only persisted on success - a failed login
+  leaves previously working auth untouched.
 - `--logout` is **local-only** and idempotent: it deletes the platform's credential file(s),
   unregisters all of its playlists from the registry and removes the local song databases
   under `db/<platform>/`. Nothing is revoked on the platform itself; re-running it with
   nothing left prints "no credentials found" and exits 0. After re-login, re-add playlists
   with `-p add <URL>`.
-- Credentials passed on the command line may appear in your shell history - fine on a
-  personal machine, so don't share your creen during login.
+- Credentials passed on the command line may appear in your shell history, so don't share
+  your screen during login.
 - Unknown platform names exit with code 2.
 
 Playlist management (`-p` / `--playlist`, verbs: `add`, `del`/`delete`, `ref`/`refresh`):
@@ -216,6 +218,6 @@ Q: Why AI?
 
 A: I hate programming.
 
-Q: Will _patform_ will be added?
+Q: Will _patform_ be added?
 
 A: See [TODO](TODO.MD), if it doesn't exist there - open `Platform integration request` on `Issue`s page.
