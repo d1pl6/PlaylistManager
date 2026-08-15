@@ -92,7 +92,11 @@ def show_theme_dialog(parent, on_theme_change=None):
                 theme_cfg.add_section(section)
             theme_cfg[section][option] = color
             set_theme_value(section, option, color)
-            button.config(background=color)
+            # Re-style the whole swatch (bg + readable fg, incl. the hover
+            # state) - config(background=...) alone leaves the creation-time
+            # activebackground/activeforeground behind, so hovering showed
+            # the old color / black text after a pick.
+            _style_button(button, color)
             if callable(on_theme_change):
                 on_theme_change()
 
@@ -106,12 +110,41 @@ def show_theme_dialog(parent, on_theme_change=None):
         r, g, b = (int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
         return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
+    def _hover_bg(value: str) -> str:
+        """Hover background for a swatch: a shade of *value*.
+
+        Light colors are darkened toward black, dark colors lightened toward
+        white, so the hover state is always visibly different from the swatch
+        itself.  A pure ``#ffffff`` / ``#000000`` (or near-pure) value would
+        make an inverted hover color identical (or nearly identical) to the
+        swatch, giving no feedback.  Named colors fall back to no hover
+        change - theme values from the picker and presets are always hex.
+        """
+        h = value.lstrip("#")
+        if len(h) != 6:
+            return value
+        channels = [int(h[i : i + 2], 16) for i in (0, 2, 4)]
+        if _luminance(value) >= 0.6:
+            shaded = [int(c * 0.75) for c in channels]  # light -> darker
+        else:
+            shaded = [int(c + (255 - c) * 0.25) for c in channels]  # dark -> lighter
+        return "#{:02x}{:02x}{:02x}".format(*shaded)
+
     def _style_button(btn, value) -> None:
-        """Apply a color to a swatch button (bg + readable fg)."""
+        """Apply a color to a swatch button (bg + readable fg, hover included).
+
+        Tk's default activeforeground is black and its default
+        activebackground a light gray, so without explicit values a hovered
+        swatch flashes gray with black text on top of the themed color.  The
+        hover background is a shade of the swatch color (see _hover_bg) so
+        hovering always reads as a change.
+        """
+        fg = "#000000" if _luminance(value) >= 0.6 else "#ffffff"
         btn.config(
             background=value,
-            activebackground=value,
-            foreground="#000000" if _luminance(value) >= 0.6 else "#ffffff",
+            activebackground=_hover_bg(value),
+            foreground=fg,
+            activeforeground=fg,
         )
 
     def _create_theme_button(label_text, section, option, default):
@@ -132,6 +165,7 @@ def show_theme_dialog(parent, on_theme_change=None):
         btn = tk.Button(
             frame,
             text="Change",
+            cursor="hand2",
             font=ui_font(10),
             command=lambda: _choose_color(section, option, default, btn),
             highlightthickness=0,
@@ -232,11 +266,13 @@ def show_theme_dialog(parent, on_theme_change=None):
     tk.Button(
         button_frame,
         text="White Theme",
+        cursor="hand2",
         font=ui_font(10),
         command=lambda: (_apply_preset("white"), _fire_change()),
         background="#EDEDED",
         activebackground="#D2D2D2",
         foreground="#1A1A1A",
+        activeforeground="#1A1A1A",
         highlightthickness=0,
         relief="raised",
         bd=0,
@@ -245,11 +281,13 @@ def show_theme_dialog(parent, on_theme_change=None):
     tk.Button(
         button_frame,
         text="Restore Defaults",
+        cursor="hand2",
         font=ui_font(10),
         command=lambda: (_restore_defaults(), _fire_change()),
         background=button_bg,
         activebackground=button_abg,
         foreground=button_fg,
+        activeforeground=button_fg,
         highlightthickness=0,
         relief="raised",
         bd=0,
