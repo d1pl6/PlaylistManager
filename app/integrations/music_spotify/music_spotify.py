@@ -93,6 +93,7 @@ class SpotifyAPI:
         self._access_token: Optional[str] = None
         self._token_expires: float = 0
         self._lock = threading.Lock()
+        self._user_id: Optional[str] = None
         self._session = requests.Session()
         original_request = self._session.request
         self._session.request = lambda *a, **kw: original_request(
@@ -176,7 +177,19 @@ class SpotifyAPI:
         return self._request("GET", endpoint, params=params)
 
     def get_me(self) -> Optional[Dict]:
-        return self._get("/me")
+        me = self._get("/me")
+        if me and me.get("id"):
+            # Cache for owner-based playlist filtering without an extra
+            # round trip per caller.  Refreshed on every successful /v1/me.
+            self._user_id = me["id"]
+        return me
+
+    def get_user_id(self) -> Optional[str]:
+        """Return the authenticated user's Spotify id (cached, /v1/me)."""
+        if self._user_id is not None:
+            return self._user_id
+        self.get_me()
+        return self._user_id
 
     def get_playlists(self, limit: int = 50) -> List[Dict]:
         playlists = []
@@ -206,7 +219,11 @@ class SpotifyAPI:
                 break
             for item in data.get("items", []):
                 track = item.get("track")
-                if track and track.get("id"):
+                # Keep only real tracks: podcasts/audiobooks (type
+                # "episode") have valid ids but cannot be inserted or
+                # removed via spotify:track: URIs - importing them into
+                # the local mirror makes the remove button fail.
+                if track and track.get("id") and track.get("type") == "track":
                     tracks.append(track)
             url = data.get("next")
             if url:

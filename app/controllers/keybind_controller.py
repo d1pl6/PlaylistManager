@@ -241,19 +241,33 @@ class KeybindController:
                 self._recording = False
                 self._last_recording_combo = ""
                 if self._recording_callback and self._root:
-                    self._root.after(0, self._recording_callback, "")
+                    self._schedule_recording_callback(self._recording_callback, "")
                 self._recording_callback = None
                 if self._recording_stop_callback and self._root:
-                    self._root.after(0, self._recording_stop_callback)
+                    self._schedule_recording_callback(self._recording_stop_callback)
                 self._recording_stop_callback = None
                 return
             if name not in MODIFIER_NAMES:
                 combo = self._build_combo()
                 self._last_recording_combo = combo
                 if self._recording_callback and self._root:
-                    self._root.after(0, self._recording_callback, combo)
+                    self._schedule_recording_callback(self._recording_callback, combo)
         else:
             self._check_hotkeys()
+
+    def _schedule_recording_callback(self, callback: Callable, *args) -> None:
+        """Schedule a recording callback on the tkinter thread, guarded.
+
+        The recording branch of ``_handle_press`` runs on the pynput
+        listener thread when global listening is enabled; the same
+        mainloop-not-running / root-destroyed exceptions that
+        ``_check_hotkeys`` guards against apply here.  A stray key at
+        shutdown must not kill the listener.
+        """
+        try:
+            self._root.after(0, callback, *args)
+        except Exception as e:
+            logger.debug("Failed to schedule recording callback: %s", e)
 
     def _build_combo(self) -> str:
         with self._pressed_keys_lock:
@@ -291,16 +305,26 @@ class KeybindController:
         hotkey: str,
         callbacks: KeybindCallbacks,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ) -> Optional[Dict]:
         """Register *hotkey* for *playlist_name*; see KeybindRegistry.register.
+
+        *playlist_id* disambiguates two playlists that share a name on
+        one platform.
 
         Returns the binding info displaced by this registration (a
         different playlist that owned the same hotkey), or None.
         """
-        return self.registry.register(playlist_name, hotkey, callbacks, platform)
+        return self.registry.register(
+            playlist_name, hotkey, callbacks, platform, playlist_id
+        )
 
-    def unregister_hotkey(self, playlist_name: str, platform: str = ""):
-        self.registry.unregister(playlist_name, platform=platform)
+    def unregister_hotkey(
+        self, playlist_name: str, platform: str = "", playlist_id: str = ""
+    ):
+        self.registry.unregister(
+            playlist_name, platform=platform, playlist_id=playlist_id
+        )
 
     def _check_hotkeys(self):
         with self._pressed_keys_lock:
@@ -311,10 +335,16 @@ class KeybindController:
             playlist_name = info["playlist_name"]
             callbacks = info["callbacks"]
             platform = info.get("platform", PLATFORM_YOUTUBE_MUSIC)
+            playlist_id = info.get("playlist_id", "")
             if self._root:
                 try:
                     self._root.after(
-                        0, self.handle_keybind, playlist_name, callbacks, platform,
+                        0,
+                        self.handle_keybind,
+                        playlist_name,
+                        callbacks,
+                        platform,
+                        playlist_id,
                     )
                 except Exception as e:
                     # _check_hotkeys also runs on the pynput listener
@@ -333,6 +363,7 @@ class KeybindController:
         playlist_name: str,
         callbacks: KeybindCallbacks,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ):
         """Execute the add-to-playlist flow for the given keybind.
 
@@ -349,7 +380,7 @@ class KeybindController:
         # was queued.  Running the flow anyway would add the song to a
         # playlist the user removed from the window and resurrect its
         # deleted local DB file, so drop stale events.
-        current = self.registry.find(playlist_name, platform)
+        current = self.registry.find(playlist_name, platform, playlist_id)
         if current is None or current.get("callbacks") is not callbacks:
             logger.debug(
                 "Keybind for '%s' (%s) is no longer active, dropping event",
@@ -361,8 +392,12 @@ class KeybindController:
         # Resolve the stored playlist ID so the flow does not re-scan the
         # platform library by name (a full-library network round trip) - the
         # store persisted the ID at add-playlist time.  Legacy entries have
-        # none, and the flow then falls back to the by-name scan.
-        entry = PlaylistStore.find_playlist(playlist_name, platform=platform)
+        # none, and the flow then falls back to the by-name scan.  The id
+        # from the registry binding pins the lookup so a same-named
+        # playlist with a different id can never be picked.
+        entry = PlaylistStore.find_playlist(
+            playlist_name, platform=platform, playlist_id=playlist_id or ""
+        )
         stored_playlist_id = (entry or {}).get("playlist_id") or None
 
         callbacks.on_entry_state("readonly")

@@ -80,10 +80,19 @@ def _extract_spotify_track(track: dict) -> Optional[tuple]:
     """Extract fields from a Spotify track dict.
 
     Returns (title, artists, duration_seconds, id, thumbnail_url)
-    or None if the track has no id.
+    or None if the track has no id, or if it is not a track at all:
+    episodes and audiobooks are valid Spotify playlist items but cannot
+    be addressed by ``spotify:track:`` URIs (add/remove would fail
+    platform-side), so they are excluded from the local mirror.
     """
     track_id = track.get("id")
     if not track_id:
+        return None
+
+    if track.get("type") and track.get("type") != "track":
+        logger.debug(
+            "Skipping non-track Spotify item %s (type=%s)", track_id, track.get("type")
+        )
         return None
 
     title = track.get("name", "Unknown")
@@ -176,6 +185,7 @@ class SongManager:
         playlist_name: str,
         tracks: List[Dict],
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ) -> int:
         """
         Bulk-insert songs into the database, dispatching by platform.
@@ -184,6 +194,8 @@ class SongManager:
             playlist_name: Name of the playlist
             tracks: List of track dicts from the platform API
             platform: Platform identifier (PLATFORM_YOUTUBE_MUSIC or PLATFORM_SPOTIFY)
+            playlist_id: Stable API identifier - selects this playlist's
+                own database file (see DatabaseManager._db_stem)
 
         Returns:
             Number of songs actually inserted (skips duplicates)
@@ -195,7 +207,9 @@ class SongManager:
                 platform, PLATFORM_YOUTUBE_MUSIC,
             )
             extractor = _extract_youtube_track
-        return self._add_songs_bulk(playlist_name, tracks, extractor, platform)
+        return self._add_songs_bulk(
+            playlist_name, tracks, extractor, platform, playlist_id
+        )
 
     def _add_songs_bulk(
         self,
@@ -203,6 +217,7 @@ class SongManager:
         tracks: List[Dict],
         extractor: Callable[[dict], Optional[tuple]],
         platform: str,
+        playlist_id: str = "",
     ) -> int:
         """
         Core bulk insert - shared by YouTube Music and Spotify.
@@ -212,13 +227,17 @@ class SongManager:
             tracks: List of track dicts
             extractor: Callable(track) -> (title, artists, duration, track_id, thumbnail_url) | None
             platform: Platform label for log messages
+            playlist_id: Stable API identifier - selects this playlist's
+                own database file (see DatabaseManager._db_stem)
 
         Returns:
             Number of songs actually inserted (skips duplicates)
         """
         conn = None
         try:
-            with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
                 cursor = conn.cursor()
 
                 rows = []
@@ -275,9 +294,12 @@ class SongManager:
         artists: List[str],
         duration: int,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ) -> bool:
         try:
-            with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
                 cursor = conn.cursor()
 
                 norm_title = _normalize_text(title)
@@ -304,6 +326,7 @@ class SongManager:
         track_id: str,
         thumbnail_url: Optional[str] = None,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ) -> int:
         """
         Add a song by matching (title, artists, duration), using an atomic
@@ -315,7 +338,9 @@ class SongManager:
             sqlite3.Error: If database operation fails
         """
         try:
-            with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
                 cursor = conn.cursor()
 
                 artists_json = json.dumps(artists)
@@ -405,6 +430,7 @@ class SongManager:
         track_id: str,
         thumbnail_url: Optional[str] = None,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ) -> int:
         """
         Add a song to the playlist's database.
@@ -430,7 +456,9 @@ class SongManager:
         """
         conn = None
         try:
-            with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
                 cursor = conn.cursor()
 
                 artists_json = json.dumps(artists)
@@ -482,6 +510,7 @@ class SongManager:
         playlist_name: str,
         track_id: str,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ) -> bool:
         """
         Check if a song exists in the playlist's database by track ID.
@@ -495,7 +524,9 @@ class SongManager:
             True if song exists, False otherwise
         """
         try:
-            with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT id FROM songs WHERE track_id = ?", (track_id,))
                 return cursor.fetchone() is not None
@@ -509,6 +540,7 @@ class SongManager:
         playlist_name: str,
         track_id: str,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ) -> Optional[Dict]:
         """
         Get song data by track ID.
@@ -522,7 +554,9 @@ class SongManager:
             Song data as dict or None if not found
         """
         try:
-            with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT * FROM songs WHERE track_id = ?", (track_id,))
                 row = cursor.fetchone()
@@ -541,6 +575,7 @@ class SongManager:
         playlist_name: str,
         song_id: int,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ) -> bool:
         """
         Delete a song from the playlist's database.
@@ -554,7 +589,9 @@ class SongManager:
             True if deleted, False otherwise
         """
         try:
-            with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM songs WHERE id = ?", (song_id,))
                 conn.commit()
@@ -569,6 +606,7 @@ class SongManager:
         self,
         playlist_name: str,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ) -> List[Dict]:
         """
         Get all songs from the playlist's database.
@@ -581,7 +619,9 @@ class SongManager:
             List of song dictionaries
         """
         try:
-            with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT * FROM songs ORDER BY added_at DESC")
                 rows = cursor.fetchall()
@@ -600,6 +640,7 @@ class SongManager:
         self,
         playlist_name: str,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ) -> Optional[Dict]:
         """
         Get the most recently added song from the playlist.
@@ -612,7 +653,9 @@ class SongManager:
         thumbnail_url), or None if the playlist is empty.
         """
         try:
-            with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT title, artists, thumbnail_url, duration, track_id "
@@ -638,6 +681,7 @@ class SongManager:
         playlist_name: str,
         limit: int,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ) -> List[Dict]:
         """Get the most recently added songs from the playlist.
 
@@ -653,7 +697,9 @@ class SongManager:
         duration, track_id).  Returns ``[]`` on sqlite errors.
         """
         try:
-            with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT id, title, artists, thumbnail_url, duration, track_id "
@@ -682,6 +728,7 @@ class SongManager:
         self,
         playlist_name: str,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
     ) -> int:
         """
         Get the total number of songs in the playlist.
@@ -694,7 +741,9 @@ class SongManager:
             Number of songs
         """
         try:
-            with self.db_manager.get_connection(playlist_name, platform=platform) as conn:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT COUNT(*) FROM songs")
                 return cursor.fetchone()[0]

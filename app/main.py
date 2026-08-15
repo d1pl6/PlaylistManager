@@ -58,7 +58,8 @@ def parse_args():
     p.add_argument(
         "--login", dest="login_platform", metavar="PLATFORM",
         help='log in to a platform: "youtube_music" or "spotify" '
-             "(spotify also needs --client-id/--client-secret/--refresh-token)",
+             "(spotify also needs --client-id/--client-secret/--refresh-token; "
+            "omit them to be prompted interactively)",
     )
     p.add_argument(
         "--logout", dest="logout_platform", metavar="PLATFORM",

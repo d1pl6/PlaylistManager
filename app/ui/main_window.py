@@ -390,6 +390,10 @@ class MainWindow:
         if self.playlist_name_labels:
             self.playlist_name_labels[-1].config(text=playlist_name)
             self.frame_platforms[-1] = platform
+            if self.frames:
+                # Pin the frame to its playlist: same-named playlists with
+                # different ids stay distinct for close/keybind/remove/reload.
+                self.frames[-1].playlist_id = playlist_id
 
             frame_idx = len(self.frames) - 1
             status_label = self.active_log_labels[frame_idx]["status"]
@@ -530,7 +534,10 @@ class MainWindow:
         rows = []
         if self._showcase_count > 0:
             rows = SongManager().get_latest_songs(
-                playlist_name, self._showcase_count, platform=platform
+                playlist_name,
+                self._showcase_count,
+                platform=platform,
+                playlist_id=getattr(main_frame, "playlist_id", "") or "",
             )
 
         main_frame.showcase_rows = len(rows)
@@ -560,7 +567,7 @@ class MainWindow:
         button_playlist_a_bg = C["button_playlist_a_bg"]
         button_playlist_a_fg = C["button_playlist_a_fg"]
 
-        showcase = tk.Frame(main_frame, background=frame_playlist_bg, padx=2, borderwidth=2, relief="solid")
+        showcase = tk.Frame(main_frame, background=frame_playlist_bg)
         showcase.grid_columnconfigure(1, weight=1)
 
         jobs = []
@@ -670,7 +677,11 @@ class MainWindow:
             except tk.TclError:
                 pass
 
-        playlist_data = PlaylistStore.find_playlist(playlist_name, platform)
+        playlist_data = PlaylistStore.find_playlist(
+            playlist_name,
+            platform,
+            playlist_id=getattr(main_frame, "playlist_id", "") or "",
+        )
         playlist_id = playlist_data.get("playlist_id", "") if playlist_data else ""
         integration = self.integrations.get(platform) if self.integrations else None
 
@@ -690,7 +701,10 @@ class MainWindow:
                 ok = integration.remove_track(playlist_id, track_id)
                 if ok:
                     SongManager().delete_song(
-                        playlist_name, song_id, platform=platform
+                        playlist_name,
+                        song_id,
+                        platform=platform,
+                        playlist_id=playlist_id,
                     )
 
             def done() -> None:
@@ -808,7 +822,15 @@ class MainWindow:
         as soon as an import or reload has populated the database.
         """
         sm = SongManager()
-        latest = sm.get_latest_song(playlist_name, platform=platform)
+        try:
+            main_frame = self.frames[frame_idx]
+        except IndexError:
+            return
+        latest = sm.get_latest_song(
+            playlist_name,
+            platform=platform,
+            playlist_id=getattr(main_frame, "playlist_id", "") or "",
+        )
         if not latest:
             return
         labels = self.active_log_labels.get(frame_idx)
@@ -998,8 +1020,13 @@ class MainWindow:
                 if i < len(self.playlist_name_labels):
                     name = playlist.get("name", f"Playlist {i + 1}")
                     platform = playlist.get("platform", PLATFORM_YOUTUBE_MUSIC)
+                    playlist_id = playlist.get("playlist_id", "")
                     self.playlist_name_labels[i].config(text=name)
                     self.frame_platforms[i] = platform
+                    if i < len(self.frames):
+                        # Pin the frame to its playlist id so same-named
+                        # playlists stay distinct for close/keybind/remove.
+                        self.frames[i].playlist_id = playlist_id
 
                     hotkey = playlist.get("hotkey", "")
                     if hotkey:
@@ -1012,6 +1039,7 @@ class MainWindow:
                             hotkey,
                             self._make_keybind_callbacks(i),
                             platform=platform,
+                            playlist_id=playlist_id,
                         )
                         if displaced:
                             # Self-heal stale stores: a displaced playlist's
@@ -1178,6 +1206,8 @@ class MainWindow:
                 width=px(CARD_W_BASE),
                 height=px(CARD_H_BASE),
                 background=frame_playlist_bg,
+                borderwidth=2,
+                relief="solid"
             )
             main_frame.grid_propagate(False)
             main_frame.grid_rowconfigure(0, weight=1)
@@ -1333,6 +1363,7 @@ class MainWindow:
             main_frame.showcase_rows = 0
             main_frame.showcase_frame = None
             main_frame.main_log_frame = main_log_frame
+            main_frame.playlist_id = ""  # pinned by setup()/_on_add_playlist_frame
             if not self._show_log:
                 main_log_frame.grid_remove()
             self._update_card_height(i)
@@ -1352,8 +1383,11 @@ class MainWindow:
             index = self.frames.index(frame)
             playlist_name = self.playlist_name_labels[index].cget("text")
             platform = self.frame_platforms[index]
+            playlist_id = getattr(frame, "playlist_id", "") or ""
 
-            self.kc.unregister_hotkey(playlist_name, platform=platform)
+            self.kc.unregister_hotkey(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            )
             if self._recording_frame_idx == index:
                 self.kc.stop_recording()
                 self._recording_frame_idx = None
@@ -1390,8 +1424,12 @@ class MainWindow:
             ):
                 self._recording_frame_idx -= 1
 
-            PlaylistStore.delete_playlist(playlist_name, platform=platform)
-            DatabaseManager.delete_playlist_db(playlist_name, platform)
+            PlaylistStore.delete_playlist(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            )
+            DatabaseManager.delete_playlist_db(
+                playlist_name, platform, playlist_id
+            )
 
             frame.grid_forget()
             frame.destroy()
@@ -1520,10 +1558,16 @@ class MainWindow:
         """
         name = displaced.get("playlist_name")
         platform = displaced.get("platform", PLATFORM_YOUTUBE_MUSIC)
+        displaced_id = displaced.get("playlist_id", "") or ""
         if not name:
             return
         for i, label in enumerate(self.playlist_name_labels):
-            if label.cget("text") == name and self.frame_platforms[i] == platform:
+            if (
+                label.cget("text") == name
+                and self.frame_platforms[i] == platform
+                and (getattr(self.frames[i], "playlist_id", "") or "")
+                == displaced_id
+            ):
                 entry = self.active_log_labels.get(i, {}).get("keybind_entry")
                 if entry is not None:
                     try:
@@ -1533,7 +1577,7 @@ class MainWindow:
                     except tk.TclError:
                         pass
                 break
-        PlaylistStore.update_keybind(name, platform, "")
+        PlaylistStore.update_keybind(name, platform, "", playlist_id=displaced_id)
 
     def _start_recording(self, frame_idx: int) -> str:
         if frame_idx >= len(self.playlist_name_labels):
@@ -1589,8 +1633,13 @@ class MainWindow:
             # a blank entry is confusing.
             playlist_name = self.playlist_name_labels[cur_idx].cget("text")
             platform = self.frame_platforms[cur_idx]
-            PlaylistStore.update_keybind(playlist_name, platform, "")
-            self.kc.unregister_hotkey(playlist_name, platform=platform)
+            playlist_id = getattr(recording_frame, "playlist_id", "") or ""
+            PlaylistStore.update_keybind(
+                playlist_name, platform, "", playlist_id=playlist_id
+            )
+            self.kc.unregister_hotkey(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            )
 
         self.kc.start_recording(on_combo, on_stop=on_stop)
         return "break"
@@ -1609,21 +1658,29 @@ class MainWindow:
 
         playlist_name = self.playlist_name_labels[frame_idx].cget("text")
         platform = self.frame_platforms[frame_idx]
+        playlist_id = getattr(self.frames[frame_idx], "playlist_id", "") or ""
 
         if combo:
             entry.insert(0, combo)
-            PlaylistStore.update_keybind(playlist_name, platform, combo)
+            PlaylistStore.update_keybind(
+                playlist_name, platform, combo, playlist_id=playlist_id
+            )
             displaced = self.kc.register_hotkey(
                 playlist_name,
                 combo,
                 self._make_keybind_callbacks(frame_idx),
                 platform=platform,
+                playlist_id=playlist_id,
             )
             if displaced:
                 self._clear_displaced_keybind(displaced)
         else:
-            PlaylistStore.update_keybind(playlist_name, platform, "")
-            self.kc.unregister_hotkey(playlist_name, platform=platform)
+            PlaylistStore.update_keybind(
+                playlist_name, platform, "", playlist_id=playlist_id
+            )
+            self.kc.unregister_hotkey(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            )
 
     def _on_root_click(self, event) -> None:
         if self._recording_frame_idx is not None:
@@ -1641,7 +1698,10 @@ class MainWindow:
             return
         playlist_name = self.playlist_name_labels[frame_idx].cget("text")
         platform = self.frame_platforms[frame_idx]
-        playlist_data = PlaylistStore.find_playlist(playlist_name, platform)
+        playlist_id = getattr(self.frames[frame_idx], "playlist_id", "") or ""
+        playlist_data = PlaylistStore.find_playlist(
+            playlist_name, platform, playlist_id=playlist_id
+        )
         playlist_id = playlist_data.get("playlist_id", "") if playlist_data else ""
 
         if not playlist_id:

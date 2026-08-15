@@ -68,22 +68,56 @@ class App:
         yt_integration.yt_client = yt_client
         self.integrations.register(yt_integration)
 
-        sp_api = None
+        # Spotify: setup_auth() verifies the stored credentials against
+        # /v1/me - a network round trip with a 15 s timeout.  Running it
+        # synchronously here would delay first paint by up to 15 s when
+        # the network is slow or offline (same rule as refresh_auth:
+        # platform round trips must never block the tkinter main thread).
+        # The verification runs on a worker thread; the finished API is
+        # swapped in via root.after when it lands.  A login or refresh
+        # that completes first wins and is never clobbered.
         spotify_auth = None
         try:
             from integrations.music_spotify.music_spotify import spotify_auth as _sp_auth
             spotify_auth = _sp_auth
-            if _sp_auth.setup_auth():
-                sp_api = _sp_auth.get_api()
-                user_log(logger, "Spotify authenticated")
-            else:
-                logger.warning("Spotify is not configured")
-        except Exception as e:
-            logger.error(f"Spotify auth failed: {e}")
-            messagebox.showwarning("Spotify", f"Spotify authentication failed:\n{e}")
+        except ImportError:
+            user_log(
+                logger,
+                "Spotify integration unavailable (requests missing)",
+            )
         sp_integration = SpotifyIntegration(auth_manager=spotify_auth)
-        sp_integration.spotify_api = sp_api
         self.integrations.register(sp_integration)
+
+        def _spotify_auth_worker() -> None:
+            ok, api = False, None
+            if spotify_auth is not None:
+                try:
+                    if spotify_auth.setup_auth():
+                        api = spotify_auth.get_api()
+                        ok = True
+                except Exception as e:
+                    logger.error(f"Spotify auth failed: {e}")
+                if not ok:
+                    logger.warning("Spotify is not configured")
+
+            def _apply() -> None:
+                if sp_integration.spotify_api is None:
+                    # No login/refresh landed in the meantime - safe to swap.
+                    sp_integration.spotify_api = api
+                if ok:
+                    user_log(logger, "Spotify authenticated")
+
+            try:
+                self.root.after(0, _apply)
+            except Exception:
+                # The window closed while verification was in flight; the
+                # credentials are picked up on the next launch.
+                logger.debug(
+                    "Spotify auth finished after the window closed - it "
+                    "applies on the next launch"
+                )
+
+        threading.Thread(target=_spotify_auth_worker, daemon=True).start()
 
         keybind_controller = KeybindController(yt_client, spotify_integration=sp_integration)
         app_controller = AppController(self)

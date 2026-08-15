@@ -10,6 +10,7 @@ Entry points (all equivalent):
     python -m app -p ref 1,"Chill Mix"
     python -m app --list
     python -m app --login youtube_music
+    python -m app --login spotify            # interactive: prompts for the credentials
     python -m app --login spotify --client-id X --client-secret Y --refresh-token Z
     python -m app --logout youtube_music
     python -m app --logout spotify
@@ -26,6 +27,8 @@ Spotify API, platform-API-first writes. No tkinter is involved.
 
 from __future__ import annotations
 
+import getpass
+import json
 import logging
 import re
 import sys
@@ -407,6 +410,29 @@ def run_add_url(url: str) -> int:
         )
         return 1
 
+    # Non-editable playlists (followed, not collaborative) can be tracked
+    # read-only, but adding songs to them fails on the platform - warn.
+    if platform == PLATFORM_SPOTIFY and isinstance(details, dict):
+        try:
+            user_id = (
+                integration.spotify_api.get_user_id()
+                if integration.spotify_api
+                else None
+            )
+        except Exception:
+            user_id = None
+        if (
+            user_id
+            and details.get("owner_id")
+            and details.get("owner_id") != user_id
+            and not details.get("collaborative")
+        ):
+            print(
+                f"warning: you are not the owner or a collaborator of "
+                f"'{name}' - adding songs to it will fail on Spotify's side",
+                file=sys.stderr,
+            )
+
     thumb_url = ThumbnailService.from_data(details)
     thumb_url = PlaylistSyncService.prefer_library_thumbnail(
         platform, integration, playlist_id, thumb_url
@@ -474,7 +500,11 @@ def run_del(spec: str) -> int:
         PlaylistStore.delete_playlist(
             name, platform=platform, playlist_id=entry.get("playlist_id", "")
         )
-        DatabaseManager.delete_playlist_db(name, platform)
+        DatabaseManager.delete_playlist_db(
+            name,
+            platform,
+            playlist_id=entry.get("playlist_id", ""),
+        )
         print(f'#{number} "{name}" ({platform}): deleted', flush=True)
     return 0
 
@@ -526,6 +556,36 @@ def run_refresh(spec: str) -> int:
     return 0 if failures == 0 else 1
 
 
+def _stored_refresh_token() -> Optional[str]:
+    """Read the refresh token from the saved spotify.json, if any.
+
+    Used by the interactive login as the "default" for the refresh-token
+    prompt - pressing Enter re-logs-in with the stored token (e.g. when
+    only the client credentials changed).
+    """
+    try:
+        from integrations.music_spotify.music_spotify import SPOTIFY_AUTH_FILE
+
+        data = json.loads(SPOTIFY_AUTH_FILE.read_text(encoding="utf-8"))
+        return data.get("refresh_token") or None
+    except (ImportError, OSError, ValueError):
+        return None
+
+
+def _prompt(label: str, hidden: bool = False) -> Optional[str]:
+    """Interactive credential prompt (getpass = hidden, like sudo).
+
+    Returns None when the input stream is closed (EOFError) so non-
+    interactive invocations fail cleanly instead of crashing.
+    """
+    try:
+        if hidden:
+            return getpass.getpass(label).strip()
+        return input(label).strip()
+    except EOFError:
+        return None
+
+
 def run_login(
     platform: str,
     client_id: Optional[str] = None,
@@ -538,12 +598,16 @@ def run_login(
     terminal running ``ytmusicapi browser`` (manual instructions instead
     when no terminal emulator is installed).
 
-    spotify: requires ``--client-id`` / ``--client-secret`` /
-    ``--refresh-token``.  Credentials are verified against ``/v1/me``
-    FIRST and only persisted on success (the verify itself writes the
-    refreshed - possibly rotated - refresh token through the canonical
-    writer).  A typo'd login can no longer overwrite and then destroy
-    previously working auth, matching the GUI's save_and_verify ordering
+    spotify: ``--login spotify`` alone prompts interactively (client id,
+    client secret, refresh token - secret/token hidden like sudo).  The
+    flags remain as overrides for scripting/compositor use.  The refresh
+    token is long-lived (the 3600 s default is the *access* token's
+    lifetime); leaving the prompt empty reuses the stored token.
+    Credentials are verified against ``/v1/me`` FIRST and only persisted
+    on success (the verify itself writes the refreshed - possibly rotated
+    - refresh token through the canonical writer).  A typo'd login can no
+    longer overwrite and then destroy previously working auth, matching
+    the GUI's save_and_verify ordering
     (auth_setup.save_and_verify_spotify_credentials).
     """
     if platform not in KNOWN_PLATFORMS:
@@ -573,20 +637,21 @@ def run_login(
         )
         return 0
 
-    # Spotify
-    missing = [
-        name
-        for name, val in (
-            ("--client-id", client_id),
-            ("--client-secret", client_secret),
-            ("--refresh-token", refresh_token),
-        )
-        if not val
-    ]
-    if missing:
+    # Spotify.  Flags override; missing values are prompted interactively
+    # (hidden input for the secret and the token, like sudo).
+    if not client_id:
+        client_id = _prompt("Client id: ")
+    if not client_secret:
+        client_secret = _prompt("Client secret: ", hidden=True)
+    if not refresh_token:
+        stored = _stored_refresh_token()
+        prompt_value = _prompt("Refresh token (3600s default): ", hidden=True)
+        refresh_token = prompt_value or stored
+    if not client_id or not client_secret or not refresh_token:
         print(
-            f"error: '--login spotify' requires {' '.join(missing)} "
-            "(the refresh token comes from your Spotify app's dashboard)",
+            "error: client id, client secret and a refresh token are all "
+            "required (the refresh token comes from your Spotify app's "
+            "dashboard)",
             file=sys.stderr,
         )
         return 2

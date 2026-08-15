@@ -74,12 +74,15 @@ class KeybindRegistry:
         hotkey: str,
         callbacks: KeybindCallbacks,
         platform: str,
+        playlist_id: str = "",
     ) -> Optional[Dict]:
         """Register a keybind + callbacks for *playlist_name*.
 
-        Playlists are identified by ``(playlist_name, platform)`` so the
-        same name on two platforms keeps two independent bindings.
-        Replaces any previous registration for that combination.
+        Playlists are identified by ``(playlist_name, platform,
+        playlist_id)`` so the same name on two platforms (or two
+        playlists sharing a name on one platform) keeps independent
+        bindings.  Replaces any previous registration for that
+        combination.
 
         Returns the binding info of a *different* playlist that owned
         *hotkey* before this registration (its binding is now displaced),
@@ -87,7 +90,7 @@ class KeybindRegistry:
         displaced playlist's persisted hotkey so the store cannot
         resurrect a binding that no longer fires anything.
         """
-        self.unregister(playlist_name, platform=platform)
+        self.unregister(playlist_name, platform=platform, playlist_id=playlist_id)
         displaced = None
         if hotkey:
             with self._lock:
@@ -95,6 +98,7 @@ class KeybindRegistry:
                 if existing is not None and (
                     existing["playlist_name"] != playlist_name
                     or existing.get("platform", PLATFORM_YOUTUBE_MUSIC) != platform
+                    or (existing.get("playlist_id", "") or "") != (playlist_id or "")
                 ):
                     displaced = existing
                     # Two playlists can't share one hotkey - the new binding
@@ -112,6 +116,7 @@ class KeybindRegistry:
                     "playlist_name": playlist_name,
                     "callbacks": callbacks,
                     "platform": platform,
+                    "playlist_id": playlist_id,
                     "_parsed": parse_hotkey(hotkey),
                 }
             logger.info(
@@ -120,11 +125,14 @@ class KeybindRegistry:
             )
         return displaced
 
-    def unregister(self, playlist_name: str, platform: str = ""):
+    def unregister(self, playlist_name: str, platform: str = "", playlist_id: str = ""):
         """Remove keybinds registered for *playlist_name*.
 
         With *platform* given, only that platform's binding is removed,
         leaving a same-named playlist on the other platform intact.
+        With *playlist_id* given, only that playlist's binding is
+        removed - two playlists sharing a name on one platform stay
+        independent.
         """
         with self._lock:
             to_remove = [
@@ -135,15 +143,20 @@ class KeybindRegistry:
                     not platform
                     or v.get("platform", PLATFORM_YOUTUBE_MUSIC) == platform
                 )
+                and (not playlist_id or (v.get("playlist_id", "") or "") == playlist_id)
             ]
             for k in to_remove:
                 del self._keybind_map[k]
                 logger.info("Unregistered keybind '%s' for playlist '%s'", k, playlist_name)
 
-    def find(self, playlist_name: str, platform: str = "") -> Optional[Dict]:
+    def find(
+        self, playlist_name: str, platform: str = "", playlist_id: str = ""
+    ) -> Optional[Dict]:
         """Return the current binding info for *playlist_name*.
 
-        With *platform* given, only that platform's binding matches.
+        With *platform* given, only that platform's binding matches;
+        with *playlist_id* given, only that playlist's binding matches
+        (two playlists sharing a name on one platform stay distinct).
         Returns None when no binding is registered for the combination.
 
         Used to validate a queued keybind event at execution time: the
@@ -155,6 +168,9 @@ class KeybindRegistry:
                 if info["playlist_name"] == playlist_name and (
                     not platform
                     or info.get("platform", PLATFORM_YOUTUBE_MUSIC) == platform
+                ) and (
+                    not playlist_id
+                    or (info.get("playlist_id", "") or "") == playlist_id
                 ):
                     return info
         return None
