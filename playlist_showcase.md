@@ -80,15 +80,18 @@ verification checklist assert the DESC order; the implementation must never
 ### D2 — Card stays a fixed-size box; height becomes a function of N and log visibility
 The card uses `grid_propagate(False)` (screen.md §5). Tk still gives each grid
 row its *requested* height first and only distributes surplus by weight, so the
-explicit card height must be the sum of the rows:
+explicit card height must be the sum of the rows. **The showcase row's height
+is MEASURED at runtime** (`showcase_frame.winfo_reqheight()`, after an
+`update_idletasks()`) instead of a per-row constant: font metrics, UI scale
+and any frame padding/border vary (a hardcoded 48 px under-reserves the real
+~54 px block and starves the weighted header row — finding 13):
 
 ```
 CARD_H_BASE     = 96   (header ≈ 66 px cover + log row ≈ 23 px, existing)
 LOG_ROW_H_BASE  = 23   (font-12 linespace, measured in screen.md §2.1)
-SONG_UNIT_H_BASE= 46   (two font-12 lines for name+artists; 40 px thumb fits)
 
 card_height = px(CARD_H_BASE)
-            + shown_rows * px(SONG_UNIT_H_BASE)
+            + showcase_frame.winfo_reqheight()   -- measured, not estimated
             - (px(LOG_ROW_H_BASE) if log hidden else 0)
 ```
 
@@ -96,8 +99,9 @@ card_height = px(CARD_H_BASE)
   empty space for songs that aren't imported yet; it grows when a song is
   added and shrinks when one is removed. (Alternative — always reserve N rows —
   rejected: blank space on first load.)
-- `main_frame.config(height=...)` then `_auto_resize()`; `resize_window()`
+- `main_frame.config(height=...)` then re-fit the window; `resize_window()`
   already anchors the current center (memory #76) so growth stays balanced.
+  See finding 11 for the grow-only fit when `auto_resize` is off.
 - The showcase lives in a third row of `main_frame`
   (`grid_rowconfigure(2, weight=0)`; keep rows 0/1 at weight 1). Hiding the
   log uses `grid_remove()` (preserves the grid options for re-show) and
@@ -366,9 +370,13 @@ theme keys; `count=0` renders exactly today's card.
 
 Headless verification passed: `python -m compileall -q app/`; `python -m app
 --list`; `get_latest_songs` exercised against a real playlist DB (newest
-first: ids 9, 8, 7; empty DB → `[]`; `limit=0` → `[]`). GUI behavior
-(visuals, live settings, remove round trip) still needs a run on the user's
-machine — no display available in the implementation environment.
+first: ids 9, 8, 7; empty DB → `[]`; `limit=0` → `[]`). The display was
+available from 2026-08-15, so the REAL MainWindow was also exercised live:
+setup with the user's config, card heights (563/617/401/617 at count=10),
+keybind fully visible, log toggle grid_remove/restore with ±23 px height,
+and grow-only window fitting (660x1289 requested, KWin-capped to 1000).
+Still pending on the user's machine: remove round trip (platform
+confirmation + row removal) and visual acceptance of the final layout.
 
 ### Findings that deviated from this plan
 
@@ -410,11 +418,81 @@ machine — no display available in the implementation environment.
 10. **`fetch_image(thumb_url, size=(px(40), px(40)))`** — cover-fits the
     square thumb slot (memory #74 contract), so 16:9 video thumbnails are
     center-cropped, not stretched.
+11. **Window growth (fix for the 2026-08-15 user report).** With
+    `auto_resize` OFF (the default — and the user's setting), the window
+    never re-fitted after showcase height changes, so cards grew past the
+    650x460 window and content was clipped ("with 5 songs I only see the
+    playlist name, close button and half the playlist img"). Fix:
+    `_update_card_height` now re-fits the window on every showcase height
+    change — full `_auto_resize()` when the setting is on, otherwise
+    `resize_window(root, grow_only=True)` (new optional param, default
+    False so existing callers are untouched). Grow-only never shrinks a
+    manually sized window; unmapped/startup windows compare against the
+    parsed geometry string via `_geometry_size()` (winfo_* reports 1x1
+    pre-map). Guarded by `_showcase_count > 0` — `count=0` stays
+    pixel-identical and never calls resize.
+12. **Screen-height ceiling (known limit, documented).** At 175% UI scale
+    (this user) one card with count=N is `px(96 + N*48)` physical px, so
+    two card rows with count=10 need ~2100 px — taller than the screen;
+    the window then exceeds the display and the bottom cards are
+    unreachable (the root grid has no scrolling). Practical ceiling on
+    this machine is ~count=4 with 4 playlists (fits in 1440 px). If more
+    songs per card are wanted, the next step is a per-card scrollable
+    showcase region instead of growing the card.
+13. **`SONG_UNIT_H_BASE` is gone — the showcase height is now MEASURED,
+    not computed** (second user report, 2026-08-15: "with 5 songs I only
+    see the playlist name, close button and 1/10 of the playlist img").
+    The real block height on this machine is ~54 px per song (DejaVu Sans
+    12 double-row ≈ 52 + thumb padding), not 48 — the constant
+    under-reserved the card, and Tk starves the WEIGHTED header row when
+    the grid is short: header req 66 vs allocated 43 → the keybind row
+    (at y=33, h=33) had only 10 px inside the header and overflowed it,
+    and the showcase (drawn later, weight 0, keeps its requested 270)
+    covered the overflow. Slack = 7 − 6·N: N=1-2 "slightly overflows",
+    N=5 → −23 px, exactly the reported rendering. `_update_card_height`
+    now reads `showcase_frame.winfo_reqheight()` (self-correcting across
+    fonts/scales/borders — also absorbs the user's
+    `padx=2, borderwidth=2, relief="solid"` frame) and sets
+    `card = px(CARD_H_BASE) + showcase_h − px(LOG_ROW_H_BASE) when log
+    hidden`. Verified on the real MainWindow with the display available:
+    header always 69 px, keybind fully visible, log row gets its 23 px
+    when shown, N=0 stays base.
+14. **`winfo_reqheight()` on a freshly built showcase returns stale 1x1
+    until the layout idle callbacks run once** — `_update_card_height`
+    calls `self.root.update_idletasks()` (guarded) before measuring.
+15. **Live log toggle verified working** on the real MainWindow (display
+    available 2026-08-15): `set_showcase_log` → `_apply_log_visibility`
+    grid/grid_remove + height ±23 px, card grows/shrinks accordingly.
+    The user's "toggle does nothing" report predates fix 13 — with the
+    starved layout the log row was squeezed to ~11 px and looked the same
+    in both states.
+16. **KWin caps the window at screen height** (observed in the live test:
+    requested 660x1289, actual 660x1000 on a 1080p display) — the
+    grow-only fit works; the ceiling is the WM, reinforcing finding 12.
+17. **Window shrink on showcase decrease** (user request, 2026-08-15):
+    the fit became a two-mode `_fit_window(allow_shrink)`.  Explicit
+    showcase changes - `set_showcase_count` / `set_showcase_log` - call
+    `_fit_window(allow_shrink=True)` (full `resize_window`, grow AND
+    shrink, regardless of the `auto_resize` setting), so decreasing the
+    count or hiding the log row shrinks the window back to the cards.
+    Passive changes (song add/remove, reload) keep grow-only
+    (`allow_shrink=False`) so a manually sized window is never shrunk
+    behind the user's back.  Verified live on the real MainWindow:
+    count 3→1→0 shrank the window 660x554 → 660x338 → 660x222, and the
+    log toggle re-fits ±px(23) per row both ways.  Startup with a
+    persisted count>0 grows the window during setup (660x770 for
+    count=5, log hidden); count=0 leaves it pixel-identical to the
+    legacy 650x460 (verified: the fit is skipped entirely).
 
 ### Remaining GUI verification (user machine)
 
-- Card height at count=3 ≈ `px(96 + 3*48)`; log hidden → `px(96 - 23 +
-  rows*48)`; full 40 px thumbnail + both text lines visible, no clipping.
+- Card height at count=3 ≈ `px(96 + 3*54)`; log hidden → `px(96 - 23 +
+  rows*54)`; full 40 px thumbnail + both text lines visible, no clipping,
+  keybind row fully visible (header never starved — heights are measured).
+- **Window growth/shrink (2026-08-15):** with `auto_resize` OFF, raising
+  the count in Settings must grow the window until all cards fit; lowering
+  it must shrink the window back (finding 17); restarting with count=2 must open the
+  window sized to fit. With `auto_resize` ON it grows and shrinks as before.
 - Newest-first rows; live count/log toggles; remove round trip (platform
   confirmation + row removal + card shrink); close-frame / quit without
   PhotoImage leaks; 175 % scale sanity.

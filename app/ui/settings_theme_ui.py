@@ -134,6 +134,8 @@ def show_theme_dialog(parent, on_theme_change=None):
             text="Change",
             font=ui_font(10),
             command=lambda: _choose_color(section, option, default, btn),
+            highlightthickness=0,
+            relief="raised",
             bd=0,
         )
         _style_button(btn, value)
@@ -235,6 +237,8 @@ def show_theme_dialog(parent, on_theme_change=None):
         background="#EDEDED",
         activebackground="#D2D2D2",
         foreground="#1A1A1A",
+        highlightthickness=0,
+        relief="raised",
         bd=0,
     ).pack(side="left", expand=True, fill="x", padx=2)
 
@@ -246,6 +250,8 @@ def show_theme_dialog(parent, on_theme_change=None):
         background=button_bg,
         activebackground=button_abg,
         foreground=button_fg,
+        highlightthickness=0,
+        relief="raised",
         bd=0,
     ).pack(side="left", expand=True, fill="x", padx=2)
 

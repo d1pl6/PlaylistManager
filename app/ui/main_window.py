@@ -48,12 +48,10 @@ loading_img_path = assets_dir / "hourglass.png"
 # track titles clip inside instead of ballooning the window at high scale.
 CARD_W_BASE = 320
 CARD_H_BASE = 96
-# Showcase geometry: each song block is two font-12 lines (name + artists,
-# ~46 px) plus the thumbnail's 2 px top padding = 48 px; a 40 px thumbnail
-# fits in that block.  The log row is one font-12 line (~23 px), so a card
-# with the log hidden shrinks by that much.  (46 would clip the last row's
-# bottom edge once the card grows beyond a couple of songs.)
-SONG_UNIT_H_BASE = 48
+# Showcase geometry: the log row is one font-12 line (~23 px), so a card
+# with the log hidden shrinks by that much.  The showcase's own height is
+# measured at runtime (winfo_reqheight) - per-row constants underestimate
+# real font metrics and starve the header row, see _update_card_height.
 LOG_ROW_H_BASE = 23
 
 
@@ -233,6 +231,8 @@ class MainWindow:
             cursor="hand2",
             background=btn_header_bg,
             activebackground=btn_header_abg,
+            highlightthickness=0,
+            relief="raised",
             command=lambda: show_login_dialog(
                 self.root, on_success=self.ac.refresh_auth
             ),
@@ -246,6 +246,8 @@ class MainWindow:
             cursor="hand2",
             background=btn_header_bg,
             activebackground=btn_header_abg,
+            highlightthickness=0,
+            relief="raised",
             command=self._open_playlist_dialog,
         )
 
@@ -257,6 +259,8 @@ class MainWindow:
             cursor="hand2",
             background=btn_header_bg,
             activebackground=btn_header_abg,
+            highlightthickness=0,
+            relief="raised",
             command=lambda: show_settings_dialog(
                 self.root,
                 keybind_controller=self.kc,
@@ -329,6 +333,8 @@ class MainWindow:
                 foreground=btn_fg,
                 activebackground=btn_a_bg,
                 activeforeground=btn_a_fg,
+                highlightthickness=0,
+                relief="raised",
                 font=ui_font(11),
                 width=30,
                 command=lambda i=integration: (win.destroy(), callback(i)),
@@ -340,6 +346,8 @@ class MainWindow:
             background=cancel_bg,
             foreground=cancel_fg,
             activebackground=cancel_a_bg,
+            highlightthickness=0,
+            relief="raised",
             font=ui_font(10),
             command=_do_cancel,
         ).pack(pady=10)
@@ -592,6 +600,8 @@ class MainWindow:
                 foreground=button_playlist_fg,
                 activebackground=button_playlist_a_bg,
                 activeforeground=button_playlist_a_fg,
+                highlightthickness=0,
+                relief="raised",
                 command=lambda f=main_frame, sid=song.get("id"), tid=song.get("track_id"): (
                     self._on_remove_song(f, sid, tid)
                 ),
@@ -656,7 +666,7 @@ class MainWindow:
         buttons = self._frame_buttons(main_frame)
         for btn in buttons:
             try:
-                btn.config(state="disabled")
+                btn.config(state="disabled", cursor="arrow")
             except tk.TclError:
                 pass
 
@@ -736,20 +746,39 @@ class MainWindow:
     def _update_card_height(self, frame_idx: int) -> None:
         """Recompute a card's fixed height from its current showcase state.
 
-        ``card_height = px(CARD_H_BASE) + rows * px(SONG_UNIT_H_BASE)``,
-        minus one log row when the log row is hidden.  A card with no
-        rows reserves no space - it grows as songs are added and shrinks
-        when they are removed.
+        The card's grid requests: the header (~px(66) - it contains BOTH
+        the name row and the keybind row), the log row (px(23), when
+        visible) and the showcase frame's *actual* requested height.
+        The showcase height is measured via winfo_reqheight() instead of
+        a hardcoded per-row constant: font metrics and UI scale vary, and
+        an underestimate starves the weighted header row (Tk shrinks
+        weighted rows first), squishing the keybind row and letting the
+        showcase overlap it.  CARD_H_BASE bakes in header + log + ~px(7)
+        slack; hiding the log row removes exactly its height.
         """
         try:
             main_frame = self.frames[frame_idx]
         except IndexError:
             return
-        rows = getattr(main_frame, "showcase_rows", 0)
-        height = px(CARD_H_BASE) + rows * px(SONG_UNIT_H_BASE)
+        try:
+            # Freshly-created showcase widgets report a stale 1x1 request
+            # until the layout idle callbacks have run once.
+            self.root.update_idletasks()
+        except Exception:
+            logger.debug("update_idletasks failed (teardown?)", exc_info=True)
+        showcase = getattr(main_frame, "showcase_frame", None)
+        showcase_h = showcase.winfo_reqheight() if showcase is not None else 0
+        height = px(CARD_H_BASE) + showcase_h
         if not self._show_log:
             height -= px(LOG_ROW_H_BASE)
         main_frame.config(height=max(px(CARD_H_BASE) - px(LOG_ROW_H_BASE), height))
+
+        # The card's height changed - keep the window able to show it.
+        # Passive changes (add/remove/reload) are grow-only for manually
+        # sized windows; the explicit showcase settings (count, log
+        # visibility) fit both ways via _fit_window(allow_shrink=True).
+        if self._showcase_count > 0:
+            self._fit_window(allow_shrink=False)
 
     def _apply_log_visibility(self, frame_idx: int) -> None:
         """Show or hide the artist/name/status log row of a card."""
@@ -1180,6 +1209,8 @@ class MainWindow:
                 foreground=button_playlist_fg,
                 activebackground=button_playlist_a_bg,
                 activeforeground=button_playlist_a_fg,
+                highlightthickness=0,
+                relief="raised",
                 command=lambda f=main_frame: self.close_main_frame(f),
             )
 
@@ -1209,6 +1240,8 @@ class MainWindow:
                 foreground=button_playlist_fg,
                 activebackground=button_playlist_a_bg,
                 activeforeground=button_playlist_a_fg,
+                highlightthickness=0,
+                relief="raised",
                 command=lambda f=main_frame: self._on_reload_requested(
                     self.frames.index(f)
                 ),
@@ -1399,11 +1432,34 @@ class MainWindow:
         """Read the show-log-row setting once."""
         return get_setting("showcase_log", True)
 
+    def _fit_window(self, allow_shrink: bool) -> None:
+        """Re-fit the window to the cards.
+
+        allow_shrink=True also shrinks a window that only grew for taller
+        showcase content — used for explicit showcase changes (count,
+        log visibility), where the window should track the cards exactly.
+        With allow_shrink=False (passive changes like song add/remove) a
+        manually sized window is only ever enlarged (grow-only), unless
+        the auto-resize setting is on, which always fits both ways.
+        """
+        if self._auto_resize_enabled or allow_shrink:
+            try:
+                resize_window(self.root)
+            except Exception as e:
+                logger.debug("Window fit failed: %s", e)
+        else:
+            try:
+                resize_window(self.root, grow_only=True)
+            except Exception as e:
+                logger.debug("Showcase grow-fit failed: %s", e)
+
     def set_showcase_count(self, count: int) -> None:
         """Live-apply the showcase count (called from the Settings dialog).
 
         Rebuilds every card's showcase section in place - no window
         rebuild.  Falls back to a full rebuild when no frames exist yet.
+        The window always re-fits afterwards, growing or shrinking (an
+        explicit count decrease shrinks the window back to the cards).
         """
         try:
             self._showcase_count = min(20, max(0, int(count)))
@@ -1416,14 +1472,18 @@ class MainWindow:
             except (IndexError, tk.TclError):
                 continue
             self._refresh_showcase(frame_idx, playlist_name, platform)
-        self._auto_resize()
+        self._fit_window(allow_shrink=True)
 
     def set_showcase_log(self, show: bool) -> None:
-        """Live-apply the show-log-row setting (called from Settings)."""
+        """Live-apply the show-log-row setting (called from Settings).
+
+        The window re-fits both ways: hiding the log row shrinks the
+        cards, and the window follows.
+        """
         self._show_log = bool(show)
         for frame_idx in list(self.active_log_labels):
             self._apply_log_visibility(frame_idx)
-        self._auto_resize()
+        self._fit_window(allow_shrink=True)
 
     def _auto_resize(self) -> None:
         """Resize the window to fit playlist frames."""

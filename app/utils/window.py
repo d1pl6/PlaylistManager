@@ -18,7 +18,24 @@ def center_window(win: tk.Misc) -> None:
     win.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
 
 
-def resize_window(win: tk.Misc) -> None:
+def _geometry_size(win: tk.Misc) -> tuple:
+    """Return (width, height) from the window's geometry string.
+
+    Works for unmapped windows, where ``winfo_width()``/``winfo_height()``
+    are not meaningful (they report 1x1 before the first map).
+    """
+    try:
+        geo = win.geometry()  # "WxH+X+Y"
+        if geo and "x" in geo:
+            size = geo.split("+")[0]
+            w, h = size.split("x", 1)
+            return int(w), int(h)
+    except Exception:
+        pass
+    return win.winfo_width(), win.winfo_height()
+
+
+def resize_window(win: tk.Misc, grow_only: bool = False) -> None:
     """Auto-resize a main window to fit playlist frames laid out on a grid.
 
     The function inspects gridded children of ``win`` and calculates the
@@ -35,6 +52,11 @@ def resize_window(win: tk.Misc) -> None:
     during startup, before ``mainloop()`` maps the root) keep the old
     position-preserving behaviour, since ``winfo_x()`` is meaningless
     before mapping.
+
+    With ``grow_only`` the window is only ever enlarged to fit its
+    content: a window the user sized larger (auto-resize off) is never
+    shrunk.  Used for showcase-driven growth, where cards grow taller
+    than the fixed window size.
     """
     win.update_idletasks()
 
@@ -79,6 +101,14 @@ def resize_window(win: tk.Misc) -> None:
         total_h = max(total_h, min_h)
     except Exception:
         pass
+
+    if grow_only:
+        if win.winfo_ismapped():
+            cur_w, cur_h = win.winfo_width(), win.winfo_height()
+        else:
+            cur_w, cur_h = _geometry_size(win)
+        total_w = max(total_w, cur_w)
+        total_h = max(total_h, cur_h)
 
     if win.winfo_ismapped():
         # Anchor the current center so add/remove of frames doesn't drift

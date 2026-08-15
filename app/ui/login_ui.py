@@ -426,10 +426,13 @@ def _on_spotify(parent, on_success):
     btn_delete = tk.Button(
         btn_frame,
         text="Delete",
+        cursor="hand2",
         background=button_close_bg,
         foreground=button_close_fg,
         activebackground=button_close_a_bg,
         font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
         command=delete_credentials,
     )
     btn_delete.pack(side="left")
@@ -437,10 +440,13 @@ def _on_spotify(parent, on_success):
     btn_test = tk.Button(
         btn_frame,
         text="Test",
+        cursor="hand2",
         background=btn_test_bg,
         foreground=btn_test_fg,
         activebackground=btn_test_abg,
         font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
         command=test_credentials,
     )
     btn_test.pack(side="left", padx=5)
@@ -448,10 +454,13 @@ def _on_spotify(parent, on_success):
     btn_save = tk.Button(
         btn_frame,
         text="Save",
+        cursor="hand2",
         background=button_save_bg,
         foreground=button_save_fg,
         activebackground=button_save_a_bg,
         font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
         command=save_credentials,
     )
     btn_save.pack(side="right")
@@ -462,8 +471,9 @@ def _on_spotify(parent, on_success):
         refresh-token rotation makes a second concurrent /v1/me fail, and a
         delete mid-verify races the file write)."""
         state = "disabled" if busy else "normal"
-        btn_test.config(state=state)
-        btn_save.config(state=state)
-        btn_delete.config(state=state)
+        cursor = "arrow" if busy else "hand2"
+        btn_test.config(state=state, cursor=cursor)
+        btn_save.config(state=state, cursor=cursor)
+        btn_delete.config(state=state, cursor=cursor)
 
     center_window(win)

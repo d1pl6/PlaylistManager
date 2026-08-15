@@ -100,6 +100,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
     tk.Checkbutton(
         win,
         text="Check for updates on startup?",
+        cursor="hand2",
         background=theme_check_bg,
         foreground=theme_check_fg,
         selectcolor=theme_check_select,
@@ -113,6 +114,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
     tk.Checkbutton(
         win,
         text="Center windows after launch?",
+        cursor="hand2",
         background=theme_check_bg,
         foreground=theme_check_fg,
         selectcolor=theme_check_select,
@@ -134,6 +136,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
     tk.Checkbutton(
         win,
         text="Auto-resize main window?",
+        cursor="hand2",
         background=theme_check_bg,
         foreground=theme_check_fg,
         selectcolor=theme_check_select,
@@ -152,6 +155,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
     tk.Checkbutton(
         win,
         text="Use global key listener?",
+        cursor="hand2",
         background=theme_check_bg,
         foreground=theme_check_fg,
         selectcolor=theme_check_select,
@@ -170,6 +174,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
     tray_ck = tk.Checkbutton(
         win,
         text="Hide in tray on minimize?",
+        cursor="hand2",
         background=theme_check_bg,
         foreground=theme_check_fg,
         selectcolor=theme_check_select,
@@ -182,7 +187,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
     tray_ck.pack(fill="both")
     # Disable when no tray backend is available.
     if not getattr(tray_available, "available", False):
-        tray_ck.configure(state="disabled")
+        tray_ck.configure(state="disabled", cursor="arrow")
 
     # --- Showcase (last N added songs per card) -------------------------
     def _on_showcase_count_change(value: str) -> None:
@@ -215,7 +220,8 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
     showcase_combo = ttk.Combobox(
         showcase_row,
         textvariable=showcase_count_var,
-        values=("0", "1", "2", "3", "5", "10"),
+        cursor="hand2",
+        values=("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"),
         state="readonly",
         width=4,
         font=ui_font(10),
@@ -237,6 +243,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
     tk.Checkbutton(
         win,
         text="Show log row (artist / song / status)",
+        cursor="hand2",
         background=theme_check_bg,
         foreground=theme_check_fg,
         selectcolor=theme_check_select,
@@ -271,6 +278,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
     scale_combo = ttk.Combobox(
         scale_row,
         textvariable=scale_var,
+        cursor="hand2",
         values=UI_SCALE_PRESETS,
         state="readonly",
         width=6,
@@ -292,12 +300,15 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
     tk.Button(
         win,
         text="Theme Settings",
-        command=lambda: show_theme_dialog(win, on_theme_change=on_theme_change),
+        cursor="hand2",
         background=C["button_main_bg"],
         activebackground=C["button_main_a_bg"],
         foreground=C["button_main_fg"],
         font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
         bd=0,
+        command=lambda: show_theme_dialog(win, on_theme_change=on_theme_change),
     ).pack(fill="both", padx=4, pady=4)
 
     if center_var_value == 1:

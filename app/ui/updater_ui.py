@@ -67,7 +67,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
             width=60,
         )
         text_widget.insert("1.0", body.strip())
-        text_widget.configure(state="disabled")
+        text_widget.configure(state="disabled", cursor="hand2")
         text_widget.grid(row=0, column=0, sticky="nsew")
 
         scrollbar = tk.Scrollbar(text_frame, command=text_widget.yview)
@@ -96,9 +96,10 @@ def show_update_dialog(parent, latest_version, download_url, body):
         activebackground=theme_download_abg,
         foreground=theme_download_fg,
         activeforeground=theme_download_fg,
-        relief="flat",
         cursor="hand2",
         padx=16,
+        highlightthickness=0,
+        relief="raised",
         command=_download,
     ).pack(side="right", padx=(8, 0))
 
@@ -110,9 +111,10 @@ def show_update_dialog(parent, latest_version, download_url, body):
         activebackground=theme_close_abg,
         foreground=theme_close_fg,
         activeforeground=theme_close_fg,
-        relief="flat",
         cursor="hand2",
         padx=16,
+        highlightthickness=0,
+        relief="raised",
         command=win.destroy,
     ).pack(side="right")
 

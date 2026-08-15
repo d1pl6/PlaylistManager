@@ -81,6 +81,8 @@ class PlaylistDialog:
             foreground=close_fg,
             activebackground=close_a_bg,
             font=ui_font(12),
+            highlightthickness=0,
+            relief="raised",
             command=self.cancel,
         ).pack(side="right", anchor="e")
 
@@ -126,6 +128,8 @@ class PlaylistDialog:
                 # cut the scaled thumbnail).
                 cursor="hand2",
                 width=px(40),
+                highlightthickness=0,
+                relief="raised",
                 command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
             )
             btn.pack(pady=5, padx=5)
@@ -139,6 +143,8 @@ class PlaylistDialog:
                 font=ui_font(11),
                 cursor="hand2",
                 width=40,
+                highlightthickness=0,
+                relief="raised",
                 command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
             ).pack(pady=5)
 
