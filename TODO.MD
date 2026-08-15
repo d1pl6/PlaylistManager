@@ -10,7 +10,7 @@
 
 [x] CLI integration
 
-[ ] Show last N added songs in playlist and option in settings:
+[x] Show last N added songs in playlist and option in settings:
 
 album img	| name		| add to playlist img
 
