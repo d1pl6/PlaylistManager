@@ -17,6 +17,7 @@ DEFAULT_SETTINGS = {
     "ui_scale": {"value": "auto"},
     "showcase": {"count": "0"},          # int, 0 = off, N = show last N added songs
     "showcase_log": {"is_true": "yes"},  # show the log_artist/log_name/log_log row
+    "layout": {"columns": "2"},          # int, playlist card grid columns, clamped 1-4
 }
 
 THEME_PATH = Path(__file__).resolve().parents[2] / "cfg" / "theme.ini"

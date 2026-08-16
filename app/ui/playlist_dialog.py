@@ -27,10 +27,13 @@ _WORKER_STOP = object()
 
 
 class PlaylistDialog:
-    def __init__(self, parent, on_select, on_cancel=None):
+    def __init__(self, parent, on_select, on_cancel=None, columns=2):
         self.parent = parent
         self.on_select = on_select
         self.on_cancel = on_cancel
+        #: Root-grid columns the picker overlay must span (matches the
+        #: card grid; the caller passes the current column count).
+        self.columns = columns
         self.choose_frame = None
         self.canvas = None
         self.img_refs = []
@@ -52,7 +55,9 @@ class PlaylistDialog:
         close_btn = btn_colors(close_bg, close_fg)
 
         self.choose_frame = tk.Frame(self.parent, background=dialog_bg)
-        self.choose_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        self.choose_frame.grid(
+            row=1, column=0, columnspan=self.columns, sticky="nsew"
+        )
         try:
             self.parent.grid_rowconfigure(1, weight=1)
         except tk.TclError:
@@ -214,10 +219,12 @@ class PlaylistDialog:
             pass
         for _ in range(_THUMB_WORKERS):
             self._thumb_tasks.put(_WORKER_STOP)
-        try:
-            self.parent.grid_rowconfigure(1, weight=0)
-        except tk.TclError:
-            pass
+        # NOTE: do NOT touch self.parent.grid_rowconfigure(1, ...) here.
+        # The root's row-1 weight belongs to MainWindow (it re-asserts
+        # weight=1 in _show_main_content); resetting it to 0 left the row
+        # unweighted on re-show, so the grid gave main_area its full
+        # content-height request (canvas grew to fit the content, yview
+        # reported "no overflow", and the scrollbar never came back).
         if self.choose_frame:
             try:
                 self.choose_frame.destroy()

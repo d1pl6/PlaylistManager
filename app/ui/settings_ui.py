@@ -25,7 +25,7 @@ def _toggle_setting(section, var):
         logger.error("Failed to write settings file: %s", e)
 
 
-def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, tray_available=None, on_tray_toggle=None, on_auto_resize_toggle=None, on_showcase_count_change=None, on_showcase_log_change=None):
+def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, tray_available=None, on_tray_toggle=None, on_auto_resize_toggle=None, on_showcase_count_change=None, on_showcase_log_change=None, on_columns_change=None):
     """Show the settings dialog.
 
     Args:
@@ -46,6 +46,9 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
             it the change only takes effect after a restart.
         on_showcase_log_change: optional callback applied live with the
             new show-log-row state (bool) when the checkbox changes.
+        on_columns_change: optional callback applied live with the new
+            card column count (int) when the combobox changes - without
+            it the change only takes effect after a restart.
     """
     theme_win_bg = C["frame_main_bg"]
     theme_header_bg = C["frame_head_bg"]
@@ -80,6 +83,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         tray_var_value = 1 if cfg.getboolean("hide_to_tray", "is_true", fallback=False) else 0
         showcase_count_value = cfg.getint("showcase", "count", fallback=0)
         showcase_log_value = 1 if cfg.getboolean("showcase_log", "is_true", fallback=True) else 0
+        columns_value = cfg.getint("layout", "columns", fallback=2)
     except Exception as e:
         logger.error("Error loading settings, using defaults: %s", e)
         update_var_value = 1
@@ -89,6 +93,7 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
         tray_var_value = 0
         showcase_count_value = 0
         showcase_log_value = 1
+        columns_value = 2
 
     update_var = tk.IntVar(value=update_var_value)
     center_var = tk.IntVar(value=center_var_value)
@@ -273,6 +278,51 @@ def show_settings_dialog(parent, keybind_controller=None, on_theme_change=None, 
     tk.Label(
         scale_row,
         text="(restart to apply; auto follows the display)",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(9),
+    ).pack(side="left", padx=(0, 6))
+
+    # --- Card columns ---------------------------------------------------
+    def _on_columns_change(value: str) -> None:
+        try:
+            set_setting_value("layout", "columns", value)
+        except Exception as e:
+            logger.error("Failed to write columns setting: %s", e)
+        if on_columns_change is not None:
+            try:
+                on_columns_change(int(value))
+            except (ValueError, TypeError):
+                pass
+
+    columns_row = tk.Frame(win, background=theme_check_bg)
+    columns_row.pack(fill="both", padx=4, pady=(2, 0))
+    tk.Label(
+        columns_row,
+        text="Card columns:",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(10),
+    ).pack(side="left", padx=(6, 4), pady=4)
+
+    columns_var = tk.StringVar(value=str(columns_value))
+    columns_combo = ttk.Combobox(
+        columns_row,
+        textvariable=columns_var,
+        cursor="hand2",
+        values=("1", "2", "3", "4"),
+        state="readonly",
+        width=4,
+        font=ui_font(10),
+    )
+    columns_combo.pack(side="left", padx=(0, 6), pady=4)
+    columns_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_columns_change(columns_var.get()),
+    )
+    tk.Label(
+        columns_row,
+        text="(applies immediately)",
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(9),

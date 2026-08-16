@@ -57,6 +57,10 @@ def resize_window(win: tk.Misc, grow_only: bool = False) -> None:
     content: a window the user sized larger (auto-resize off) is never
     shrunk.  Used for showcase-driven growth, where cards grow taller
     than the fixed window size.
+
+    The content-driven height is capped just below the screen height -
+    overflow beyond that is scrolled by the main window's cards canvas
+    (auto-hidden scrollbar) instead of pushing the window off-screen.
     """
     win.update_idletasks()
 
@@ -99,6 +103,15 @@ def resize_window(win: tk.Misc, grow_only: bool = False) -> None:
         min_w, min_h = win.minsize()
         total_w = max(total_w, min_w)
         total_h = max(total_h, min_h)
+    except Exception:
+        pass
+
+    # Cap the content-driven height at the screen (minus a margin for WM
+    # decorations/taskbars): a playlist grid taller than the display is
+    # handled by the main window's scrollable cards area instead of
+    # growing the window off-screen.
+    try:
+        total_h = min(total_h, win.winfo_screenheight() - 100)
     except Exception:
         pass
 

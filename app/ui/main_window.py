@@ -26,7 +26,7 @@ from ui.playlist_dialog import PlaylistDialog
 from ui.settings_ui import show_settings_dialog
 from utils.window import center_window, resize_window
 from utils.config import get_setting, get_setting_value
-from utils.theme import C, load_theme, btn_colors
+from utils.theme import C, load_theme, btn_colors, hover_bg
 from utils.platform import is_wayland_session
 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,7 @@ class MainWindow:
         self._hide_to_tray = self._read_hide_to_tray_setting()
         self._showcase_count = self._read_showcase_count_setting()
         self._show_log = self._read_show_log_setting()
+        self._columns = self._read_columns_setting()
 
         # Set by App._start_tray() once the window exists; None when no
         # tray backend is available.
@@ -125,8 +126,9 @@ class MainWindow:
         self.song_placeholder_img = self._load_song_placeholder()
 
         self.root.grid_rowconfigure(0, weight=0)
-        self.root.grid_columnconfigure(0, weight=1)
-        self.root.grid_columnconfigure(1, weight=1)
+        self.root.grid_rowconfigure(1, weight=1)
+        for c in range(self._columns):
+            self.root.grid_columnconfigure(c, weight=1)
 
         header_bg = C["frame_head_bg"]
         self.header_frame = tk.Frame(self.root, background=header_bg, pady=5, padx=5)
@@ -138,6 +140,46 @@ class MainWindow:
         self.root.bind("<Unmap>", self._on_unmap)
         self.root.bind("<Map>", self._on_map)
         self.root.protocol("WM_DELETE_WINDOW", self.ac.quit_app)
+
+        # ----- cards area (scrollable) ----------------------------------
+        # The cards live inside a canvas so a playlist grid taller than
+        # the screen (resize_window caps the window height there) can be
+        # scrolled.  The scrollbar is auto-shown via yscrollcommand only
+        # while the content overflows the viewport - hidden otherwise.
+        self.main_area = tk.Frame(self.root, background=C["root_bg"])
+        self.main_area.grid(
+            row=1, column=0, columnspan=self._columns, sticky="nsew"
+        )
+        self.cards_canvas = tk.Canvas(
+            self.main_area,
+            background=C["root_bg"],
+            highlightthickness=0,
+            bd=0,
+        )
+        self.cards_canvas.pack(side="left", fill="both", expand=True)
+        self.content_frame = tk.Frame(self.cards_canvas, background=C["root_bg"])
+        self._content_window_id = self.cards_canvas.create_window(
+            (0, 0), window=self.content_frame, anchor="nw"
+        )
+        for c in range(self._columns):
+            self.content_frame.grid_columnconfigure(c, weight=1)
+        self.cards_canvas.bind("<Configure>", self._on_canvas_configure)
+        self.cards_canvas.configure(yscrollcommand=self._on_canvas_yscroll)
+        self._scrollbar_visible = False
+        self.scrollbar = tk.Scrollbar(
+            self.main_area,
+            orient="vertical",
+            command=self.cards_canvas.yview,
+            highlightthickness=0,
+            relief="flat",
+            width=10,
+        )
+        self._style_scrollbar()
+        # Wheel events over the cards scroll the canvas; the handler gates
+        # on the pointer being inside the cards area, so dialogs and the
+        # header are unaffected.
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.root.bind_all(seq, self._on_mousewheel, add="+")
 
     # ------------------------------------------------------------------
     # Theme helpers
@@ -152,6 +194,11 @@ class MainWindow:
         """
         load_theme()
         self.root.configure(background=C["root_bg"])
+
+        self.main_area.configure(background=C["root_bg"])
+        self.cards_canvas.configure(background=C["root_bg"])
+        self.content_frame.configure(background=C["root_bg"])
+        self._style_scrollbar()
 
         header_bg = C["frame_head_bg"]
         self.header_frame.configure(background=header_bg)
@@ -264,10 +311,13 @@ class MainWindow:
                 on_auto_resize_toggle=self.set_auto_resize,
                 on_showcase_count_change=self.set_showcase_count,
                 on_showcase_log_change=self.set_showcase_log,
+                on_columns_change=self.set_columns,
             ),
         )
 
-        self.header_frame.grid(row=0, column=0, columnspan=2, sticky="nsew")
+        # Span the whole card grid so the header background bar matches the
+        # window width at any column count.
+        self.header_frame.grid(row=0, column=0, columnspan=self._columns, sticky="nsew")
         self.header_frame.grid_columnconfigure(0, weight=1)
         self.header_frame.grid_columnconfigure(1, weight=0)
         self.header_frame.grid_columnconfigure(2, weight=1)
@@ -275,6 +325,142 @@ class MainWindow:
         self.btn_login.grid(row=0, column=0, sticky="w", padx=4, pady=4)
         self.btn_add_playlist.grid(row=0, column=1, padx=4, pady=4)
         self.btn_open_settings.grid(row=0, column=3, sticky="e", padx=4, pady=4)
+
+    # ------------------------------------------------------------------
+    # Scrollable cards area
+    # ------------------------------------------------------------------
+
+    def _style_scrollbar(self) -> None:
+        """Theme the auto-hiding scrollbar from the current palette.
+
+        The trough is the window background, so only the thumb needs
+        emphasis: it is lightened against the resting button color for
+        contrast and brightens further on hover.
+        """
+        # The trough is the window background, so only the thumb needs
+        # emphasis: it is lightened against the resting button color for
+        # contrast and brightens further on hover.  A plain tk.Scrollbar
+        # (not ttk) so the colors render exactly as configured - the ttk
+        # default theme ignores background/troughcolor on scrollbars.
+        try:
+            thumb = hover_bg(C["button_main_bg"])
+            self.scrollbar.configure(
+                bg=thumb,
+                activebackground=hover_bg(thumb),
+                troughcolor=C["root_bg"],
+            )
+        except tk.TclError:
+            logger.debug("Scrollbar style failed (teardown?)", exc_info=True)
+
+    def _update_scroll_region(self) -> None:
+        """Sync the canvas request size to its content and refresh the region.
+
+        The canvas reports the content frame's *requested* size as its own
+        width/height options: ``resize_window`` sizes the window from root
+        children, and without this the canvas would report its Tk defaults
+        (386x274), wrecking the width/height math.  The content frame
+        propagates (its request is children-derived), so cards grid exactly
+        like they did on the root.
+
+        The scrollbar visibility is deliberately NOT decided here: right
+        after a re-grid the canvas may still be unmapped / not laid out,
+        and a yview query at that moment lies (an unmapped canvas reports
+        (0,1) - "no overflow"), which would hide the bar and never get
+        re-evaluated (the canvas re-maps at the same size, firing neither
+        <Configure> nor yscrollcommand).  Visibility is decided by the
+        deferred, size-based :meth:`_sync_scrollbar_visibility`.
+        """
+        try:
+            self.cards_canvas.update_idletasks()
+            self.cards_canvas.configure(
+                width=self.content_frame.winfo_reqwidth(),
+                height=self.content_frame.winfo_reqheight(),
+            )
+            bbox = self.cards_canvas.bbox("all")
+            if bbox:
+                self.cards_canvas.configure(scrollregion=bbox)
+        except tk.TclError:
+            logger.debug("Scroll region update failed (teardown?)", exc_info=True)
+        self._schedule_scrollbar_sync()
+
+    def _schedule_scrollbar_sync(self) -> None:
+        """Defer the visibility decision until the layout settles."""
+        try:
+            self.root.after(0, self._sync_scrollbar_visibility)
+        except tk.TclError:
+            pass
+
+    def _sync_scrollbar_visibility(self) -> None:
+        """Show/hide the scrollbar from real sizes once the canvas is laid
+        out and mapped - never from yview fractions read mid-layout."""
+        try:
+            if not self.cards_canvas.winfo_ismapped():
+                return
+            content = self.content_frame.winfo_reqheight()
+            viewport = self.cards_canvas.winfo_height()
+            self._set_scrollbar_visible(content > viewport)
+        except tk.TclError:
+            logger.debug("Scrollbar visibility sync failed (teardown?)", exc_info=True)
+
+    def _on_canvas_configure(self, event) -> None:
+        """Stretch the content frame to the visible canvas width."""
+        try:
+            self.cards_canvas.itemconfigure(self._content_window_id, width=event.width)
+        except tk.TclError:
+            return
+        self._update_scroll_region()
+
+    def _on_canvas_yscroll(self, first, last) -> None:
+        """Keep the scrollbar thumb in sync.
+
+        ``yscrollcommand`` fires whenever the region or view changes; the
+        thumb must be driven here (``scrollbar.set``) - a scrollbar whose
+        position never updates is useless once it becomes visible.  The
+        show/hide decision itself is left to the deferred size-based sync
+        (an unmapped canvas reports (0.0, 1.0), hiding the bar mid-layout).
+        """
+        try:
+            self.scrollbar.set(first, last)
+        except (TypeError, ValueError, tk.TclError):
+            return
+        self._schedule_scrollbar_sync()
+
+    def _set_scrollbar_visible(self, needs: bool) -> None:
+        """Show the scrollbar only while the content overflows."""
+        if needs and not self._scrollbar_visible:
+            self.scrollbar.pack(side="right", fill="y")
+            self._scrollbar_visible = True
+        elif not needs and self._scrollbar_visible:
+            self.scrollbar.pack_forget()
+            self._scrollbar_visible = False
+
+    def _on_mousewheel(self, event) -> str | None:
+        """Scroll the cards canvas when the wheel is over the cards area.
+
+        Bound with ``bind_all`` so it also catches wheels over card
+        children (labels/buttons/entries).  The ancestry gate keeps
+        dialogs (settings, theme picker, platform picker) and the header
+        scrolling nothing.
+        """
+        w = event.widget
+        while w is not None and w is not self.root:
+            if w is self.cards_canvas or w is self.content_frame:
+                break
+            w = w.master
+        else:
+            return None
+        try:
+            if event.num == 4:
+                self.cards_canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                self.cards_canvas.yview_scroll(1, "units")
+            else:
+                delta = getattr(event, "delta", 0)
+                if delta:
+                    self.cards_canvas.yview_scroll(-1 if delta > 0 else 1, "units")
+        except tk.TclError:
+            return None
+        return "break"
 
     # ------------------------------------------------------------------
     # Playlist dialog workflow (delegates to PlaylistController)
@@ -352,6 +538,7 @@ class MainWindow:
                 name, integration.id, pid, thumb_url
             ),
             on_cancel=on_cancel,
+            columns=self._columns,
         )
         dialog.show(playlists)
 
@@ -764,13 +951,12 @@ class MainWindow:
         if not self._show_log:
             height -= px(LOG_ROW_H_BASE)
         main_frame.config(height=max(px(CARD_H_BASE) - px(LOG_ROW_H_BASE), height))
+        self._update_scroll_region()
 
-        # The card's height changed - keep the window able to show it.
-        # Passive changes (add/remove/reload) are grow-only for manually
-        # sized windows; the explicit showcase settings (count, log
-        # visibility) fit both ways via _fit_window(allow_shrink=True).
+        # The card's height changed - keep the window able to show it
+        # (only when auto-resize is on; otherwise the cards area scrolls).
         if self._showcase_count > 0:
-            self._fit_window(allow_shrink=False)
+            self._fit_window()
 
     def _apply_log_visibility(self, frame_idx: int) -> None:
         """Show or hide the artist/name/status log row of a card."""
@@ -1156,8 +1342,8 @@ class MainWindow:
     def create_main_frame(self, num: int) -> None:
         start_index = len(self.frames)
         for i in range(start_index, start_index + num):
-            col = i % 2
-            row = (i // 2) + 1
+            col = i % self._columns
+            row = (i // self._columns) + 1
 
             frame_playlist_bg = C["frame_playlist_bg"]
             label_playlist_bg = C["label_playlist_bg"]
@@ -1179,7 +1365,7 @@ class MainWindow:
             # instead).  Rows/columns use weights so inner frames stretch
             # and the weighted column absorbs/clips overflow text.
             main_frame = tk.Frame(
-                self.root,
+                self.content_frame,
                 width=px(CARD_W_BASE),
                 height=px(CARD_H_BASE),
                 background=frame_playlist_bg,
@@ -1289,7 +1475,9 @@ class MainWindow:
                 anchor="w",
             )
 
-            main_frame.grid(row=row, column=col, sticky="ne" if col == 1 else "nw", pady=(5,0), padx=2.5)
+            main_frame.grid(
+                row=row, column=col, sticky=self._column_sticky(col), pady=(5, 0), padx=2.5
+            )
             self.frames.append(main_frame)
             self.frame_positions.append((row, col))
             self.playlist_name_labels.append(playlist_name)
@@ -1336,15 +1524,77 @@ class MainWindow:
                 main_log_frame.grid_remove()
             self._update_card_height(i)
 
+        self._update_scroll_region()
         self._auto_resize()
 
     def _hide_main_content(self) -> None:
+        # The picker overlay grids into the root's row 1, which the cards
+        # area occupies - forget the whole area (canvas + scrollbar) so
+        # the overlay has the row to itself, then forget the cards.
+        self.main_area.grid_forget()
         for frame in self.frames:
             frame.grid_forget()
 
+    def _column_sticky(self, col: int) -> str:
+        """Top-anchor a card inside its grid column.
+
+        First column anchors north-west, last column north-east (the
+        original two-column look); middle columns of a wider grid anchor
+        plain north.
+        """
+        if col == 0:
+            return "nw"
+        if col == self._columns - 1:
+            return "ne"
+        return "n"
+
+    def _layout_frames(self) -> None:
+        """Recompute every card's grid position and re-grid it.
+
+        Single source of truth for the row/col math; called after a frame
+        deletion (``_reorder_frames``) and after a column-count change
+        (``set_columns``).
+        """
+        self.frame_positions.clear()
+        for i, frame in enumerate(self.frames):
+            col = i % self._columns
+            row = (i // self._columns) + 1
+            self.frame_positions.append((row, col))
+            frame.grid(
+                row=row,
+                column=col,
+                sticky=self._column_sticky(col),
+                pady=(5, 0),
+                padx=2.5,
+            )
+            # Tk gotcha: grid_forget() on a widget destroys its grid
+            # state, grid_propagate(False) included - a forgotten card
+            # re-grids with propagate defaulting back to True, letting the
+            # log row's request widen the card and, on the next resize,
+            # the whole window.  Re-assert it on every re-grid.
+            frame.grid_propagate(False)
+        self._update_scroll_region()
+
     def _show_main_content(self) -> None:
+        # Row 1's weight is OURS: it lets the grid shrink the cards area
+        # to the window instead of overflowing it with the content's
+        # request (which would inflate the canvas to the content height
+        # and fool the scrollbar into "no overflow").  Re-assert it in
+        # case a dialog touched the root grid while we were hidden.
+        self.root.grid_rowconfigure(1, weight=1)
+        self.main_area.grid(
+            row=1, column=0, columnspan=self._columns, sticky="nsew"
+        )
         for frame, (row, col) in zip(self.frames, self.frame_positions):
-            frame.grid(row=row, column=col, sticky="ne" if col == 1 else "nw", pady=(5,0), padx=2.5)
+            frame.grid(
+                row=row,
+                column=col,
+                sticky=self._column_sticky(col),
+                pady=(5, 0),
+                padx=2.5,
+            )
+            frame.grid_propagate(False)
+        self._update_scroll_region()
 
     def close_main_frame(self, frame) -> None:
         try:
@@ -1438,26 +1688,29 @@ class MainWindow:
         """Read the show-log-row setting once."""
         return get_setting("showcase_log", True)
 
-    def _fit_window(self, allow_shrink: bool) -> None:
-        """Re-fit the window to the cards.
+    @staticmethod
+    def _read_columns_setting() -> int:
+        """Read the card-column count once; clamp to [1, 4]."""
+        try:
+            raw = get_setting_value("layout", "columns", "2")
+            return min(4, max(1, int(str(raw).strip())))
+        except (ValueError, TypeError):
+            return 2
 
-        allow_shrink=True also shrinks a window that only grew for taller
-        showcase content — used for explicit showcase changes (count,
-        log visibility), where the window should track the cards exactly.
-        With allow_shrink=False (passive changes like song add/remove) a
-        manually sized window is only ever enlarged (grow-only), unless
-        the auto-resize setting is on, which always fits both ways.
+    def _fit_window(self) -> None:
+        """Re-fit the window to the cards - only when auto-resize is on.
+
+        With auto-resize off the window size is the user's to control:
+        the scrollable cards area takes over when the content overflows,
+        so no programmatic resize is ever applied (not even on explicit
+        showcase/columns changes).
         """
-        if self._auto_resize_enabled or allow_shrink:
-            try:
-                resize_window(self.root)
-            except Exception as e:
-                logger.debug("Window fit failed: %s", e)
-        else:
-            try:
-                resize_window(self.root, grow_only=True)
-            except Exception as e:
-                logger.debug("Showcase grow-fit failed: %s", e)
+        if not self._auto_resize_enabled:
+            return
+        try:
+            resize_window(self.root)
+        except Exception as e:
+            logger.debug("Window fit failed: %s", e)
 
     def set_showcase_count(self, count: int) -> None:
         """Live-apply the showcase count (called from the Settings dialog).
@@ -1478,18 +1731,39 @@ class MainWindow:
             except (IndexError, tk.TclError):
                 continue
             self._refresh_showcase(frame_idx, playlist_name, platform)
-        self._fit_window(allow_shrink=True)
+        # The window re-fits only when auto-resize is on (see _fit_window);
+        # otherwise the scrollable cards area handles the overflow.
+        self._fit_window()
 
     def set_showcase_log(self, show: bool) -> None:
         """Live-apply the show-log-row setting (called from Settings).
 
-        The window re-fits both ways: hiding the log row shrinks the
-        cards, and the window follows.
+        Hiding the log row shrinks the cards; the window follows only
+        when auto-resize is on, otherwise the cards area scrolls.
         """
         self._show_log = bool(show)
         for frame_idx in list(self.active_log_labels):
             self._apply_log_visibility(frame_idx)
-        self._fit_window(allow_shrink=True)
+        self._fit_window()
+
+    def set_columns(self, count: int) -> None:
+        """Live-apply the card column count (called from the Settings dialog).
+
+        Re-lays out every existing card in place - no window rebuild.  The
+        window re-fits only when auto-resize is on; otherwise the cards
+        area keeps its size and scrolls when the new grid overflows.
+        """
+        try:
+            self._columns = min(4, max(1, int(count)))
+        except (ValueError, TypeError):
+            return
+        for c in range(self._columns):
+            self.root.grid_columnconfigure(c, weight=1)
+            self.content_frame.grid_columnconfigure(c, weight=1)
+        self.header_frame.grid_configure(columnspan=self._columns)
+        self.main_area.grid_configure(columnspan=self._columns)
+        self._layout_frames()
+        self._fit_window()
 
     def _auto_resize(self) -> None:
         """Resize the window to fit playlist frames."""
@@ -1501,12 +1775,7 @@ class MainWindow:
             logger.debug("Auto-resize failed: %s", e)
 
     def _reorder_frames(self) -> None:
-        self.frame_positions.clear()
-        for i, frame in enumerate(self.frames):
-            col = i % 2
-            row = (i // 2) + 1
-            self.frame_positions.append((row, col))
-            frame.grid(row=row, column=col, sticky="ne" if col == 1 else "nw", pady=(5,0), padx=2.5)
+        self._layout_frames()
         logger.debug("Reordered frames after deletion")
 
     # ------------------------------------------------------------------
