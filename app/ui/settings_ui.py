@@ -267,7 +267,7 @@ def show_settings_dialog(
         command=_on_tray_toggle,
         variable=tray_var,
     )
-    tray_ck.pack(fill="both", pady=(0,5))
+    tray_ck.pack(fill="both")
     if not getattr(tray_available, "available", False):
         tray_ck.configure(state="disabled", cursor="arrow")
 
@@ -342,8 +342,8 @@ def show_settings_dialog(
         except Exception as e:
             logger.error("Failed to write ui_scale setting: %s", e)
 
-    scale_row = tk.Frame(appearance_section, background=theme_check_bg)
-    scale_row.pack(fill="both", pady=(2, 0))
+    scale_row = tk.Frame(appearance_section, background=theme_check_bg,)
+    scale_row.pack(fill="both", pady=(0, 5))
     tk.Label(
         scale_row,
         text="UI scale:",
@@ -429,7 +429,7 @@ def show_settings_dialog(
         relief="raised",
         bd=0,
         command=lambda: show_theme_dialog(win, on_theme_change=on_theme_change),
-    ).pack(fill="both", pady=(0,5))
+    ).pack(fill="both")
 
     about_section = tk.Frame(content, background=theme_win_bg)
     about_section.pack(fill="both", padx=8, pady=(0, 8))
@@ -446,7 +446,7 @@ def show_settings_dialog(
 
     repo_label = tk.Label(
         about_section,
-        text=REPO_URL,
+        text=f"Link: {REPO_URL}",
         background=theme_win_bg,
         foreground=C["button_main_fg"],
         font=ui_font(9),
