@@ -21,9 +21,11 @@ from services.song_manager import SongManager
 from utils.thumbnail import ThumbnailService
 from utils.icons import IconService
 from utils.scaling import px, ui_font
+from ui.close_playlist_dialog import show_close_playlist_dialog
 from ui.login_ui import show_login_dialog
 from ui.playlist_dialog import PlaylistDialog
 from ui.settings_ui import show_settings_dialog
+from ui.tooltip import ToolTip
 from utils.window import center_window, resize_window
 from utils.config import get_setting, get_setting_value
 from utils.theme import C, load_theme, btn_colors, hover_bg
@@ -74,7 +76,6 @@ class MainWindow:
         self.playlist_name_labels: list[tk.Label] = []
         self.frame_platforms: list[str] = []
         self.active_log_labels: dict[int, dict] = {}
-        self.img_refs: list = []
         self.frame_img_refs: dict = {}
         self._recording_frame_idx: int | None = None
 
@@ -163,6 +164,21 @@ class MainWindow:
         )
         for c in range(self._columns):
             self.content_frame.grid_columnconfigure(c, weight=1)
+
+        # Empty-state hint: shown only while no playlist cards exist (the
+        # '+' is the header's add button; the hint itself is clickable and
+        # opens the same add flow).  Gridded on demand by
+        # _sync_empty_state() - row 1 is the row the card grid occupies.
+        self.empty_state_btn = tk.Button(
+            self.content_frame,
+            text="Click '+' to add a playlist",
+            cursor="hand2",
+            **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+            font=ui_font(12),
+            highlightthickness=0,
+            relief="raised",
+            command=self._open_playlist_dialog,
+        )
         self.cards_canvas.bind("<Configure>", self._on_canvas_configure)
         self.cards_canvas.configure(yscrollcommand=self._on_canvas_yscroll)
         self._scrollbar_visible = False
@@ -207,6 +223,13 @@ class MainWindow:
                 widget.configure(
                     **btn_colors(C["button_head_bg"], C["button_head_fg"])
                 )
+
+        try:
+            self.empty_state_btn.configure(
+                **btn_colors(C["button_main_bg"], C["button_main_fg"])
+            )
+        except tk.TclError:
+            pass
 
         frame_playlist_bg = C["frame_playlist_bg"]
         for frame_idx, frame in enumerate(self.frames):
@@ -280,6 +303,7 @@ class MainWindow:
                 self.root, on_success=self.ac.refresh_auth
             ),
         )
+        ToolTip(self.btn_login, "Log in to music services")
 
         add_playlist_img_path = assets_dir / "addPlaylist.png"
         self.add_playlist_img = IconService.get(add_playlist_img_path, 32)
@@ -292,6 +316,7 @@ class MainWindow:
             relief="raised",
             command=self._open_playlist_dialog,
         )
+        ToolTip(self.btn_add_playlist, "Add a playlist")
 
         open_settings_img_path = assets_dir / "settings.png"
         self.open_settings_img = IconService.get(open_settings_img_path, 32)
@@ -314,6 +339,7 @@ class MainWindow:
                 on_columns_change=self.set_columns,
             ),
         )
+        ToolTip(self.btn_open_settings, "Settings")
 
         # Span the whole card grid so the header background bar matches the
         # window width at any column count.
@@ -778,6 +804,7 @@ class MainWindow:
                     self._on_remove_song(f, sid, tid)
                 ),
             )
+            ToolTip(remove_btn, "Remove from playlist")
 
             thumb.grid(
                 row=grid_row, column=0, rowspan=2, sticky="nsew",
@@ -1219,6 +1246,8 @@ class MainWindow:
                         if cover_label:
                             self._set_playlist_cover(cover_label, thumb_url)
 
+        self._sync_empty_state()
+
     # ------------------------------------------------------------------
     # Drag-to-move window
     # ------------------------------------------------------------------
@@ -1401,8 +1430,9 @@ class MainWindow:
                 **button_playlist_btn,
                 highlightthickness=0,
                 relief="raised",
-                command=lambda f=main_frame: self.close_main_frame(f),
+                command=lambda f=main_frame: self._confirm_close_playlist(f),
             )
+            ToolTip(close_playlist, "Close playlist")
 
             playlist_keybind = tk.Entry(
                 main_header_frame,
@@ -1413,6 +1443,7 @@ class MainWindow:
                 readonlybackground=entry_playlist_ro_bg,
                 state="readonly",
             )
+            ToolTip(playlist_keybind, "Click to record a hotkey")
             # Capture the frame widget, not its index: close_main_frame()
             # renumbers self.frames after deleting a frame, and a captured
             # index would then point at the wrong playlist (or out of range,
@@ -1433,6 +1464,7 @@ class MainWindow:
                     self.frames.index(f)
                 ),
             )
+            ToolTip(reload_database, "Reload from platform")
 
             log_artist = tk.Label(
                 main_log_frame,
@@ -1526,6 +1558,7 @@ class MainWindow:
 
         self._update_scroll_region()
         self._auto_resize()
+        self._sync_empty_state()
 
     def _hide_main_content(self) -> None:
         # The picker overlay grids into the root's row 1, which the cards
@@ -1547,6 +1580,28 @@ class MainWindow:
         if col == self._columns - 1:
             return "ne"
         return "n"
+
+    def _sync_empty_state(self) -> None:
+        """Show the 'Click + to add a playlist' hint iff no cards exist.
+
+        The hint and the first card share grid row 1 - it is gridded at
+        the END of every path that adds/removes frames (see a.md §2.5),
+        and re-gridded unconditionally while empty so a column-count
+        change re-spans it with the new ``self._columns``.
+        """
+        try:
+            if not self.frames:
+                self.empty_state_btn.grid(
+                    row=1,
+                    column=0,
+                    columnspan=self._columns,
+                    sticky="n",
+                    pady=px(48),
+                )
+            elif self.empty_state_btn.winfo_ismapped():
+                self.empty_state_btn.grid_remove()
+        except tk.TclError:
+            pass  # teardown
 
     def _layout_frames(self) -> None:
         """Recompute every card's grid position and re-grid it.
@@ -1576,12 +1631,6 @@ class MainWindow:
         self._update_scroll_region()
 
     def _show_main_content(self) -> None:
-        # Row 1's weight is OURS: it lets the grid shrink the cards area
-        # to the window instead of overflowing it with the content's
-        # request (which would inflate the canvas to the content height
-        # and fool the scrollbar into "no overflow").  Re-assert it in
-        # case a dialog touched the root grid while we were hidden.
-        self.root.grid_rowconfigure(1, weight=1)
         self.main_area.grid(
             row=1, column=0, columnspan=self._columns, sticky="nsew"
         )
@@ -1595,8 +1644,29 @@ class MainWindow:
             )
             frame.grid_propagate(False)
         self._update_scroll_region()
+        self._sync_empty_state()
 
-    def close_main_frame(self, frame) -> None:
+    def _confirm_close_playlist(self, frame) -> None:
+        """Ask before closing a card: Cancel / Keep DB / Confirm.
+
+        Only reached from the card's close button; the dialog is modal
+        (``grab_set``), so re-entry cannot open a second instance.
+        """
+        try:
+            index = self.frames.index(frame)
+            playlist_name = self.playlist_name_labels[index].cget("text")
+        except (ValueError, IndexError):
+            logger.error("Close confirmation: frame not found")
+            return
+        show_close_playlist_dialog(
+            self.root,
+            playlist_name,
+            on_cancel=None,
+            on_keep_db=lambda: self.close_main_frame(frame, delete_db=False),
+            on_confirm=lambda: self.close_main_frame(frame, delete_db=True),
+        )
+
+    def close_main_frame(self, frame, delete_db: bool = True) -> None:
         try:
             index = self.frames.index(frame)
             playlist_name = self.playlist_name_labels[index].cget("text")
@@ -1645,13 +1715,15 @@ class MainWindow:
             PlaylistStore.delete_playlist(
                 playlist_name, platform=platform, playlist_id=playlist_id
             )
-            DatabaseManager.delete_playlist_db(
-                playlist_name, platform, playlist_id
-            )
+            if delete_db:
+                DatabaseManager.delete_playlist_db(
+                    playlist_name, platform, playlist_id
+                )
 
             frame.grid_forget()
             frame.destroy()
             self._reorder_frames()
+            self._sync_empty_state()
             logger.debug("Closed frame at index %d", index)
             self._auto_resize()
         except (ValueError, IndexError) as e:
@@ -1763,6 +1835,7 @@ class MainWindow:
         self.header_frame.grid_configure(columnspan=self._columns)
         self.main_area.grid_configure(columnspan=self._columns)
         self._layout_frames()
+        self._sync_empty_state()
         self._fit_window()
 
     def _auto_resize(self) -> None:
@@ -1988,7 +2061,6 @@ class MainWindow:
     # ------------------------------------------------------------------
 
     def cleanup(self) -> None:
-        self.img_refs.clear()
         self.frame_img_refs.clear()
         self.active_log_labels.clear()
         for frame in self.frames:
