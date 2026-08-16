@@ -222,7 +222,7 @@ class PlaylistDialog:
             try:
                 self.choose_frame.destroy()
             except Exception:
-                pass
+                logger.debug("Failed to destroy choose_frame", exc_info=True)
             self.choose_frame = None
         self.img_refs.clear()
 

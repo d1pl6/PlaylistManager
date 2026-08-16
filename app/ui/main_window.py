@@ -567,7 +567,6 @@ class MainWindow:
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
                 anchor="w",
-                width=64,
             )
             artists = song.get("artists", [])
             artists_str = (
@@ -580,7 +579,6 @@ class MainWindow:
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
                 anchor="w",
-                width=64,
             )
             remove_btn = tk.Button(
                 showcase,

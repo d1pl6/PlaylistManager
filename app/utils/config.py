@@ -117,6 +117,26 @@ def _safe_read_config(cfg: ConfigParser, path: Path) -> ConfigParser:
     return cfg
 
 
+def _strip_legacy_active_keys(cfg: ConfigParser) -> bool:
+    """Drop dead ``activebackground``/``activeforeground`` theme options.
+
+    The smart hover system (0.2.x, ``btn_colors()`` in utils/theme.py)
+    derives hover colours from the resting colours, so these options in a
+    user's ``cfg/theme.ini`` are dead configuration left over from before
+    the migration.  Runs on every app start via ``ensure_theme_file()``;
+    idempotent, so repeated calls are harmless.
+
+    MIGRATION HELPER — remove together with its call in ``ensure_theme_file``
+    in 0.3.0.
+    """
+    changed = False
+    for section in list(cfg.sections()):
+        for option in ("activebackground", "activeforeground"):
+            if cfg.remove_option(section, option):
+                changed = True
+    return changed
+
+
 def ensure_theme_file() -> None:
     cfg = ConfigParser()
     if THEME_PATH.exists():
@@ -131,6 +151,7 @@ def ensure_theme_file() -> None:
                 if key not in cfg[section]:
                     cfg[section][key] = value
                     changed = True
+    changed = _strip_legacy_active_keys(cfg) or changed
     if not THEME_PATH.exists() or changed:
         _write_ini_file(THEME_PATH, cfg)
 

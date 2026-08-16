@@ -10,7 +10,7 @@ from utils.config import (
     THEME_PATH,
 )
 from utils.scaling import px, ui_font
-from utils.theme import C, hover_bg, readable_fg, btn_colors
+from utils.theme import C, readable_fg, btn_colors
 from utils.window import center_window
 
 
@@ -24,7 +24,6 @@ def show_theme_dialog(parent, on_theme_change=None):
     button_bg = C["button_main_bg"]
     button_fg = C["button_main_fg"]
     button_btn = btn_colors(button_bg, button_fg)
-
 
     win = tk.Toplevel(parent)
     win.title("Theme Settings")
