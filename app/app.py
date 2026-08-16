@@ -251,31 +251,18 @@ class App:
 
         threading.Thread(target=_refresh_worker, daemon=True).start()
 
-    def _check_updates(self):
-        def on_result(
-            available, latest_version=None, download_url=None, body=None, error=None
-        ):
+    def _check_updates(self, *, force: bool = False):
+        def on_result(available, latest_version=None, download_url=None, body=None, error=None):
             if available:
                 user_log(logger, "Update v%s available at %s", latest_version, download_url)
                 try:
-                    self.root.after(
-                        0, show_update_dialog, self.root, latest_version, download_url, body
-                    )
+                    self.root.after(0, show_update_dialog, self.root, latest_version, download_url, body)
                 except Exception:
-                    # Check finished before mainloop() started, or the app
-                    # quit while the request was in flight.  Best-effort -
-                    # the updater thread must never raise uncaught.
-                    logger.debug(
-                        "Update dialog not shown: %s",
-                        "mainloop not running or app shutting down",
-                    )
+                    logger.debug("Update dialog not shown: %s", "mainloop not running or app shutting down")
             elif error:
-                # No modal: an offline/blocked network at startup would pop
-                # an unavoidable dialog on every launch.  USER level keeps it
-                # visible in normal runs without stealing focus.
                 user_log(logger, "Update check failed: %s", error)
 
-        updater.check(on_result)
+        updater.check(on_result, force=force)
 
     def _start_tray(self):
         """Start the system tray icon (best effort).

@@ -337,6 +337,7 @@ class MainWindow:
                 on_showcase_count_change=self.set_showcase_count,
                 on_showcase_log_change=self.set_showcase_log,
                 on_columns_change=self.set_columns,
+                on_check_updates_now=lambda: self.ac.app._check_updates(force=True),
             ),
         )
         ToolTip(self.btn_open_settings, "Settings")
@@ -1399,7 +1400,8 @@ class MainWindow:
                 height=px(CARD_H_BASE),
                 background=frame_playlist_bg,
                 borderwidth=2,
-                relief="solid"
+                relief="solid",
+                bd=1
             )
             main_frame.grid_propagate(False)
             main_frame.grid_rowconfigure(0, weight=1)
@@ -1490,14 +1492,6 @@ class MainWindow:
                 foreground=label_playlist_log_fg,
                 anchor="w",
             )
-            log_helper_2 = tk.Label(
-                main_log_frame,
-                text="|",
-                font=ui_font(12),
-                background=label_playlist_log_bg,
-                foreground=label_playlist_log_fg,
-                anchor="w",
-            )
             log_status = tk.Label(
                 main_log_frame,
                 text="Waiting",
@@ -1542,8 +1536,7 @@ class MainWindow:
             log_artist.grid(row=0, column=0, padx=(0, 2), sticky="nswe")
             log_helper_1.grid(row=0, column=1, sticky="nswe")
             log_name.grid(row=0, column=2, sticky="nswe")
-            log_helper_2.grid(row=0, column=3, sticky="nswe")
-            log_status.grid(row=0, column=4, padx=(0, 2), sticky="nswe")
+            log_status.grid(row=0, column=3, padx=(0, 2), sticky="nswe")
 
             # Per-frame state the showcase helpers read.  Widgets, not
             # indices: close_main_frame() renumbers the frame lists, but
