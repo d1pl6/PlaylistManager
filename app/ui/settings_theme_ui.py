@@ -146,10 +146,18 @@ def show_theme_dialog(parent, on_theme_change=None):
         theme_cfg.read(str(THEME_PATH))
         _refresh_buttons()
 
+    _restore_btn = None  # populated below; referenced by _refresh_buttons
+
     def _refresh_buttons() -> None:
         """Sync the swatch buttons after a preset or defaults restore."""
         for section, option, default, btn in color_buttons:
             _style_button(btn, theme_cfg.get(section, option, fallback=default))
+        # Re-theme footer buttons whose colours were captured from C at
+        # creation time and would otherwise lag behind a preset change.
+        if _restore_btn is not None:
+            _restore_btn.configure(
+                **btn_colors(C["button_main_bg"], C["button_main_fg"])
+            )
 
     _create_theme_button("Root background", "root_background", "background", "#1A1A1A")
     _create_theme_button("Frame header background", "frame_header", "background", "#101010")
@@ -223,7 +231,7 @@ def show_theme_dialog(parent, on_theme_change=None):
         bd=0,
     ).pack(side="left", expand=True, fill="x", padx=2)
 
-    tk.Button(
+    _restore_btn = tk.Button(
         button_frame,
         text="Restore Defaults",
         cursor="hand2",
@@ -233,7 +241,8 @@ def show_theme_dialog(parent, on_theme_change=None):
         highlightthickness=0,
         relief="raised",
         bd=0,
-    ).pack(side="left", expand=True, fill="x", padx=2)
+    )
+    _restore_btn.pack(side="left", expand=True, fill="x", padx=2)
 
     for child in inner.winfo_children():
         child.bind("<MouseWheel>", _on_mousewheel)

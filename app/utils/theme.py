@@ -79,13 +79,21 @@ THEME_MAP = {
 C: dict[str, str] = {}
 
 
+def _expand_hex(h: str) -> str:
+    """Expand 3-char hex (``ABC``) to 6-char (``AABBCC``); empty for invalid."""
+    if len(h) == 3:
+        return h[0] * 2 + h[1] * 2 + h[2] * 2
+    return h
+
+
 def luminance(hex_color: str) -> float:
-    """Relative luminance (0..1) of a ``#RRGGBB`` colour; 0.0 for named colours.
+    """Relative luminance (0..1) of a ``#RRGGBB`` or ``#RGB`` colour; 0.0 for
+    named colours.
 
     Named colours (Tk accepts e.g. ``"red"``) are assumed dark, so callers
     pick white text on them.
     """
-    h = hex_color.lstrip("#")
+    h = _expand_hex(hex_color.lstrip("#"))
     if len(h) != 6:
         return 0.0
     r, g, b = (int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
@@ -106,13 +114,22 @@ def hover_bg(color: str) -> str:
     inverted hover colour identical (or nearly identical) to the swatch,
     giving no feedback.  Named colours fall back to no hover change - theme
     values from the picker and presets are always hex.
+
+    Supports ``#RGB`` shorthand (Tk expands ``#FFF`` to ``#FFFFFF``).
     """
-    h = color.lstrip("#")
+    h = _expand_hex(color.lstrip("#"))
     if len(h) != 6:
         return color
     channels = [int(h[i : i + 2], 16) for i in (0, 2, 4)]
-    if luminance(color) >= 0.6:
+    lum = luminance(color)
+    if lum >= 0.6:
         shaded = [int(c * 0.75) for c in channels]  # light -> darker
+    elif lum >= 0.45:
+        # Transition zone: smoothly blend between lightening and darkening
+        # so colours near the 0.6 threshold don't jump between strategies.
+        t = (0.6 - lum) / 0.15  # 0.0 at 0.6 -> 1.0 at 0.45
+        factor = 0.25 * t
+        shaded = [int(c + (255 - c) * factor) for c in channels]
     else:
         shaded = [int(c + (255 - c) * 0.25) for c in channels]  # dark -> lighter
     return "#{:02x}{:02x}{:02x}".format(*shaded)

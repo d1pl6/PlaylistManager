@@ -58,6 +58,10 @@ class PlaylistDialog:
         self.choose_frame.grid(
             row=1, column=0, columnspan=self.columns, sticky="nsew"
         )
+        # The picker overlays the root grid's row 1, which normally holds
+        # the (fixed-size, top-anchored) playlist cards and is unweighted.
+        # Give that row a weight while the picker is up so it fills the
+        # window; close() reverts it so the card layout is untouched.
         try:
             self.parent.grid_rowconfigure(1, weight=1)
         except tk.TclError:
@@ -119,6 +123,9 @@ class PlaylistDialog:
                 image="",
                 cursor="hand2",
                 **btn_btn,
+                # NOTE: on an image-only button, Tk reads -width in PIXELS,
+                # not characters.  px(40) matches the thumbnail size so the
+                # placeholder is stable and the image is never clipped.
                 width=px(40),
                 highlightthickness=0,
                 relief="raised",
@@ -147,6 +154,8 @@ class PlaylistDialog:
         scrollable_frame.bind("<MouseWheel>", self._on_mouse_wheel)
         scrollable_frame.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
         scrollable_frame.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
+        # Also scroll when the wheel is over the bare canvas (a short list
+        # doesn't cover the full scroll area).
         self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
         self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
         self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
@@ -177,6 +186,9 @@ class PlaylistDialog:
                 img = None
             if img is not None:
                 try:
+                    # Default-arg capture: the lambda must bind THIS item's
+                    # button/image, not the loop cells (reassigned on the
+                    # next get() before the main loop may run this).
                     self.parent.after(
                         0,
                         lambda b=button, im=img: self._apply_thumb(b, im),
@@ -212,6 +224,9 @@ class PlaylistDialog:
         self.close()
 
     def close(self):
+        # Stop the thumbnail workers: drop queued jobs, then signal each
+        # worker to exit.  A fetch already in flight finishes and hits the
+        # guarded after() against the destroyed dialog - a no-op.
         try:
             while True:
                 self._thumb_tasks.get_nowait()
