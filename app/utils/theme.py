@@ -69,6 +69,10 @@ THEME_MAP = {
     "entry_playlist_ro_bg": ("entry_playlist", "readonlybackground"),
     "label_playlist_stats_bg": ("label_playlist_stats", "background"),
     "label_playlist_stats_fg": ("label_playlist_stats", "foreground"),
+    "search_bar_bg": ("search_bar", "background"),
+    "search_bar_fg": ("search_bar", "foreground"),
+    "search_result_bg": ("search_result", "background"),
+    "search_result_fg": ("search_result", "foreground"),
 }
 
 #: Flat palette: palette name -> colour string.  Populated by :func:`load_theme`.

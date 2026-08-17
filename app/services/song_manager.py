@@ -780,3 +780,52 @@ class SongManager:
         except sqlite3.Error as e:
             logger.error(f"Error getting total duration from {playlist_name}: {e}")
             return 0
+
+    def search_songs(
+        self,
+        playlist_name: str,
+        query: str,
+        *,
+        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
+        limit: int = 5,
+    ) -> List[Dict]:
+        """Search songs by title or artist (case-insensitive LIKE).
+
+        Wildcard characters (``%``, ``_``) in *query* are escaped so they
+        are treated as literals.  Returns up to *limit* matches, newest
+        first.  Returns ``[]`` on error or empty query.
+        """
+        if not query or not query.strip():
+            return []
+        # Escape SQL LIKE wildcards in user input.
+        safe = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{safe}%"
+        try:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id, title, artists, thumbnail_url, duration, track_id "
+                    "FROM songs "
+                    "WHERE title LIKE ? ESCAPE '\\' "
+                    "OR artists LIKE ? ESCAPE '\\' "
+                    "ORDER BY added_at DESC LIMIT ?",
+                    (pattern, pattern, limit),
+                )
+                songs = []
+                for row in cursor.fetchall():
+                    songs.append({
+                        "id": row[0],
+                        "title": row[1],
+                        "artists": json.loads(row[2]),
+                        "thumbnail_url": row[3],
+                        "duration": row[4],
+                        "track_id": row[5],
+                    })
+                return songs
+
+        except sqlite3.Error as e:
+            logger.error("Error searching songs in %s: %s", playlist_name, e)
+            return []

@@ -74,6 +74,14 @@ DEFAULT_THEME = {
         "background": "#2a2a2a",
         "foreground": "#B0B0B0",
     },
+    "search_bar": {
+        "background": "#1E1E1E",
+        "foreground": "#E0E0E0",
+    },
+    "search_result": {
+        "background": "#2A2A2A",
+        "foreground": "#C0C0C0",
+    },
 }
 
 
@@ -223,6 +231,14 @@ THEME_PRESETS = {
         "label_playlist_stats": {
             "background": "#EBEBEB",
             "foreground": "#555555",
+        },
+        "search_bar": {
+            "background": "#F0F0F0",
+            "foreground": "#111111",
+        },
+        "search_result": {
+            "background": "#F5F5F5",
+            "foreground": "#333333",
         },
     },
 }

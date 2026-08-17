@@ -87,6 +87,13 @@ class MainWindow:
         self._show_stats = self._read_show_stats_setting()
         self._columns = self._read_columns_setting()
 
+        # Search state — set when a search bar is open.
+        self._search_mode: str | None = None   # None | "playlist" | "song"
+        self._search_frame: tk.Frame | None = None
+        self._search_entry: tk.Entry | None = None
+        self._search_var: tk.StringVar | None = None
+        self._search_results: dict[int, tk.Frame] = {}  # per-card results frames
+
         # Set by App._start_tray() once the window exists; None when no
         # tray backend is available.
         self.tray_service = None
@@ -129,7 +136,8 @@ class MainWindow:
         self.song_placeholder_img = self._load_song_placeholder()
 
         self.root.grid_rowconfigure(0, weight=0)
-        self.root.grid_rowconfigure(1, weight=1)
+        self.root.grid_rowconfigure(1, weight=0)   # search bar (hidden by default)
+        self.root.grid_rowconfigure(2, weight=1)
         for c in range(self._columns):
             self.root.grid_columnconfigure(c, weight=1)
 
@@ -143,6 +151,11 @@ class MainWindow:
         self.root.bind("<Unmap>", self._on_unmap)
         self.root.bind("<Map>", self._on_map)
         self.root.protocol("WM_DELETE_WINDOW", self.ac.quit_app)
+        # Search keyboard shortcuts — Ctrl+F (playlist), Ctrl+Shift+F (song).
+        self.root.bind("<Control-f>", self._toggle_playlist_search)
+        self.root.bind("<Control-F>", self._toggle_playlist_search)
+        self.root.bind("<Control-Shift-f>", self._toggle_song_search)
+        self.root.bind("<Control-Shift-F>", self._toggle_song_search)
 
         # ----- cards area (scrollable) ----------------------------------
         # The cards live inside a canvas so a playlist grid taller than
@@ -151,7 +164,7 @@ class MainWindow:
         # while the content overflows the viewport - hidden otherwise.
         self.main_area = tk.Frame(self.root, background=C["root_bg"])
         self.main_area.grid(
-            row=1, column=0, columnspan=self._columns, sticky="nsew"
+            row=2, column=0, columnspan=self._columns, sticky="nsew"
         )
         self.cards_canvas = tk.Canvas(
             self.main_area,
@@ -299,6 +312,35 @@ class MainWindow:
                                 C["button_playlist_bg"], C["button_playlist_fg"]
                             )
                         )
+
+        # Re-theme any active search bar.
+        if self._search_frame is not None:
+            self._search_frame.configure(background=C["search_bar_bg"])
+        if self._search_entry is not None:
+            self._search_entry.configure(
+                background=C["search_bar_bg"],
+                foreground=C["search_bar_fg"],
+                insertbackground=C["search_bar_fg"],
+            )
+        # Re-theme search results frames.
+        for idx, rf in self._search_results.items():
+            try:
+                rf.configure(background=C["frame_playlist_bg"])
+                for child in rf.winfo_children():
+                    if isinstance(child, tk.Frame):
+                        child.configure(background=C["search_result_bg"])
+                        for lbl in child.winfo_children():
+                            if isinstance(lbl, tk.Label):
+                                lbl.configure(
+                                    background=C["search_result_bg"],
+                                    foreground=C["search_result_fg"],
+                                )
+                    elif isinstance(child, tk.Label):
+                        child.configure(
+                            background=C["frame_playlist_bg"],
+                        )
+            except tk.TclError:
+                pass
 
     # ------------------------------------------------------------------
     # Widget creation
@@ -760,7 +802,9 @@ class MainWindow:
         main_frame.showcase_rows = len(rows)
         if rows:
             showcase_frame = self._build_showcase_frame(main_frame, rows)
-            showcase_frame.grid(row=3, column=0, sticky="nsew")
+            # Don't grid showcase if song search results are visible in this row.
+            if frame_idx not in self._search_results:
+                showcase_frame.grid(row=3, column=0, sticky="nsew")
             main_frame.showcase_frame = showcase_frame
             for thumb_label, url in showcase_frame._thumb_jobs:
                 self._fetch_song_thumb(thumb_label, url)
@@ -1072,6 +1116,13 @@ class MainWindow:
             height -= px(LOG_ROW_H_BASE)
         if self._show_stats:
             height += px(STATS_ROW_H_BASE)
+        # Account for active search results (per-card song search).
+        search_results = self._search_results.get(frame_idx)
+        if search_results is not None:
+            try:
+                height += search_results.winfo_reqheight()
+            except tk.TclError:
+                pass
         main_frame.config(height=max(px(CARD_H_BASE) - px(LOG_ROW_H_BASE), height))
         self._update_scroll_region()
 
@@ -1785,7 +1836,7 @@ class MainWindow:
 
     def _show_main_content(self) -> None:
         self.main_area.grid(
-            row=1, column=0, columnspan=self._columns, sticky="nsew"
+            row=2, column=0, columnspan=self._columns, sticky="nsew"
         )
         for frame, (row, col) in zip(self.frames, self.frame_positions):
             frame.grid(
@@ -1848,6 +1899,21 @@ class MainWindow:
 
             if index in self.active_log_labels:
                 del self.active_log_labels[index]
+
+            # Clean up search results for the closing card and renumber.
+            closing_search = self._search_results.pop(index, None)
+            if closing_search is not None:
+                try:
+                    closing_search.destroy()
+                except tk.TclError:
+                    pass
+            new_search_results = {}
+            for old_idx, rf in self._search_results.items():
+                if old_idx > index:
+                    new_search_results[old_idx - 1] = rf
+                else:
+                    new_search_results[old_idx] = rf
+            self._search_results = new_search_results
 
             new_active_log_labels = {}
             for old_idx, labels_dict in self.active_log_labels.items():
@@ -2194,6 +2260,10 @@ class MainWindow:
         main_frame = self.frames[frame_idx]
         main_frame._syncing = True
 
+        # Dismiss active song search since the DB is about to change.
+        if self._search_mode == "song":
+            self._dismiss_search()
+
         status_label = self.active_log_labels[frame_idx]["status"]
         status_label.config(text="Sync", background=C["label_playlist_warn_bg"])
 
@@ -2227,10 +2297,273 @@ class MainWindow:
         )
 
     # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
+
+    def _toggle_playlist_search(self, event=None) -> None:
+        """Toggle the playlist-name search bar."""
+        if self._search_mode == "playlist":
+            self._dismiss_search()
+        else:
+            self._show_search_bar("playlist")
+        return "break"
+
+    def _toggle_song_search(self, event=None) -> None:
+        """Toggle the per-card song search bar."""
+        if self._search_mode == "song":
+            self._dismiss_search()
+        else:
+            self._show_search_bar("song")
+        return "break"
+
+    def _show_search_bar(self, mode: str) -> None:
+        """Create and show the search bar at root row 1."""
+        # Dismiss any existing search first.
+        if self._search_frame is not None:
+            self._dismiss_search()
+
+        self._search_mode = mode
+        search_bg = C["search_bar_bg"]
+        search_fg = C["search_bar_fg"]
+
+        self._search_frame = tk.Frame(self.root, background=search_bg, pady=3, padx=6)
+        self._search_frame.grid(
+            row=1, column=0, columnspan=self._columns, sticky="ew"
+        )
+
+        placeholder = "Search playlists..." if mode == "playlist" else "Search songs..."
+        self._search_var = tk.StringVar()
+        self._search_var.trace_add("write", self._on_search_query)
+
+        self._search_entry = tk.Entry(
+            self._search_frame,
+            textvariable=self._search_var,
+            font=ui_font(12),
+            background=search_bg,
+            foreground=search_fg,
+            insertbackground=search_fg,
+            highlightthickness=0,
+            relief="flat",
+        )
+        self._search_entry.insert(0, placeholder)
+        self._search_entry.bind("<FocusIn>", self._on_search_focus_in)
+        self._search_entry.bind("<FocusOut>", self._on_search_focus_out)
+        def _on_escape(event=None):
+            self._dismiss_search()
+            return "break"
+        self._search_entry.bind("<Escape>", _on_escape)
+        self._search_entry.pack(side="left", fill="x", expand=True)
+
+        close_img = self.close_playlist_img
+        close_btn = tk.Button(
+            self._search_frame,
+            image=close_img,
+            cursor="hand2",
+            **btn_colors(C["button_playlist_bg"], C["button_playlist_fg"]),
+            highlightthickness=0,
+            relief="flat",
+            command=self._dismiss_search,
+        )
+        close_btn.pack(side="right", padx=(6, 0))
+
+        self._search_entry.focus_set()
+
+    def _dismiss_search(self) -> None:
+        """Destroy the search bar and restore the default view."""
+        if self._search_frame is not None:
+            try:
+                self._search_frame.grid_forget()
+                self._search_frame.destroy()
+            except tk.TclError:
+                pass
+            self._search_frame = None
+            self._search_entry = None
+            self._search_var = None
+        self._search_mode = None
+
+        # Restore all playlist cards.
+        for i, frame in enumerate(self.frames):
+            try:
+                col = self.frame_positions[i]
+                frame.grid(
+                    row=col[0], column=col[1],
+                    sticky=self._column_sticky(col[1]),
+                    pady=(5, 0), padx=2.5,
+                )
+                # Tk gotcha: grid_forget() destroys grid_propagate(False).
+                frame.grid_propagate(False)
+            except (IndexError, tk.TclError):
+                pass
+
+        # Destroy all per-card search results.
+        self._dismiss_all_search_results()
+        self._sync_empty_state()
+        self._update_scroll_region()
+
+    def _on_search_focus_in(self, event=None) -> None:
+        """Clear the placeholder text when the entry gains focus."""
+        if self._search_entry is None:
+            return
+        text = self._search_entry.get()
+        if text in ("Search playlists...", "Search songs..."):
+            self._search_entry.delete(0, tk.END)
+            self._search_entry.configure(foreground=C["search_bar_fg"])
+
+    def _on_search_focus_out(self, event=None) -> None:
+        """Restore placeholder if entry is empty."""
+        if self._search_entry is None:
+            return
+        if not self._search_entry.get().strip():
+            placeholder = "Search playlists..." if self._search_mode == "playlist" else "Search songs..."
+            self._search_entry.delete(0, tk.END)
+            self._search_entry.insert(0, placeholder)
+            self._search_entry.configure(foreground="#888888")
+
+    def _on_search_query(self, *args) -> None:
+        """Tracevar callback — dispatch to the active filter."""
+        if self._search_var is None or self._search_mode is None:
+            return
+        query = self._search_var.get()
+        # Ignore placeholder text.
+        if query in ("Search playlists...", "Search songs..."):
+            return
+        if self._search_mode == "playlist":
+            self._filter_playlists(query)
+        elif self._search_mode == "song":
+            self._filter_songs(query)
+
+    def _filter_playlists(self, query: str) -> None:
+        """Show/hide playlist cards based on name substring match."""
+        q = query.strip().lower()
+        for i, frame in enumerate(self.frames):
+            try:
+                name = self.playlist_name_labels[i].cget("text").lower()
+            except (IndexError, tk.TclError):
+                continue
+            if not q or q in name:
+                try:
+                    col = self.frame_positions[i]
+                    frame.grid(
+                        row=col[0], column=col[1],
+                        sticky=self._column_sticky(col[1]),
+                        pady=(5, 0), padx=2.5,
+                    )
+                    # Tk gotcha: grid_forget() destroys a widget's grid
+                    # state — grid_propagate(False) included. Re-assert.
+                    frame.grid_propagate(False)
+                except tk.TclError:
+                    pass
+            else:
+                frame.grid_forget()
+        self._sync_empty_state()
+        self._update_scroll_region()
+
+    def _filter_songs(self, query: str) -> None:
+        """Show matching songs inside each playlist card."""
+        q = query.strip()
+        if not q:
+            self._dismiss_all_search_results()
+            return
+        for i, frame in enumerate(self.frames):
+            try:
+                name = self.playlist_name_labels[i].cget("text")
+                platform = self.frame_platforms[i]
+            except (IndexError, tk.TclError):
+                continue
+            playlist_id = getattr(frame, "playlist_id", "") or ""
+
+            sm = SongManager()
+            matches = sm.search_songs(name, q, platform=platform, playlist_id=playlist_id)
+
+            # Destroy previous results for this card.
+            old = self._search_results.pop(i, None)
+            if old is not None:
+                try:
+                    old.grid_forget()
+                    old.destroy()
+                except tk.TclError:
+                    pass
+
+            if not matches:
+                # Show "No matches" inside the card.
+                results_frame = self._build_search_results_frame(frame, [])
+                self._search_results[i] = results_frame
+                results_frame.grid(row=3, column=0, sticky="nsew", padx=2)
+            else:
+                results_frame = self._build_search_results_frame(frame, matches)
+                self._search_results[i] = results_frame
+                results_frame.grid(row=3, column=0, sticky="nsew", padx=2)
+
+            self._update_card_height(i)
+        self._update_scroll_region()
+
+    def _build_search_results_frame(self, main_frame: tk.Frame, songs: list) -> tk.Frame:
+        """Create a frame showing search result rows for one card."""
+        frame_playlist_bg = C["frame_playlist_bg"]
+        result_bg = C["search_result_bg"]
+        result_fg = C["search_result_fg"]
+
+        frame = tk.Frame(main_frame, background=frame_playlist_bg)
+
+        if not songs:
+            no_match = tk.Label(
+                frame,
+                text="No matches",
+                font=ui_font(10),
+                background=frame_playlist_bg,
+                foreground="#888888",
+                anchor="center",
+            )
+            no_match.pack(fill="x", pady=2)
+            return frame
+
+        for song in songs:
+            row_frame = tk.Frame(frame, background=result_bg)
+            row_frame.pack(fill="x", pady=1, padx=2)
+
+            title = song.get("title", "")
+            artists = song.get("artists", [])
+            artists_str = ", ".join(artists[:2]) if isinstance(artists, list) else str(artists)
+            label_text = f"{title} — {artists_str}" if artists_str else title
+
+            lbl = tk.Label(
+                row_frame,
+                text=label_text,
+                font=ui_font(10),
+                background=result_bg,
+                foreground=result_fg,
+                anchor="w",
+            )
+            lbl.pack(fill="x", padx=4, pady=1)
+
+        return frame
+
+    def _dismiss_all_search_results(self) -> None:
+        """Destroy every per-card search results frame.
+
+        In tkinter grid, the showcase and search results both occupy
+        row 3 — gridding results hides the showcase, and grid_forget()
+        restores it automatically.
+        """
+        for idx, rf in self._search_results.items():
+            try:
+                rf.grid_forget()
+                rf.destroy()
+            except tk.TclError:
+                pass
+            # Update card height now that the results are gone.
+            try:
+                self._update_card_height(idx)
+            except (IndexError, tk.TclError):
+                pass
+        self._search_results.clear()
+
+    # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
 
     def cleanup(self) -> None:
+        self._dismiss_search()
         self.frame_img_refs.clear()
         self.active_log_labels.clear()
         for frame in self.frames:
