@@ -14,7 +14,7 @@ from utils.config import (
     SETTINGS_PATH as _settings_path,
 )
 from utils.scaling import UI_SCALE_PRESETS, ui_font
-from utils.theme import C, btn_colors
+from utils.theme import C, btn_colors, hover_bg
 from utils.window import center_window
 
 logger = logging.getLogger(__name__)
@@ -125,6 +125,15 @@ def show_settings_dialog(
     scrollbar = tk.Scrollbar(win, orient="vertical", command=canvas.yview)
     scrollbar.pack(side="right", fill="y")
     canvas.configure(yscrollcommand=scrollbar.set)
+    try:
+        _sb_thumb = hover_bg(C["button_main_bg"])
+        scrollbar.configure(
+            bg=_sb_thumb,
+            activebackground=hover_bg(_sb_thumb),
+            troughcolor=theme_win_bg,
+        )
+    except tk.TclError:
+        pass
 
     content = tk.Frame(canvas, background=theme_win_bg)
     content_id = canvas.create_window((0, 0), window=content, anchor="nw")
@@ -200,16 +209,43 @@ def show_settings_dialog(
         variable=update_var,
     ).pack(fill="both", pady=(0,5))
 
-    tk.Button(
+    def _do_check_now():
+        if not callable(on_check_updates_now):
+            return
+        update_btn.configure(state="disabled", text="Checking\u2026")
+
+        def _on_complete(available, error):
+            try:
+                if available:
+                    update_btn.configure(state="normal", text="Check for updates now")
+                elif error:
+                    update_btn.configure(
+                        state="normal",
+                        text="Check failed \u2014 try again",
+                    )
+                else:
+                    update_btn.configure(state="normal", text="Up to date!")
+            except tk.TclError:
+                return
+            try:
+                win.after(
+                    4000,
+                    lambda: update_btn.configure(text="Check for updates now"),
+                )
+            except tk.TclError:
+                pass
+
+        on_check_updates_now(on_done=_on_complete)
+
+    update_btn = tk.Button(
         app_section,
         text="Check for updates now",
         cursor="hand2",
         **checkbutton_style,
         font=ui_font(12),
-        command=lambda: (
-            on_check_updates_now() if callable(on_check_updates_now) else None
-        ),
-    ).pack(fill="both", pady=(0,5))
+        command=_do_check_now,
+    )
+    update_btn.pack(fill="both", pady=(0,5))
 
     tk.Checkbutton(
         app_section,

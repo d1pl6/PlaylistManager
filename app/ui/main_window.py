@@ -397,7 +397,7 @@ class MainWindow:
                 on_showcase_log_change=self.set_showcase_log,
                 on_playlist_stats_change=self.set_playlist_stats,
                 on_columns_change=self.set_columns,
-                on_check_updates_now=lambda: self.ac.app._check_updates(force=True),
+                on_check_updates_now=lambda on_done=None: self.ac.app._check_updates(force=True, on_done=on_done),
             ),
         )
         ToolTip(self.btn_open_settings, "Settings")
@@ -1568,7 +1568,6 @@ class MainWindow:
                 background=frame_playlist_bg,
                 borderwidth=2,
                 relief="solid",
-                bd=1
             )
             main_frame.grid_propagate(False)
             main_frame.grid_rowconfigure(0, weight=1)
