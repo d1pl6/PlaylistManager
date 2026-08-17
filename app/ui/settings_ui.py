@@ -342,7 +342,7 @@ def show_settings_dialog(
         except Exception as e:
             logger.error("Failed to write ui_scale setting: %s", e)
 
-    scale_row = tk.Frame(appearance_section, background=theme_check_bg,)
+    scale_row = tk.Frame(appearance_section, background=theme_check_bg)
     scale_row.pack(fill="both", pady=(0, 5))
     tk.Label(
         scale_row,
