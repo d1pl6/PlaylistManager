@@ -86,6 +86,7 @@ class MainWindow:
         self._show_log = self._read_show_log_setting()
         self._show_stats = self._read_show_stats_setting()
         self._columns = self._read_columns_setting()
+        self._song_manager = SongManager()
 
         # Search state — set when a search bar is open.
         self._search_mode: str | None = None   # None | "playlist" | "song"
@@ -792,7 +793,7 @@ class MainWindow:
 
         rows = []
         if self._showcase_count > 0:
-            rows = SongManager().get_latest_songs(
+            rows = self._song_manager.get_latest_songs(
                 playlist_name,
                 self._showcase_count,
                 platform=platform,
@@ -834,7 +835,7 @@ class MainWindow:
 
         playlist_id = getattr(main_frame, "playlist_id", "") or ""
 
-        sm = SongManager()
+        sm = self._song_manager
         song_count = sm.get_song_count(
             playlist_name, platform=platform, playlist_id=playlist_id
         )
@@ -867,10 +868,10 @@ class MainWindow:
     def _format_duration(seconds: int) -> str:
         """Format a duration in seconds as a short human-readable string.
 
-        Examples: ``"1h 54m"``, ``"23m 05s"``, ``"42s"``, ``""`` (0).
+        Examples: ``"1h 54m"``, ``"23m 05s"``, ``"42s"``, ``"—"`` (0).
         """
         if seconds <= 0:
-            return ""
+            return "\u2014"
         h, remainder = divmod(int(seconds), 3600)
         m, s = divmod(remainder, 60)
         if h > 0:
@@ -1024,7 +1025,7 @@ class MainWindow:
             else:
                 ok = integration.remove_track(playlist_id, track_id)
                 if ok:
-                    SongManager().delete_song(
+                    self._song_manager.delete_song(
                         playlist_name,
                         song_id,
                         platform=platform,
@@ -1173,7 +1174,7 @@ class MainWindow:
         Reads the most recently added song so the frame shows real data
         as soon as an import or reload has populated the database.
         """
-        sm = SongManager()
+        sm = self._song_manager
         try:
             main_frame = self.frames[frame_idx]
         except IndexError:
@@ -1292,10 +1293,19 @@ class MainWindow:
         frame_idx: int | None = None,
     ) -> None:
         frame_idx = self._on_import_done(playlist_name, count, status_text, frame_idx)
-        if frame_idx is not None and thumb_url:
-            cover_label = self.active_log_labels[frame_idx].get("cover")
-            if cover_label:
-                self._set_playlist_cover(cover_label, thumb_url)
+        if frame_idx is not None:
+            # Re-enable the reload button that was disabled in
+            # _on_reload_requested.
+            reload_btn = self.active_log_labels.get(frame_idx, {}).get("reload_btn")
+            if reload_btn is not None:
+                try:
+                    reload_btn.configure(state="normal")
+                except tk.TclError:
+                    pass
+            if thumb_url:
+                cover_label = self.active_log_labels[frame_idx].get("cover")
+                if cover_label:
+                    self._set_playlist_cover(cover_label, thumb_url)
 
     # ------------------------------------------------------------------
     # Keybind setup (called once after __init__)
@@ -1715,6 +1725,7 @@ class MainWindow:
                 "stats_songs": stats_songs,
                 "stats_duration": stats_duration,
                 "stats_followers": stats_followers,
+                "reload_btn": reload_database,
             }
 
             # Weighted name column: absorbs/clips long text instead of
@@ -2046,11 +2057,20 @@ class MainWindow:
         """Live-apply the show-playlist-stats setting (called from Settings).
 
         Hiding the stats row shrinks the cards; the window follows only
-        when auto-resize is on.
+        when auto-resize is on.  Re-enabling refreshes each card's
+        stats from the database so the labels are never stale.
         """
         self._show_stats = bool(show)
         for frame_idx in list(self.active_log_labels):
             self._apply_stats_visibility(frame_idx)
+            if self._show_stats:
+                try:
+                    pname = self.playlist_name_labels[frame_idx].cget("text")
+                    self._refresh_stats(
+                        frame_idx, pname, self.frame_platforms[frame_idx]
+                    )
+                except (IndexError, tk.TclError):
+                    pass
         self._fit_window()
 
     def set_columns(self, count: int) -> None:
@@ -2254,8 +2274,8 @@ class MainWindow:
             return
 
         # Prevent a remove click mid-reload from racing the re-import
-        # (_on_remove_song checks this flag; the reload button is not
-        # disabled - the flag is the guard).
+        # (_on_remove_song checks this flag; the reload button is also
+        # disabled below as a UX guard against double-clicks).
         main_frame = self.frames[frame_idx]
         main_frame._syncing = True
 
@@ -2265,6 +2285,15 @@ class MainWindow:
 
         status_label = self.active_log_labels[frame_idx]["status"]
         status_label.config(text="Sync", background=C["label_playlist_warn_bg"])
+
+        # Disable the reload button for this card during the sync to
+        # prevent double-clicks; re-enabled in _on_reload_done.
+        reload_btn = self.active_log_labels[frame_idx].get("reload_btn")
+        if reload_btn is not None:
+            try:
+                reload_btn.configure(state="disabled")
+            except tk.TclError:
+                pass
 
         def on_done(
             name: str, count: int, status_text: str, thumb_url: str | None
@@ -2471,7 +2500,7 @@ class MainWindow:
                 continue
             playlist_id = getattr(frame, "playlist_id", "") or ""
 
-            sm = SongManager()
+            sm = self._song_manager
             matches = sm.search_songs(name, q, platform=platform, playlist_id=playlist_id)
 
             # Destroy previous results for this card.
