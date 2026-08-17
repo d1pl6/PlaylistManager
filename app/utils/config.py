@@ -17,6 +17,7 @@ DEFAULT_SETTINGS = {
     "ui_scale": {"value": "auto"},
     "showcase": {"count": "0"},          # int, 0 = off, N = show last N added songs
     "showcase_log": {"is_true": "yes"},  # show the log_artist/log_name/log_log row
+    "playlist_stats": {"is_true": "yes"},  # show the song count / followers / duration row
     "layout": {"columns": "2"},          # int, playlist card grid columns, clamped 1-4
 }
 
@@ -68,6 +69,10 @@ DEFAULT_THEME = {
         "background": "#404040",
         "foreground": "#FFFFFF",
         "readonlybackground": "#2A2A2A",
+    },
+    "label_playlist_stats": {
+        "background": "#2a2a2a",
+        "foreground": "#B0B0B0",
     },
 }
 
@@ -214,6 +219,10 @@ THEME_PRESETS = {
             "background": "#FFFFFF",
             "foreground": "#111111",
             "readonlybackground": "#F3F3F3",
+        },
+        "label_playlist_stats": {
+            "background": "#EBEBEB",
+            "foreground": "#555555",
         },
     },
 }

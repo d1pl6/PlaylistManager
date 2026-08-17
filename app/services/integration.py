@@ -239,6 +239,7 @@ class SpotifyIntegration(BaseIntegration):
                         if p.get("images")
                         else None,
                         "trackCount": p.get("tracks", {}).get("total", 0),
+                        "followerCount": p.get("followers", {}).get("total", 0),
                     }
                 )
             return out
@@ -259,6 +260,7 @@ class SpotifyIntegration(BaseIntegration):
                 "trackCount": data.get("tracks", {}).get("total", 0),
                 "owner_id": (data.get("owner") or {}).get("id", ""),
                 "collaborative": bool(data.get("collaborative")),
+                "followerCount": (data.get("followers") or {}).get("total", 0),
             }
         except Exception as e:
             logger.error(f"Spotify: failed to get playlist details: {e}")

@@ -222,6 +222,40 @@ class PlaylistStore:
                 PlaylistStore._write(playlists)
 
     @staticmethod
+    def update_metadata(
+        name: str,
+        platform: str,
+        playlist_id: str = "",
+        *,
+        follower_count: int | None = None,
+    ):
+        """Update optional metadata fields for a single playlist.
+
+        Matches by ``(platform, playlist_id)`` when available, falling back
+        to ``(platform, name)`` for legacy entries.  Only non-None keyword
+        arguments are written — omitted fields are left untouched.
+
+        Currently supported fields:
+
+        * ``follower_count`` (``followerCount`` in the JSON) — Spotify
+          playlists report ``followers.total``; YouTube Music playlists
+          have no equivalent and default to 0.
+        """
+        with _lock:
+            playlists = PlaylistStore.load_playlists()
+            target = _find_by_key(
+                playlists, playlist_id=playlist_id, platform=platform, name=name
+            )
+            if target is None:
+                return
+            changed = False
+            if follower_count is not None:
+                target["followerCount"] = follower_count
+                changed = True
+            if changed:
+                PlaylistStore._write(playlists)
+
+    @staticmethod
     def update_keybind(
         name: str, platform: str, hotkey: str, playlist_id: str = ""
     ):

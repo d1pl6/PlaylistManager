@@ -112,6 +112,7 @@ class PlaylistDialog:
             playlist_id = playlist.get("playlistId", "")
             thumb_url = ThumbnailService.from_data(playlist)
             playlist_name = playlist.get("title", "Unknown Playlist")
+            follower_count = playlist.get("followerCount", 0)
 
             btn = tk.Button(
                 scrollable_frame,
@@ -121,7 +122,7 @@ class PlaylistDialog:
                 width=px(40),
                 highlightthickness=0,
                 relief="raised",
-                command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
+                command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url, fc=follower_count: self._on_playlist_click(name, pid, tu, fc),
             )
             btn.pack(pady=5, padx=5)
 
@@ -134,7 +135,7 @@ class PlaylistDialog:
                 width=40,
                 highlightthickness=0,
                 relief="raised",
-                command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
+                command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url, fc=follower_count: self._on_playlist_click(name, pid, tu, fc),
             ).pack(pady=5)
 
             if thumb_url:
@@ -201,9 +202,9 @@ class PlaylistDialog:
             # and configure() - swallow the race, not a real failure.
             logger.debug("Dialog closed before thumbnail could be applied: %s", e)
 
-    def _on_playlist_click(self, playlist_name, playlist_id, thumb_url=None):
+    def _on_playlist_click(self, playlist_name, playlist_id, thumb_url=None, follower_count=0):
         self.close()
-        self.on_select(playlist_name, playlist_id, thumb_url)
+        self.on_select(playlist_name, playlist_id, thumb_url, follower_count)
 
     def cancel(self):
         if self.on_cancel:

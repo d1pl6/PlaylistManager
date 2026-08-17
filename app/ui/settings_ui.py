@@ -57,6 +57,7 @@ def show_settings_dialog(
     on_auto_resize_toggle=None,
     on_showcase_count_change=None,
     on_showcase_log_change=None,
+    on_playlist_stats_change=None,
     on_columns_change=None,
     on_check_updates_now=None
     ):
@@ -80,6 +81,8 @@ def show_settings_dialog(
             it the change only takes effect after a restart.
         on_showcase_log_change: optional callback applied live with the
             new show-log-row state (bool) when the checkbox changes.
+        on_playlist_stats_change: optional callback applied live with the
+            new show-stats state (bool) when the checkbox changes.
         on_columns_change: optional callback applied live with the new
             card column count (int) when the combobox changes - without
             it the change only takes effect after a restart.
@@ -162,6 +165,7 @@ def show_settings_dialog(
         tray_var_value = 1 if cfg.getboolean("hide_to_tray", "is_true", fallback=False) else 0
         showcase_count_value = cfg.getint("showcase", "count", fallback=0)
         showcase_log_value = 1 if cfg.getboolean("showcase_log", "is_true", fallback=True) else 0
+        playlist_stats_value = 1 if cfg.getboolean("playlist_stats", "is_true", fallback=True) else 0
         columns_value = cfg.getint("layout", "columns", fallback=2)
     except Exception as e:
         logger.error("Error loading settings, using defaults: %s", e)
@@ -172,6 +176,7 @@ def show_settings_dialog(
         tray_var_value = 0
         showcase_count_value = 0
         showcase_log_value = 1
+        playlist_stats_value = 1
         columns_value = 2
 
     update_var = tk.IntVar(value=update_var_value)
@@ -334,6 +339,23 @@ def show_settings_dialog(
         font=ui_font(10),
         command=_on_showcase_log_toggle,
         variable=showcase_log_var,
+    ).pack(fill="both", pady=(0,5))
+
+    def _on_playlist_stats_toggle():
+        _toggle_setting("playlist_stats", playlist_stats_var)
+        if on_playlist_stats_change is not None:
+            on_playlist_stats_change(playlist_stats_var.get() == 1)
+
+    playlist_stats_var = tk.IntVar(value=playlist_stats_value)
+    tk.Checkbutton(
+        appearance_section,
+        text="Show playlist stats (songs / duration / followers)",
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(10),
+        command=_on_playlist_stats_toggle,
+        variable=playlist_stats_var,
     ).pack(fill="both", pady=(0,5))
 
     def _on_ui_scale_change(value: str) -> None:

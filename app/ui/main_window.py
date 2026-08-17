@@ -55,6 +55,7 @@ CARD_H_BASE = 96
 # measured at runtime (winfo_reqheight) - per-row constants underestimate
 # real font metrics and starve the header row, see _update_card_height.
 LOG_ROW_H_BASE = 23
+STATS_ROW_H_BASE = 20
 
 
 class MainWindow:
@@ -83,6 +84,7 @@ class MainWindow:
         self._hide_to_tray = self._read_hide_to_tray_setting()
         self._showcase_count = self._read_showcase_count_setting()
         self._show_log = self._read_show_log_setting()
+        self._show_stats = self._read_show_stats_setting()
         self._columns = self._read_columns_setting()
 
         # Set by App._start_tray() once the window exists; None when no
@@ -234,6 +236,10 @@ class MainWindow:
         frame_playlist_bg = C["frame_playlist_bg"]
         for frame_idx, frame in enumerate(self.frames):
             frame.configure(background=frame_playlist_bg)
+            # Also update the stats frame background.
+            stats_frame = getattr(frame, "main_stats_frame", None)
+            if stats_frame is not None:
+                stats_frame.configure(background=frame_playlist_bg)
             labels = self.active_log_labels.get(frame_idx)
             if labels is None:
                 continue
@@ -250,6 +256,14 @@ class MainWindow:
                     background=C["label_playlist_log_bg"],
                     foreground=C["label_playlist_log_fg"],
                 )
+
+            for key in ("stats_songs", "stats_duration", "stats_followers"):
+                lbl = labels.get(key)
+                if lbl is not None:
+                    lbl.configure(
+                        background=C["label_playlist_stats_bg"],
+                        foreground=C["label_playlist_stats_fg"],
+                    )
 
             entry = labels["keybind_entry"]
             if self._recording_frame_idx != frame_idx:
@@ -269,6 +283,9 @@ class MainWindow:
                 labels["name"],
                 name_label,
             }
+            for v in ("stats_songs", "stats_duration", "stats_followers"):
+                if labels.get(v) is not None:
+                    known_labels.add(labels[v])
             for child in frame.winfo_children():
                 for widget in child.winfo_children():
                     if isinstance(widget, tk.Label) and widget not in known_labels:
@@ -336,6 +353,7 @@ class MainWindow:
                 on_auto_resize_toggle=self.set_auto_resize,
                 on_showcase_count_change=self.set_showcase_count,
                 on_showcase_log_change=self.set_showcase_log,
+                on_playlist_stats_change=self.set_playlist_stats,
                 on_columns_change=self.set_columns,
                 on_check_updates_now=lambda: self.ac.app._check_updates(force=True),
             ),
@@ -561,8 +579,8 @@ class MainWindow:
 
         dialog = PlaylistDialog(
             self.root,
-            lambda name, pid, thumb_url: on_select(
-                name, integration.id, pid, thumb_url
+            lambda name, pid, thumb_url, fc: on_select(
+                name, integration.id, pid, thumb_url, fc
             ),
             on_cancel=on_cancel,
             columns=self._columns,
@@ -602,6 +620,7 @@ class MainWindow:
                 if cover_label:
                     self._set_playlist_cover(cover_label, thumb_url)
 
+            self._refresh_stats(frame_idx, playlist_name, platform)
             self._import_playlist_tracks(playlist_name, platform, playlist_id, frame_idx)
 
     # ------------------------------------------------------------------
@@ -741,12 +760,80 @@ class MainWindow:
         main_frame.showcase_rows = len(rows)
         if rows:
             showcase_frame = self._build_showcase_frame(main_frame, rows)
-            showcase_frame.grid(row=2, column=0, sticky="nsew")
+            showcase_frame.grid(row=3, column=0, sticky="nsew")
             main_frame.showcase_frame = showcase_frame
             for thumb_label, url in showcase_frame._thumb_jobs:
                 self._fetch_song_thumb(thumb_label, url)
 
         self._update_card_height(frame_idx)
+
+    def _refresh_stats(
+        self, frame_idx: int, playlist_name: str, platform: str
+    ) -> None:
+        """Refresh the stats row for a playlist card.
+
+        Reads the local song count and total duration from SQLite and the
+        platform follower count from the store.  The row is updated in
+        place (no frame destroy/rebuild).
+        """
+        try:
+            main_frame = self.frames[frame_idx]
+        except IndexError:
+            return
+        stats_frame = getattr(main_frame, "main_stats_frame", None)
+        if stats_frame is None:
+            return
+
+        labels = self.active_log_labels.get(frame_idx)
+        if labels is None:
+            return
+
+        playlist_id = getattr(main_frame, "playlist_id", "") or ""
+
+        sm = SongManager()
+        song_count = sm.get_song_count(
+            playlist_name, platform=platform, playlist_id=playlist_id
+        )
+        total_seconds = sm.get_total_duration(
+            playlist_name, platform=platform, playlist_id=playlist_id
+        )
+
+        store_entry = PlaylistStore.find_playlist(
+            playlist_name, platform=platform, playlist_id=playlist_id
+        )
+        follower_count = (store_entry or {}).get("followerCount", 0) if store_entry else 0
+
+        stats_songs = labels.get("stats_songs")
+        stats_duration = labels.get("stats_duration")
+        stats_followers = labels.get("stats_followers")
+
+        if stats_songs is not None:
+            stats_songs.config(text=f"{song_count} song{'s' if song_count != 1 else ''}")
+        if stats_duration is not None:
+            stats_duration.config(text=self._format_duration(total_seconds))
+        if stats_followers is not None:
+            if follower_count > 0:
+                stats_followers.config(
+                    text=f"{follower_count} follower{'s' if follower_count != 1 else ''}"
+                )
+            else:
+                stats_followers.config(text="")
+
+    @staticmethod
+    def _format_duration(seconds: int) -> str:
+        """Format a duration in seconds as a short human-readable string.
+
+        Examples: ``"1h 54m"``, ``"23m 05s"``, ``"42s"``, ``""`` (0).
+        """
+        if seconds <= 0:
+            return ""
+        h, remainder = divmod(int(seconds), 3600)
+        m, s = divmod(remainder, 60)
+        if h > 0:
+            return f"{h}h {m:02d}m"
+        if m > 0:
+            return f"{m}m {s:02d}s"
+        return f"{s}s"
 
     def _build_showcase_frame(self, main_frame: tk.Frame, songs: list) -> tk.Frame:
         """Create the song rows inside a fresh showcase frame.
@@ -922,6 +1009,9 @@ class MainWindow:
                         self._refresh_showcase(
                             cur_idx, pname, self.frame_platforms[cur_idx]
                         )
+                        self._refresh_stats(
+                            cur_idx, pname, self.frame_platforms[cur_idx]
+                        )
                     except (ValueError, IndexError):
                         pass
                 else:
@@ -955,13 +1045,15 @@ class MainWindow:
 
         The card's grid requests: the header (~px(66) - it contains BOTH
         the name row and the keybind row), the log row (px(23), when
-        visible) and the showcase frame's *actual* requested height.
+        visible), the stats row (px(20), when visible) and the showcase
+        frame's *actual* requested height.
         The showcase height is measured via winfo_reqheight() instead of
         a hardcoded per-row constant: font metrics and UI scale vary, and
         an underestimate starves the weighted header row (Tk shrinks
         weighted rows first), squishing the keybind row and letting the
         showcase overlap it.  CARD_H_BASE bakes in header + log + ~px(7)
-        slack; hiding the log row removes exactly its height.
+        slack; hiding the log row removes exactly its height.  The stats
+        row is *added* on top (it was never in CARD_H_BASE).
         """
         try:
             main_frame = self.frames[frame_idx]
@@ -978,6 +1070,8 @@ class MainWindow:
         height = px(CARD_H_BASE) + showcase_h
         if not self._show_log:
             height -= px(LOG_ROW_H_BASE)
+        if self._show_stats:
+            height += px(STATS_ROW_H_BASE)
         main_frame.config(height=max(px(CARD_H_BASE) - px(LOG_ROW_H_BASE), height))
         self._update_scroll_region()
 
@@ -999,6 +1093,21 @@ class MainWindow:
             log_frame.grid()
         else:
             log_frame.grid_remove()
+        self._update_card_height(frame_idx)
+
+    def _apply_stats_visibility(self, frame_idx: int) -> None:
+        """Show or hide the stats row of a card."""
+        try:
+            main_frame = self.frames[frame_idx]
+        except IndexError:
+            return
+        stats_frame = getattr(main_frame, "main_stats_frame", None)
+        if stats_frame is None:
+            return
+        if self._show_stats:
+            stats_frame.grid()
+        else:
+            stats_frame.grid_remove()
         self._update_card_height(frame_idx)
 
     # ------------------------------------------------------------------
@@ -1117,6 +1226,9 @@ class MainWindow:
         self._refresh_showcase(
             frame_idx, playlist_name, self.frame_platforms[frame_idx]
         )
+        self._refresh_stats(
+            frame_idx, playlist_name, self.frame_platforms[frame_idx]
+        )
         logger.info("Import finished for '%s': %s", playlist_name, status_text)
         return frame_idx
 
@@ -1194,6 +1306,9 @@ class MainWindow:
             self._refresh_showcase(
                 cur_idx, playlist_name, self.frame_platforms[cur_idx]
             )
+            self._refresh_stats(
+                cur_idx, playlist_name, self.frame_platforms[cur_idx]
+            )
 
         return KeybindCallbacks(
             on_status=on_status,
@@ -1240,6 +1355,7 @@ class MainWindow:
 
                     self._update_log_labels_from_db(i, name, platform)
                     self._refresh_showcase(i, name, platform)
+                    self._refresh_stats(i, name, platform)
 
                     thumb_url = playlist.get("thumbnail_url", "")
                     if thumb_url:
@@ -1405,11 +1521,41 @@ class MainWindow:
             )
             main_frame.grid_propagate(False)
             main_frame.grid_rowconfigure(0, weight=1)
-            main_frame.grid_rowconfigure(1, weight=1)
-            main_frame.grid_rowconfigure(2, weight=0)
+            main_frame.grid_rowconfigure(1, weight=0)
+            main_frame.grid_rowconfigure(2, weight=1)
+            main_frame.grid_rowconfigure(3, weight=0)
             main_frame.grid_columnconfigure(0, weight=1)
             main_header_frame = tk.Frame(main_frame, background=frame_playlist_bg)
+            main_stats_frame = tk.Frame(main_frame, background=frame_playlist_bg, width=px(CARD_W_BASE))
             main_log_frame = tk.Frame(main_frame, background=frame_playlist_bg, width=px(CARD_W_BASE))
+
+            # --- stats labels --------------------------------------------------
+            stats_bg = C["label_playlist_stats_bg"]
+            stats_fg = C["label_playlist_stats_fg"]
+            stats_songs = tk.Label(
+                main_stats_frame,
+                text="",
+                font=ui_font(10),
+                background=stats_bg,
+                foreground=stats_fg,
+                anchor="w",
+            )
+            stats_duration = tk.Label(
+                main_stats_frame,
+                text="",
+                font=ui_font(10),
+                background=stats_bg,
+                foreground=stats_fg,
+                anchor="center",
+            )
+            stats_followers = tk.Label(
+                main_stats_frame,
+                text="",
+                font=ui_font(10),
+                background=stats_bg,
+                foreground=stats_fg,
+                anchor="e",
+            )
 
             playlist_cover = tk.Label(
                 main_header_frame,
@@ -1516,6 +1662,9 @@ class MainWindow:
                 "status": log_status,
                 "keybind_entry": playlist_keybind,
                 "cover": playlist_cover,
+                "stats_songs": stats_songs,
+                "stats_duration": stats_duration,
+                "stats_followers": stats_followers,
             }
 
             # Weighted name column: absorbs/clips long text instead of
@@ -1525,13 +1674,21 @@ class MainWindow:
             main_log_frame.grid_columnconfigure(2, weight=1)
 
             main_header_frame.grid(row=0, column=0, sticky="nsew")
-            main_log_frame.grid(row=1, column=0, sticky="nsew")
+            main_stats_frame.grid(row=1, column=0, sticky="nsew")
+            main_log_frame.grid(row=2, column=0, sticky="nsew")
 
             playlist_cover.grid(row=0, column=0, sticky="ne", rowspan=2)
             playlist_name.grid(row=0, column=1, sticky="nswe")
             close_playlist.grid(row=0, column=2, sticky="ne")
             playlist_keybind.grid(row=1, column=1, sticky="nswe")
             reload_database.grid(row=1, column=2, sticky="ne")
+
+            stats_songs.grid(row=0, column=0, padx=4, sticky="nswe")
+            stats_duration.grid(row=0, column=1, padx=4, sticky="nswe")
+            stats_followers.grid(row=0, column=2, padx=4, sticky="nswe")
+            main_stats_frame.grid_columnconfigure(0, weight=1)
+            main_stats_frame.grid_columnconfigure(1, weight=0)
+            main_stats_frame.grid_columnconfigure(2, weight=1)
 
             log_artist.grid(row=0, column=0, padx=(0, 2), sticky="nswe")
             log_helper_1.grid(row=0, column=1, sticky="nswe")
@@ -1543,8 +1700,11 @@ class MainWindow:
             # attributes travel with the widget itself.
             main_frame.showcase_rows = 0
             main_frame.showcase_frame = None
+            main_frame.main_stats_frame = main_stats_frame
             main_frame.main_log_frame = main_log_frame
             main_frame.playlist_id = ""  # pinned by setup()/_on_add_playlist_frame
+            if not self._show_stats:
+                main_stats_frame.grid_remove()
             if not self._show_log:
                 main_log_frame.grid_remove()
             self._update_card_height(i)
@@ -1754,6 +1914,11 @@ class MainWindow:
         return get_setting("showcase_log", True)
 
     @staticmethod
+    def _read_show_stats_setting() -> bool:
+        """Read the playlist-stats-row setting once."""
+        return get_setting("playlist_stats", True)
+
+    @staticmethod
     def _read_columns_setting() -> int:
         """Read the card-column count once; clamp to [1, 4]."""
         try:
@@ -1796,6 +1961,7 @@ class MainWindow:
             except (IndexError, tk.TclError):
                 continue
             self._refresh_showcase(frame_idx, playlist_name, platform)
+            self._refresh_stats(frame_idx, playlist_name, platform)
         # The window re-fits only when auto-resize is on (see _fit_window);
         # otherwise the scrollable cards area handles the overflow.
         self._fit_window()
@@ -1809,6 +1975,17 @@ class MainWindow:
         self._show_log = bool(show)
         for frame_idx in list(self.active_log_labels):
             self._apply_log_visibility(frame_idx)
+        self._fit_window()
+
+    def set_playlist_stats(self, show: bool) -> None:
+        """Live-apply the show-playlist-stats setting (called from Settings).
+
+        Hiding the stats row shrinks the cards; the window follows only
+        when auto-resize is on.
+        """
+        self._show_stats = bool(show)
+        for frame_idx in list(self.active_log_labels):
+            self._apply_stats_visibility(frame_idx)
         self._fit_window()
 
     def set_columns(self, count: int) -> None:

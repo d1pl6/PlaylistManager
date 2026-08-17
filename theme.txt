@@ -37,4 +37,6 @@ entry_default_ro_bg
 entry_playlist_bg
 entry_playlist_fg
 entry_playlist_ro_bg
+label_playlist_stats_bg
+label_playlist_stats_fg
 

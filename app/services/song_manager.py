@@ -751,3 +751,32 @@ class SongManager:
         except sqlite3.Error as e:
             logger.error(f"Error getting song count from {playlist_name}: {e}")
             return 0
+
+    def get_total_duration(
+        self,
+        playlist_name: str,
+        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
+    ) -> int:
+        """Get the total duration of all songs in the playlist (in seconds).
+
+        Args:
+            playlist_name: Name of the playlist
+            platform: Platform identifier for the per-platform DB
+            playlist_id: Stable API identifier for the per-playlist DB
+
+        Returns:
+            Total duration in seconds (0 on error or empty playlist).
+        """
+        try:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COALESCE(SUM(duration), 0) FROM songs")
+                row = cursor.fetchone()
+                return row[0] if row else 0
+
+        except sqlite3.Error as e:
+            logger.error(f"Error getting total duration from {playlist_name}: {e}")
+            return 0
