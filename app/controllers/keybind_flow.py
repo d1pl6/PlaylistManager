@@ -506,34 +506,40 @@ class SpotifyFlowController:
     ) -> None:
         """Execute the add-to-playlist flow for the currently playing track.
 
-        The ``url``, ``song_data`` and ``playlist_id`` kwargs exist only so
-        the CLI batch driver (:func:`cli._run_flow`) can call every flow
-        uniformly - the Spotify flow reads the currently-playing track from
-        the API itself, so ``url``/``song_data`` are ignored; ``playlist_id``
-        skips the by-name playlist lookup when the store already knows it.
-        Without them the CLI's keyword call would raise TypeError and every
-        Spotify add would fail.
+        When ``song_data`` is provided (CLI batch mode), the pre-fetched
+        dict is reused across all target playlists so the same song is
+        added to every playlist.  Without it the flow reads the
+        currently-playing track from the Spotify API.  ``url`` is unused
+        (accepted for caller uniformity).  ``playlist_id`` skips the
+        by-name playlist lookup when the store already knows it.
         """
         try:
             on_status("Fetch")
-            playing = self.spotify_integration.get_currently_playing()
-            if not playing:
-                on_error("Nothing playing")
-                return
+            if song_data is None:
+                playing = self.spotify_integration.get_currently_playing()
+                if not playing:
+                    on_error("Nothing playing")
+                    return
 
-            title = playing["title"]
-            artists = playing["artists"]
-            duration = playing["duration_ms"] // 1000
-            track_id = playing["track_id"]
-            thumbnail = playing.get("thumbnail")
+                title = playing["title"]
+                artists = playing["artists"]
+                duration = playing["duration_ms"] // 1000
+                track_id = playing["track_id"]
+                thumbnail = playing.get("thumbnail")
 
-            song_data = {
-                "title": title,
-                "artists": artists,
-                "duration": duration,
-                "track_id": track_id,
-                "thumbnail": thumbnail,
-            }
+                song_data = {
+                    "title": title,
+                    "artists": artists,
+                    "duration": duration,
+                    "track_id": track_id,
+                    "thumbnail": thumbnail,
+                }
+            else:
+                title = song_data["title"]
+                artists = song_data["artists"]
+                duration = song_data["duration"]
+                track_id = song_data["track_id"]
+                thumbnail = song_data.get("thumbnail")
 
             on_status("Check")
             # Store-liveness first (see KeybindFlowController): a closed

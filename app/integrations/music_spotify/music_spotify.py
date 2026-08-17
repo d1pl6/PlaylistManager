@@ -146,8 +146,9 @@ class SpotifyAPI:
     def _request(
         self, method: str, endpoint: str, **kwargs
     ) -> Optional[Dict]:
-        """Make an API request with automatic 401 refresh+retry.
-        Returns parsed JSON response, or None on error/204.
+        """Make an API request with automatic 401 refresh+retry and429 backoff.
+
+        Returns parsed JSON response, or ``None`` on error/204/429-after-retry.
         """
         url = f"{SPOTIFY_API_BASE}{endpoint}"
         try:
@@ -160,6 +161,15 @@ class SpotifyAPI:
                 if not self._refresh_access_token():
                     logger.error("Failed to refresh token after 401")
                     return None
+                resp = self._session.request(
+                    method, url, headers=self._get_headers(), **kwargs
+                )
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get("Retry-After", 1))
+                logger.warning(
+                    "Spotify rate-limited; retrying after %ds", retry_after
+                )
+                time.sleep(retry_after)
                 resp = self._session.request(
                     method, url, headers=self._get_headers(), **kwargs
                 )
@@ -202,7 +212,7 @@ class SpotifyAPI:
             playlists.extend(data.get("items", []))
             url = data.get("next")
             if url:
-                url = url.replace(SPOTIFY_API_BASE, "")
+                url = url.removeprefix(SPOTIFY_API_BASE)
                 params = None
         return playlists
 
@@ -227,80 +237,50 @@ class SpotifyAPI:
                     tracks.append(track)
             url = data.get("next")
             if url:
-                url = url.replace(SPOTIFY_API_BASE, "")
+                url = url.removeprefix(SPOTIFY_API_BASE)
                 params = None
         return tracks
 
     def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]) -> bool:
+        """Add tracks to a playlist.  Routes through :meth:`_request` for
+        consistent 401-refresh +429-backoff handling."""
         chunk_size = 100
-        success = True
         for chunk_start in range(0, len(track_ids), chunk_size):
-            chunk = track_ids[chunk_start:chunk_start + chunk_size]
+            chunk = track_ids[chunk_start : chunk_start + chunk_size]
             uris = [f"spotify:track:{tid}" for tid in chunk]
-            try:
-                resp = self._session.post(
-                    f"{SPOTIFY_API_BASE}/playlists/{playlist_id}/tracks",
-                    headers=self._get_headers(),
-                    json={"uris": uris},
-                )
-                if resp.status_code == 401:
-                    if not self._refresh_access_token():
-                        logger.error("Failed to refresh token for track addition")
-                        return False
-                    resp = self._session.post(
-                        f"{SPOTIFY_API_BASE}/playlists/{playlist_id}/tracks",
-                        headers=self._get_headers(),
-                        json={"uris": uris},
-                    )
-                if resp.status_code in (200, 201):
-                    logger.info(
-                        f"Added {len(chunk)} tracks to playlist {playlist_id}"
-                    )
-                else:
-                    logger.error(
-                        f"Failed to add tracks: {resp.status_code} {resp.text[:200]}"
-                    )
-                    success = False
-            except Exception as e:
-                logger.error(f"Error adding tracks to playlist: {e}")
+            result = self._request(
+                "POST",
+                f"/playlists/{playlist_id}/tracks",
+                json={"uris": uris},
+            )
+            if result is None:
                 return False
-        return success
+            logger.info(
+                f"Added {len(chunk)} tracks to playlist {playlist_id}"
+            )
+        return True
 
     def remove_track_from_playlist(self, playlist_id: str, track_id: str) -> bool:
         """Remove a single track via DELETE /v1/playlists/{id}/tracks.
 
-        Mirrors the 401 refresh+retry and ``>= 400 -> None`` handling of
-        :meth:`add_tracks_to_playlist`.  Returns True only when Spotify
-        confirmed the removal (200 + snapshot_id body).
+        Routes through :meth:`_request` for consistent 401-refresh +429-backoff
+        handling.  Returns True only when Spotify confirmed the removal
+        (200 + snapshot_id body).
         """
-        url = f"{SPOTIFY_API_BASE}/playlists/{playlist_id}/tracks"
-        try:
-            resp = self._session.delete(
-                url,
-                headers=self._get_headers(),
-                json={"tracks": [{"uri": f"spotify:track:{track_id}"}]},
+        result = self._request(
+            "DELETE",
+            f"/playlists/{playlist_id}/tracks",
+            json={"tracks": [{"uri": f"spotify:track:{track_id}"}]},
+        )
+        if result is not None:
+            logger.info(
+                f"Removed track {track_id} from playlist {playlist_id}"
             )
-            if resp.status_code == 401:
-                if not self._refresh_access_token():
-                    logger.error("Failed to refresh token for track removal")
-                    return False
-                resp = self._session.delete(
-                    url,
-                    headers=self._get_headers(),
-                    json={"tracks": [{"uri": f"spotify:track:{track_id}"}]},
-                )
-            if resp.status_code in (200, 201, 202):
-                logger.info(
-                    f"Removed track {track_id} from playlist {playlist_id}"
-                )
-                return True
-            logger.error(
-                f"Failed to remove track: {resp.status_code} {resp.text[:200]}"
-            )
-            return False
-        except Exception as e:
-            logger.error(f"Error removing track from playlist: {e}")
-            return False
+            return True
+        logger.error(
+            f"Failed to remove track {track_id} from playlist {playlist_id}"
+        )
+        return False
 
     def get_playlist_id_by_name(self, name: str) -> Optional[str]:
         playlists = self.get_playlists(limit=50)
@@ -310,6 +290,13 @@ class SpotifyAPI:
         return None
 
     def get_currently_playing(self) -> Optional[Dict]:
+        # Pre-flight token check: _request silently swallows auth errors
+        # (failed refresh, revoked token) as None, but callers need to
+        # distinguish "nothing is playing" from "auth is broken".
+        if not self._ensure_token():
+            raise RuntimeError(
+                "Spotify authentication has expired — please re-login"
+            )
         data = self._get("/me/player/currently-playing")
         if not data or not data.get("item"):
             return None

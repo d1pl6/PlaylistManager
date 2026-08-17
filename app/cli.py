@@ -341,10 +341,13 @@ def run_add(spec: str) -> int:
         yt_url, yt_song_data, yt_error = _capture_yt_song(keybind_flow, receiver)
 
     sp_flow = None
+    sp_song_data = None
+    sp_error = ""
     if sp_targets and sp_integration is not None:
         from controllers.keybind_flow import SpotifyFlowController
 
         sp_flow = SpotifyFlowController(sp_integration, song_manager)
+        sp_song_data, sp_error = _capture_spotify_song(sp_flow)
 
     failures = 0
     for number, entry in targets:
@@ -368,9 +371,11 @@ def run_add(spec: str) -> int:
                 ok, message = False, (
                     "Error: Spotify is not configured — run the GUI auth setup first"
                 )
+            elif sp_song_data is None:
+                ok, message = False, f"Error: {sp_error or 'Nothing playing'}"
             else:
                 ok, message = _run_flow(
-                    sp_flow, name,
+                    sp_flow, name, song_data=sp_song_data,
                     playlist_id=entry.get("playlist_id") or None,
                 )
         else:
@@ -721,6 +726,30 @@ def run_logout(platform: str) -> int:
     if n_dbs:
         print(f"{platform}: deleted {n_dbs} local database file(s)")
     return 0
+
+
+def _capture_spotify_song(
+    sp_flow,
+) -> Tuple[Optional[Dict], str]:
+    """Fetch the currently-playing Spotify track once for CLI batch mode.
+
+    Returns ``(song_data, error)`` — on failure *song_data* is ``None``
+    and *error* describes what went wrong ("" on success).
+    """
+    try:
+        playing = sp_flow.spotify_integration.get_currently_playing()
+    except Exception as e:
+        logger.error(f"Failed to fetch Spotify currently-playing: {e}", exc_info=True)
+        return None, str(e)
+    if not playing:
+        return None, "Nothing playing on Spotify"
+    return {
+        "title": playing["title"],
+        "artists": playing["artists"],
+        "duration": playing["duration_ms"] // 1000,
+        "track_id": playing["track_id"],
+        "thumbnail": playing.get("thumbnail"),
+    }, ""
 
 
 def _capture_yt_song(

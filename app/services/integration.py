@@ -223,6 +223,11 @@ class SpotifyIntegration(BaseIntegration):
             # those reject add-song calls ("not owner or collaborator") and
             # only clutter the picker.  Keep owned + collaborative entries.
             owner_id = self.spotify_api.get_user_id()
+            if owner_id is None:
+                logger.warning(
+                    "Could not determine Spotify user id; non-owned "
+                    "playlists will appear in the picker"
+                )
             out = []
             for p in raw:
                 if (
