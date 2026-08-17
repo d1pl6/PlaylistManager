@@ -94,6 +94,7 @@ class MainWindow:
         self._search_entry: tk.Entry | None = None
         self._search_var: tk.StringVar | None = None
         self._search_results: dict[int, tk.Frame] = {}  # per-card results frames
+        self._song_search_after_id: str | None = None  # pending debounce timer
 
         # Set by App._start_tray() once the window exists; None when no
         # tray backend is available.
@@ -618,6 +619,8 @@ class MainWindow:
     def _show_playlist_dialog(self, playlists, integration, on_select, on_cancel) -> None:
         """Create the playlist selection dialog."""
         self.btn_add_playlist.configure(state="disabled", image=self.loading_img)
+        if self._search_mode is not None:
+            self._dismiss_search()
         self._hide_main_content()
 
         dialog = PlaylistDialog(
@@ -2398,6 +2401,7 @@ class MainWindow:
 
     def _dismiss_search(self) -> None:
         """Destroy the search bar and restore the default view."""
+        self._cancel_song_search_debounce()
         if self._search_frame is not None:
             try:
                 self._search_frame.grid_forget()
@@ -2427,6 +2431,15 @@ class MainWindow:
         self._dismiss_all_search_results()
         self._sync_empty_state()
         self._update_scroll_region()
+
+    def _cancel_song_search_debounce(self) -> None:
+        """Cancel any pending debounced song search."""
+        if self._song_search_after_id is not None:
+            try:
+                self.root.after_cancel(self._song_search_after_id)
+            except (tk.TclError, ValueError):
+                pass
+            self._song_search_after_id = None
 
     def _on_search_focus_in(self, event=None) -> None:
         """Clear the placeholder text when the entry gains focus."""
@@ -2458,7 +2471,10 @@ class MainWindow:
         if self._search_mode == "playlist":
             self._filter_playlists(query)
         elif self._search_mode == "song":
-            self._filter_songs(query)
+            self._cancel_song_search_debounce()
+            self._song_search_after_id = self.root.after(
+                200, self._filter_songs, query
+            )
 
     def _filter_playlists(self, query: str) -> None:
         """Show/hide playlist cards based on name substring match."""
@@ -2492,10 +2508,15 @@ class MainWindow:
         if not q:
             self._dismiss_all_search_results()
             return
-        for i, frame in enumerate(self.frames):
+        # Snapshot frame lists so a concurrent close_main_frame (via a
+        # deferred callback) cannot shift indices mid-iteration.
+        frames_snapshot = list(self.frames)
+        names_snapshot = list(self.playlist_name_labels)
+        platforms_snapshot = list(self.frame_platforms)
+        for i, frame in enumerate(frames_snapshot):
             try:
-                name = self.playlist_name_labels[i].cget("text")
-                platform = self.frame_platforms[i]
+                name = names_snapshot[i].cget("text")
+                platform = platforms_snapshot[i]
             except (IndexError, tk.TclError):
                 continue
             playlist_id = getattr(frame, "playlist_id", "") or ""

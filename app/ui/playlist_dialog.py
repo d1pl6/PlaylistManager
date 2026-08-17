@@ -56,16 +56,8 @@ class PlaylistDialog:
 
         self.choose_frame = tk.Frame(self.parent, background=dialog_bg)
         self.choose_frame.grid(
-            row=1, column=0, columnspan=self.columns, sticky="nsew"
+            row=2, column=0, columnspan=self.columns, sticky="nsew"
         )
-        # The picker overlays the root grid's row 1, which normally holds
-        # the (fixed-size, top-anchored) playlist cards and is unweighted.
-        # Give that row a weight while the picker is up so it fills the
-        # window; close() reverts it so the card layout is untouched.
-        try:
-            self.parent.grid_rowconfigure(1, weight=1)
-        except tk.TclError:
-            pass
 
         title_frame = tk.Frame(self.choose_frame, background=dialog_bg)
         title_frame.pack(pady=5)
@@ -235,12 +227,6 @@ class PlaylistDialog:
             pass
         for _ in range(_THUMB_WORKERS):
             self._thumb_tasks.put(_WORKER_STOP)
-        # NOTE: do NOT touch self.parent.grid_rowconfigure(1, ...) here.
-        # The root's row-1 weight belongs to MainWindow (it re-asserts
-        # weight=1 in _show_main_content); resetting it to 0 left the row
-        # unweighted on re-show, so the grid gave main_area its full
-        # content-height request (canvas grew to fit the content, yview
-        # reported "no overflow", and the scrollbar never came back).
         if self.choose_frame:
             try:
                 self.choose_frame.destroy()
