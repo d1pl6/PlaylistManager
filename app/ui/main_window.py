@@ -28,7 +28,7 @@ from ui.settings_ui import show_settings_dialog
 from ui.tooltip import ToolTip
 from utils.window import center_window, resize_window
 from utils.config import get_setting, get_setting_value
-from utils.theme import C, load_theme, btn_colors, hover_bg
+from utils.theme import C, load_theme, btn_colors, hover_bg, dimmed_fg
 from utils.platform import is_wayland_session
 
 logger = logging.getLogger(__name__)
@@ -251,10 +251,14 @@ class MainWindow:
         frame_playlist_bg = C["frame_playlist_bg"]
         for frame_idx, frame in enumerate(self.frames):
             frame.configure(background=frame_playlist_bg)
-            # Also update the stats frame background.
-            stats_frame = getattr(frame, "main_stats_frame", None)
-            if stats_frame is not None:
-                stats_frame.configure(background=frame_playlist_bg)
+            # Update direct child container frames that share the card
+            # background so a theme change doesn't leave stale colours
+            # in padding gaps between gridded children.
+            for attr in ("main_header_frame", "main_stats_frame", "main_log_frame",
+                         "showcase_frame"):
+                container = getattr(frame, attr, None)
+                if container is not None:
+                    container.configure(background=frame_playlist_bg)
             labels = self.active_log_labels.get(frame_idx)
             if labels is None:
                 continue
@@ -702,7 +706,7 @@ class MainWindow:
                 return
             tk_img = ThumbnailService.to_photoimage(img)
         except Exception as e:
-            logger.error(f"Failed to create cover PhotoImage: {e}")
+            logger.error("Failed to create cover PhotoImage: %s", e)
             return
         try:
             cover_label.configure(image=tk_img)
@@ -1764,6 +1768,7 @@ class MainWindow:
             # attributes travel with the widget itself.
             main_frame.showcase_rows = 0
             main_frame.showcase_frame = None
+            main_frame.main_header_frame = main_header_frame
             main_frame.main_stats_frame = main_stats_frame
             main_frame.main_log_frame = main_log_frame
             main_frame.playlist_id = ""  # pinned by setup()/_on_add_playlist_frame
@@ -1832,34 +1837,15 @@ class MainWindow:
             col = i % self._columns
             row = (i // self._columns) + 1
             self.frame_positions.append((row, col))
-            frame.grid(
-                row=row,
-                column=col,
-                sticky=self._column_sticky(col),
-                pady=(5, 0),
-                padx=2.5,
-            )
-            # Tk gotcha: grid_forget() on a widget destroys its grid
-            # state, grid_propagate(False) included - a forgotten card
-            # re-grids with propagate defaulting back to True, letting the
-            # log row's request widen the card and, on the next resize,
-            # the whole window.  Re-assert it on every re-grid.
-            frame.grid_propagate(False)
+            self._restore_frame_grid(frame, i)
         self._update_scroll_region()
 
     def _show_main_content(self) -> None:
         self.main_area.grid(
             row=2, column=0, columnspan=self._columns, sticky="nsew"
         )
-        for frame, (row, col) in zip(self.frames, self.frame_positions):
-            frame.grid(
-                row=row,
-                column=col,
-                sticky=self._column_sticky(col),
-                pady=(5, 0),
-                padx=2.5,
-            )
-            frame.grid_propagate(False)
+        for i, frame in enumerate(self.frames):
+            self._restore_frame_grid(frame, i)
         self._update_scroll_region()
         self._sync_empty_state()
 
@@ -2090,6 +2076,11 @@ class MainWindow:
         for c in range(self._columns):
             self.root.grid_columnconfigure(c, weight=1)
             self.content_frame.grid_columnconfigure(c, weight=1)
+        # Zero weight on columns above the new count so the grid doesn't
+        # allocate dead space if the user manually resizes wider.
+        for c in range(self._columns, 4):
+            self.root.grid_columnconfigure(c, weight=0)
+            self.content_frame.grid_columnconfigure(c, weight=0)
         self.header_frame.grid_configure(columnspan=self._columns)
         self.main_area.grid_configure(columnspan=self._columns)
         self._layout_frames()
@@ -2399,6 +2390,21 @@ class MainWindow:
 
         self._search_entry.focus_set()
 
+    def _restore_frame_grid(self, frame: tk.Frame, idx: int) -> None:
+        """Re-grid a card frame at its stored position and re-assert fixed size.
+
+        After ``grid_forget()`` the frame's ``grid_propagate(False)`` is
+        lost, so re-assert it to prevent the card from auto-growing.
+        """
+        col = self.frame_positions[idx]
+        frame.grid(
+            row=col[0], column=col[1],
+            sticky=self._column_sticky(col[1]),
+            pady=(5, 0), padx=2.5,
+        )
+        # Tk gotcha: grid_forget() destroys grid_propagate(False).
+        frame.grid_propagate(False)
+
     def _dismiss_search(self) -> None:
         """Destroy the search bar and restore the default view."""
         self._cancel_song_search_debounce()
@@ -2416,14 +2422,7 @@ class MainWindow:
         # Restore all playlist cards.
         for i, frame in enumerate(self.frames):
             try:
-                col = self.frame_positions[i]
-                frame.grid(
-                    row=col[0], column=col[1],
-                    sticky=self._column_sticky(col[1]),
-                    pady=(5, 0), padx=2.5,
-                )
-                # Tk gotcha: grid_forget() destroys grid_propagate(False).
-                frame.grid_propagate(False)
+                self._restore_frame_grid(frame, i)
             except (IndexError, tk.TclError):
                 pass
 
@@ -2458,7 +2457,7 @@ class MainWindow:
             placeholder = "Search playlists..." if self._search_mode == "playlist" else "Search songs..."
             self._search_entry.delete(0, tk.END)
             self._search_entry.insert(0, placeholder)
-            self._search_entry.configure(foreground="#888888")
+            self._search_entry.configure(foreground=dimmed_fg(C["search_bar_fg"], C["search_bar_bg"]))
 
     def _on_search_query(self, *args) -> None:
         """Tracevar callback — dispatch to the active filter."""
@@ -2486,15 +2485,7 @@ class MainWindow:
                 continue
             if not q or q in name:
                 try:
-                    col = self.frame_positions[i]
-                    frame.grid(
-                        row=col[0], column=col[1],
-                        sticky=self._column_sticky(col[1]),
-                        pady=(5, 0), padx=2.5,
-                    )
-                    # Tk gotcha: grid_forget() destroys a widget's grid
-                    # state — grid_propagate(False) included. Re-assert.
-                    frame.grid_propagate(False)
+                    self._restore_frame_grid(frame, i)
                 except tk.TclError:
                     pass
             else:
@@ -2560,7 +2551,7 @@ class MainWindow:
                 text="No matches",
                 font=ui_font(10),
                 background=frame_playlist_bg,
-                foreground="#888888",
+                foreground=dimmed_fg(result_fg, frame_playlist_bg),
                 anchor="center",
             )
             no_match.pack(fill="x", pady=2)

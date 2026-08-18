@@ -40,6 +40,7 @@ def show_close_playlist_dialog(
     label_fg = C["label_def_fg"]
 
     win = tk.Toplevel(parent)
+    win.withdraw()
     win.title("Close Playlist")
     win.configure(background=win_bg, padx=px(12), pady=px(10))
     win.transient(parent)
@@ -109,10 +110,12 @@ def show_close_playlist_dialog(
         command=lambda: _exit(on_confirm),
     ).pack(side="left")
 
-    # Every exit path is Cancel-by-default: Escape, WM close, initial focus.
+    # Every exit path is Cancel-by-default: Escape, WM close, and
+    # Enter (initial focus lands on Cancel).
     win.bind("<Escape>", lambda _e: _exit(on_cancel))
     win.protocol("WM_DELETE_WINDOW", lambda: _exit(on_cancel))
 
     center_window(win)
+    win.deiconify()
     win.grab_set()
     cancel_btn.focus_set()

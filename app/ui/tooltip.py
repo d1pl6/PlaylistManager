@@ -61,10 +61,14 @@ class ToolTip:
 
         # Geometry is read at show time (not attach time) so the tip
         # stays put after window moves/resizes.  Positioned just below
-        # the widget, left-aligned with it.
+        # the widget, left-aligned with it; flipped above when near the
+        # bottom edge of the screen.
         try:
             x = self.widget.winfo_rootx()
-            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+            w_y = self.widget.winfo_rooty()
+            w_h = self.widget.winfo_height()
+            screen_h = self.widget.winfo_screenheight()
+            screen_w = self.widget.winfo_screenwidth()
         except tk.TclError:
             return
 
@@ -73,7 +77,6 @@ class ToolTip:
         tip.withdraw()
 
         tip.wm_overrideredirect(True)
-        tip.wm_geometry(f"+{x}+{y}")
         try:
             tip.wm_attributes("-topmost", True)
         except tk.TclError:
@@ -81,6 +84,10 @@ class ToolTip:
 
         # Set a matching background on the toplevel to avoid "white cube".
         tip.configure(background=C["frame_main_bg"])
+
+        # Cap the label width at 60 % of the screen so long text wraps
+        # rather than running off the right edge.
+        wrap_len = max(screen_w * 3 // 5, px(200))
 
         tk.Label(
             tip,
@@ -91,8 +98,23 @@ class ToolTip:
             padx=px(6),
             pady=px(3),
             justify="left",
+            wraplength=wrap_len,
         ).pack()
 
+        # Measure the tip height to decide whether to flip above the
+        # widget.  update_idletasks() is needed while still withdrawn so
+        # geometry is computed but nothing flickers on screen.
+        tip.update_idletasks()
+        tip_h = tip.winfo_reqheight()
+
+        y = w_y + w_h + 4  # default: below the widget
+        if y + tip_h > screen_h:
+            y = w_y - tip_h - 4  # flip above
+
+        # Clamp horizontal position so the tip doesn't run off-screen.
+        x = min(x, screen_w - wrap_len - px(12))
+
+        tip.wm_geometry(f"+{x}+{y}")
         tip.deiconify()
 
         self._tip = tip

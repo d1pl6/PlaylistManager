@@ -3,6 +3,7 @@ from tkinter import ttk, colorchooser
 from configparser import ConfigParser
 
 from utils.config import (
+    DEFAULT_THEME,
     ensure_theme_file,
     set_theme_value,
     apply_theme_preset,
@@ -42,13 +43,14 @@ def show_theme_dialog(parent, on_theme_change=None):
 
     win.protocol("WM_DELETE_WINDOW", _on_close)
 
-    tk.Label(
+    header_label = tk.Label(
         win,
         text="Theme settings",
         background=header_bg,
         foreground=label_fg,
         font=ui_font(12),
-    ).pack(fill="x")
+    )
+    header_label.pack(fill="x")
 
     canvas = tk.Canvas(win, background=win_bg, highlightthickness=0)
     scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
@@ -70,7 +72,11 @@ def show_theme_dialog(parent, on_theme_change=None):
     scrollbar.pack(side="right", fill="y")
 
     def _on_mousewheel(event):
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        # macOS: delta is ±1 per notch; Windows: multiples of ±120.
+        if abs(event.delta) >= 120:
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        else:
+            canvas.yview_scroll(-event.delta, "units")
 
     inner.bind("<MouseWheel>", _on_mousewheel)
     inner.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
@@ -79,6 +85,12 @@ def show_theme_dialog(parent, on_theme_change=None):
     ensure_theme_file()
     theme_cfg = ConfigParser()
     theme_cfg.read(str(THEME_PATH))
+
+    def _reload_theme_cfg() -> None:
+        """Re-read theme.ini into a fresh ConfigParser (replaces, not merges)."""
+        nonlocal theme_cfg
+        theme_cfg = ConfigParser()
+        theme_cfg.read(str(THEME_PATH))
 
     def _choose_color(section, option, default, button):
         # theme_cfg is loaded after ensure_theme_file(), so every
@@ -100,17 +112,23 @@ def show_theme_dialog(parent, on_theme_change=None):
                 on_theme_change()
 
     color_buttons: list = []
+    option_labels: list = []
 
     def _style_button(btn, value) -> None:
         """Apply a color to a swatch button (bg + readable fg, hover included)."""
         fg = readable_fg(value)
         btn.config(**btn_colors(value, fg))
 
-    def _create_theme_button(label_text, section, option, default):
+    def _theme_option_default(section, option):
+        """Look up the fallback default from DEFAULT_THEME."""
+        return DEFAULT_THEME.get(section, {}).get(option, "#000000")
+
+    def _create_theme_button(label_text, section, option):
+        default = _theme_option_default(section, option)
         frame = tk.Frame(inner, background=win_bg)
         frame.pack(fill="x", pady=2)
 
-        tk.Label(
+        lbl = tk.Label(
             frame,
             text=label_text,
             background=label_bg,
@@ -118,7 +136,9 @@ def show_theme_dialog(parent, on_theme_change=None):
             font=ui_font(10),
             width=26,
             anchor="w",
-        ).pack(side="left", padx=(4, 4))
+        )
+        lbl.pack(side="left", padx=(4, 4))
+        option_labels.append(lbl)
 
         value = theme_cfg.get(section, option, fallback=default)
         btn = tk.Button(
@@ -138,93 +158,108 @@ def show_theme_dialog(parent, on_theme_change=None):
 
     def _apply_preset(preset):
         apply_theme_preset(preset)
-        theme_cfg.read(str(THEME_PATH))
-        _refresh_buttons()
+        _reload_theme_cfg()
+        # Update the global palette before re-theming the dialog so
+        # _refresh_all reads the new colours from C, not stale ones.
+        if callable(on_theme_change):
+            on_theme_change()
+        _refresh_all()
 
     def _restore_defaults():
         restore_theme_defaults()
-        theme_cfg.read(str(THEME_PATH))
-        _refresh_buttons()
+        _reload_theme_cfg()
+        if callable(on_theme_change):
+            on_theme_change()
+        _refresh_all()
 
-    _restore_btn = None  # populated below; referenced by _refresh_buttons
+    _restore_btn = None  # populated below; referenced by _refresh_all
 
-    def _refresh_buttons() -> None:
-        """Sync the swatch buttons after a preset or defaults restore."""
+    def _refresh_all() -> None:
+        """Sync swatch buttons and dialog chrome after a preset or defaults restore."""
+        # Swatch buttons: re-read from the freshly loaded theme_cfg.
         for section, option, default, btn in color_buttons:
             _style_button(btn, theme_cfg.get(section, option, fallback=default))
-        # Re-theme footer buttons whose colours were captured from C at
-        # creation time and would otherwise lag behind a preset change.
+        # Option labels: re-theme background/foreground from the new palette.
+        for lbl in option_labels:
+            lbl.configure(
+                background=C["label_def_bg"], foreground=C["label_def_fg"],
+            )
+        # Dialog chrome: header, footer button frame, canvas, root bg.
+        header_label.configure(
+            background=C["frame_head_bg"], foreground=C["label_def_fg"],
+        )
         if _restore_btn is not None:
             _restore_btn.configure(
                 **btn_colors(C["button_main_bg"], C["button_main_fg"])
             )
+        new_win_bg = C["frame_main_bg"]
+        win.configure(background=new_win_bg)
+        canvas.configure(background=new_win_bg)
+        inner.configure(background=new_win_bg)
+        button_frame.configure(background=new_win_bg)
 
-    _create_theme_button("Root background", "root_background", "background", "#1A1A1A")
-    _create_theme_button("Frame header background", "frame_header", "background", "#101010")
-    _create_theme_button("Frame main background", "frame_main", "background", "#252525")
-    _create_theme_button("Frame playlist background", "frame_playlist", "background", "#252525")
+    _create_theme_button("Root background", "root_background", "background")
+    _create_theme_button("Frame header background", "frame_header", "background")
+    _create_theme_button("Frame main background", "frame_main", "background")
+    _create_theme_button("Frame playlist background", "frame_playlist", "background")
 
-    _create_theme_button("Label default background", "label_default", "background", "#252525")
-    _create_theme_button("Label default foreground", "label_default", "foreground", "#EDEDED")
+    _create_theme_button("Label default background", "label_default", "background")
+    _create_theme_button("Label default foreground", "label_default", "foreground")
 
-    _create_theme_button("Label playlist background", "label_playlist", "background", "#2f2f2f")
-    _create_theme_button("Label playlist foreground", "label_playlist", "foreground", "#EDEDED")
+    _create_theme_button("Label playlist background", "label_playlist", "background")
+    _create_theme_button("Label playlist foreground", "label_playlist", "foreground")
 
-    _create_theme_button("Playlist name background", "label_playlist_name", "background", "#2f2f2f")
-    _create_theme_button("Playlist name foreground", "label_playlist_name", "foreground", "#DCDCDC")
+    _create_theme_button("Playlist name background", "label_playlist_name", "background")
+    _create_theme_button("Playlist name foreground", "label_playlist_name", "foreground")
 
-    _create_theme_button("Playlist log background", "label_playlist_log", "background", "#2f2f2f")
-    _create_theme_button("Playlist log foreground", "label_playlist_log", "foreground", "#EDEDED")
+    _create_theme_button("Playlist log background", "label_playlist_log", "background")
+    _create_theme_button("Playlist log foreground", "label_playlist_log", "foreground")
 
-    _create_theme_button("Playlist good background", "label_playlist_good", "background", "#00C600")
-    _create_theme_button("Playlist good foreground", "label_playlist_good", "foreground", "#EDEDED")
+    _create_theme_button("Playlist good background", "label_playlist_good", "background")
+    _create_theme_button("Playlist good foreground", "label_playlist_good", "foreground")
 
-    _create_theme_button("Playlist warning background", "label_playlist_warning", "background", "#C68100")
-    _create_theme_button("Playlist warning foreground", "label_playlist_warning", "foreground", "#EDEDED")
+    _create_theme_button("Playlist warning background", "label_playlist_warning", "background")
+    _create_theme_button("Playlist warning foreground", "label_playlist_warning", "foreground")
 
-    _create_theme_button("Playlist error background", "label_playlist_error", "background", "#C60000")
-    _create_theme_button("Playlist error foreground", "label_playlist_error", "foreground", "#EDEDED")
+    _create_theme_button("Playlist error background", "label_playlist_error", "background")
+    _create_theme_button("Playlist error foreground", "label_playlist_error", "foreground")
 
-    _create_theme_button("Checkbutton background", "checkbutton", "background", "#303030")
-    _create_theme_button("Checkbutton foreground", "checkbutton", "foreground", "#DADADA")
-    _create_theme_button("Checkbutton selectcolor", "checkbutton", "selectcolor", "#505050")
+    _create_theme_button("Checkbutton background", "checkbutton", "background")
+    _create_theme_button("Checkbutton foreground", "checkbutton", "foreground")
+    _create_theme_button("Checkbutton selectcolor", "checkbutton", "selectcolor")
 
-    _create_theme_button("Button header background", "button_header", "background", "#6C6C6C")
-    _create_theme_button("Button header foreground", "button_header", "foreground", "#FFFFFF")
+    _create_theme_button("Button header background", "button_header", "background")
+    _create_theme_button("Button header foreground", "button_header", "foreground")
 
-    _create_theme_button("Button main background", "button_main", "background", "#3A3A3A")
-    _create_theme_button("Button main foreground", "button_main", "foreground", "#D7D7D7")
+    _create_theme_button("Button main background", "button_main", "background")
+    _create_theme_button("Button main foreground", "button_main", "foreground")
 
-    _create_theme_button("Button playlist background", "button_playlist", "background", "#3A3A3A")
-    _create_theme_button("Button playlist foreground", "button_playlist", "foreground", "#D7D7D7")
+    _create_theme_button("Button playlist background", "button_playlist", "background")
+    _create_theme_button("Button playlist foreground", "button_playlist", "foreground")
 
-    _create_theme_button("Button close background", "button_close", "background", "#160000")
-    _create_theme_button("Button close foreground", "button_close", "foreground", "#FFFFFF")
+    _create_theme_button("Button close background", "button_close", "background")
+    _create_theme_button("Button close foreground", "button_close", "foreground")
 
-    _create_theme_button("Button save background", "button_save", "background", "#004304")
-    _create_theme_button("Button save foreground", "button_save", "foreground", "#D7D7D7")
+    _create_theme_button("Button save background", "button_save", "background")
+    _create_theme_button("Button save foreground", "button_save", "foreground")
 
-    _create_theme_button("Entry default background", "entry_default", "background", "#404040")
-    _create_theme_button("Entry default foreground", "entry_default", "foreground", "#FFFFFF")
-    _create_theme_button("Entry default readonlybackground", "entry_default", "readonlybackground", "#2A2A2A")
+    _create_theme_button("Entry default background", "entry_default", "background")
+    _create_theme_button("Entry default foreground", "entry_default", "foreground")
+    _create_theme_button("Entry default readonlybackground", "entry_default", "readonlybackground")
 
-    _create_theme_button("Entry playlist background", "entry_playlist", "background", "#404040")
-    _create_theme_button("Entry playlist foreground", "entry_playlist", "foreground", "#FFFFFF")
-    _create_theme_button("Entry playlist readonlybackground", "entry_playlist", "readonlybackground", "#2A2A2A")
+    _create_theme_button("Entry playlist background", "entry_playlist", "background")
+    _create_theme_button("Entry playlist foreground", "entry_playlist", "foreground")
+    _create_theme_button("Entry playlist readonlybackground", "entry_playlist", "readonlybackground")
 
     button_frame = tk.Frame(inner, background=win_bg)
     button_frame.pack(fill="x", pady=6)
-
-    def _fire_change():
-        if callable(on_theme_change):
-            on_theme_change()
 
     tk.Button(
         button_frame,
         text="White Theme",
         cursor="hand2",
         font=ui_font(10),
-        command=lambda: (_apply_preset("white"), _fire_change()),
+        command=lambda: _apply_preset("white"),
         **btn_colors("#EDEDED", "#1A1A1A"),
         highlightthickness=0,
         relief="raised",
@@ -236,7 +271,7 @@ def show_theme_dialog(parent, on_theme_change=None):
         text="Restore Defaults",
         cursor="hand2",
         font=ui_font(10),
-        command=lambda: (_restore_defaults(), _fire_change()),
+        command=_restore_defaults,
         **button_btn,
         highlightthickness=0,
         relief="raised",

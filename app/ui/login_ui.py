@@ -3,7 +3,7 @@ Platform login / credential dialog.
 
 Responsibilities:
   - tkinter widget layout and visual feedback (status labels, buttons).
-  - Thread-safe credential verification (threading + ``win.after()``).
+  - Thread-safe credential verification (threading + win.after()).
 
 Actual credential-file i/o, terminal launching, and API verification are
 delegated to :mod:`services.auth_setup` and :mod:`utils.platform`.
@@ -48,7 +48,6 @@ def show_login_dialog(parent, on_success=None):
     win.transient(parent)
     win.update_idletasks()
     win.grab_set()
-
 
     header = tk.Frame(win, background=frame_header_bg)
     header.pack(fill="both")
@@ -353,7 +352,7 @@ def _on_spotify(parent, on_success):
         if not _all_filled(creds):
             status_label.config(text="All fields are required", foreground="red")
             return
-        status_label.config(text="Testing...", foreground="white")
+        status_label.config(text="Testing...", foreground=label_fg)
         _set_busy(True)
 
         def run():
@@ -391,7 +390,7 @@ def _on_spotify(parent, on_success):
         if not _all_filled(creds):
             status_label.config(text="All fields are required", foreground="red")
             return
-        status_label.config(text="Verifying...", foreground="white")
+        status_label.config(text="Verifying...", foreground=label_fg)
         _set_busy(True)
 
         def run():

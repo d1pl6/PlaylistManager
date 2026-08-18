@@ -40,7 +40,7 @@ class PlaylistDialog:
         # Bounded thumbnail pipeline: jobs are queued and consumed by a few
         # daemon workers instead of one thread per playlist (a 100+ item
         # library would otherwise pile up 100 threads on the fetch semaphore).
-        self._thumb_tasks: "Queue" = Queue()
+        self._thumb_tasks: Queue = Queue()
         for _ in range(_THUMB_WORKERS):
             threading.Thread(target=self._thumb_worker, daemon=True).start()
 
@@ -60,7 +60,7 @@ class PlaylistDialog:
         )
 
         title_frame = tk.Frame(self.choose_frame, background=dialog_bg)
-        title_frame.pack(pady=5)
+        title_frame.pack(fill="x", pady=5)
 
         tk.Label(
             title_frame,
@@ -196,7 +196,7 @@ class PlaylistDialog:
                 return
             photo = ThumbnailService.to_photoimage(img)
         except Exception as e:
-            logger.error(f"Failed to create dialog thumbnail: {e}")
+            logger.error("Failed to create dialog thumbnail: %s", e)
             return
         try:
             button.configure(image=photo)
@@ -240,5 +240,21 @@ class PlaylistDialog:
             self.canvas.itemconfig(self._canvas_window, width=event.width)
 
     def _on_mouse_wheel(self, event):
-        if self.canvas:
-            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        if not self.canvas:
+            return
+        try:
+            delta = int(event.delta)
+            if delta != 0:
+                # macOS: delta is ±1 per notch; Windows: multiples of ±120.
+                if abs(delta) >= 120:
+                    self.canvas.yview_scroll(-delta // 120, "units")
+                else:
+                    self.canvas.yview_scroll(-delta, "units")
+                return
+        except AttributeError:
+            pass
+        # Button-4/5 (Linux): fall through to scroll by one unit.
+        if getattr(event, "num", None) == 4:
+            self.canvas.yview_scroll(-1, "units")
+        elif getattr(event, "num", None) == 5:
+            self.canvas.yview_scroll(1, "units")

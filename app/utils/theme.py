@@ -152,6 +152,23 @@ def btn_colors(background: str, foreground: str) -> dict[str, str]:
     }
 
 
+def dimmed_fg(foreground: str, background: str, factor: float = 0.5) -> str:
+    """Derive a muted foreground by blending *foreground* toward *background*.
+
+    Useful for placeholder text and empty-state labels that should be
+    visible but clearly inactive.  *factor* controls the blend (0 = pure
+    foreground, 1 = pure background).
+    """
+    f = _expand_hex(foreground.lstrip("#"))
+    b = _expand_hex(background.lstrip("#"))
+    if len(f) != 6 or len(b) != 6:
+        return foreground
+    r = int(int(f[0:2], 16) * (1 - factor) + int(b[0:2], 16) * factor)
+    g = int(int(f[2:4], 16) * (1 - factor) + int(b[2:4], 16) * factor)
+    bl = int(int(f[4:6], 16) * (1 - factor) + int(b[4:6], 16) * factor)
+    return "#{:02x}{:02x}{:02x}".format(r, g, bl)
+
+
 def load_theme() -> None:
     """(Re)load every theme colour from ``cfg/theme.ini`` into :data:`C`.
 
