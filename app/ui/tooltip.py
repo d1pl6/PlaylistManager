@@ -24,9 +24,10 @@ class ToolTip:
 
     The tip Toplevel is created lazily on first hover and destroyed on
     leave, so a tip only exists while it is visible.  The Toplevel is a
-    child of the attached widget, so Tk destroys it automatically if the
-    widget is destroyed (closed card, closed dialog) — no orphaned
-    bubbles.
+    child of the *root window* (not the widget) so that ``wm_geometry``
+    screen coordinates are not distorted by the widget's parent chain
+    (e.g. a Canvas scroll offset).  Cleanup is explicit: the ``<Destroy>``
+    binding on the widget tears down the tip if the widget is removed.
     """
 
     def __init__(self, widget: tk.Widget, text) -> None:
@@ -41,6 +42,9 @@ class ToolTip:
         widget.bind("<Enter>", self._schedule, add="+")
         widget.bind("<Leave>", self._hide, add="+")
         widget.bind("<ButtonPress>", self._hide, add="+")
+        # If the widget is destroyed (card close, dialog close) while the
+        # tip is still visible or the timer is pending, tear it down.
+        widget.bind("<Destroy>", self._on_widget_destroy, add="+")
 
     # -- lifecycle ------------------------------------------------------
 
@@ -61,18 +65,22 @@ class ToolTip:
 
         # Geometry is read at show time (not attach time) so the tip
         # stays put after window moves/resizes.  Positioned just below
-        # the widget, left-aligned with it; flipped above when near the
+        # the widget, horizontally centred; flipped above when near the
         # bottom edge of the screen.
         try:
-            x = self.widget.winfo_rootx()
+            w_x = self.widget.winfo_rootx()
             w_y = self.widget.winfo_rooty()
+            w_w = self.widget.winfo_width()
             w_h = self.widget.winfo_height()
             screen_h = self.widget.winfo_screenheight()
             screen_w = self.widget.winfo_screenwidth()
         except tk.TclError:
             return
 
-        tip = tk.Toplevel(self.widget)
+        # Parent the Toplevel to the root window so that screen-
+        # absolute wm_geometry coordinates are not shifted by the
+        # widget's parent chain (Canvas scroll, nested frames, etc.).
+        tip = tk.Toplevel(self.widget.winfo_toplevel())
 
         tip.withdraw()
 
@@ -106,13 +114,17 @@ class ToolTip:
         # geometry is computed but nothing flickers on screen.
         tip.update_idletasks()
         tip_h = tip.winfo_reqheight()
+        tip_w = tip.winfo_reqwidth()
+
+        # Centre horizontally on the widget.
+        x = w_x + (w_w - tip_w) // 2
 
         y = w_y + w_h + 4  # default: below the widget
         if y + tip_h > screen_h:
             y = w_y - tip_h - 4  # flip above
 
-        # Clamp horizontal position so the tip doesn't run off-screen.
-        x = min(x, screen_w - wrap_len - px(12))
+        # Clamp so the tip stays on-screen.
+        x = max(0, min(x, screen_w - tip_w - px(4)))
 
         tip.wm_geometry(f"+{x}+{y}")
         tip.deiconify()
@@ -127,6 +139,11 @@ class ToolTip:
             except tk.TclError:
                 pass
             self._tip = None
+
+    def _on_widget_destroy(self, _event=None) -> None:
+        """Tear down when the attached widget is destroyed."""
+        self._cancel_timer()
+        self._hide()
 
     def _cancel_timer(self) -> None:
         if self._after_id is not None:

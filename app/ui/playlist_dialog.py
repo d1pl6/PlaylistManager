@@ -11,8 +11,7 @@ import logging
 import threading
 import tkinter as tk
 from queue import Empty, Queue
-from tkinter import ttk
-
+from ui.scrollable import ScrollableFrame
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
 from utils.thumbnail import ThumbnailService
@@ -35,7 +34,6 @@ class PlaylistDialog:
         #: card grid; the caller passes the current column count).
         self.columns = columns
         self.choose_frame = None
-        self.canvas = None
         self.img_refs = []
         # Bounded thumbnail pipeline: jobs are queued and consumed by a few
         # daemon workers instead of one thread per playlist (a 100+ item
@@ -81,28 +79,12 @@ class PlaylistDialog:
             command=self.cancel,
         ).pack(side="right", anchor="e")
 
-        self.canvas = tk.Canvas(
-            self.choose_frame, background=dialog_bg, highlightthickness=0
+        self.sf = ScrollableFrame(
+            self.choose_frame, bg=dialog_bg, show_scrollbar=True,
+            bind_all_mousewheel=True,
         )
-        scrollbar = ttk.Scrollbar(
-            self.choose_frame, orient="vertical", command=self.canvas.yview
-        )
-        scrollable_frame = tk.Frame(
-            self.canvas,
-            background=dialog_bg,
-            border=1,
-            relief="solid",
-        )
-
-        canvas = self.canvas
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
-        )
-
-        self._canvas_window = self.canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=scrollbar.set)
-        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.sf.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        scrollable_frame = self.sf.content
 
         for playlist in playlists:
             playlist_id = playlist.get("playlistId", "")
@@ -139,22 +121,6 @@ class PlaylistDialog:
 
             if thumb_url:
                 self._load_thumb_async(btn, thumb_url)
-
-        self.canvas.pack(side="left", fill="both", expand=True, padx=10, pady=10)
-        scrollbar.pack(side="right", fill="y")
-
-        scrollable_frame.bind("<MouseWheel>", self._on_mouse_wheel)
-        scrollable_frame.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
-        scrollable_frame.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
-        # Also scroll when the wheel is over the bare canvas (a short list
-        # doesn't cover the full scroll area).
-        self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
-        self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
-        self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
-        for child in scrollable_frame.winfo_children():
-            child.bind("<MouseWheel>", self._on_mouse_wheel)
-            child.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
-            child.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
 
     def _load_thumb_async(self, button: tk.Button, thumb_url: str) -> None:
         """Queue a cover download; the PhotoImage is applied on the main thread."""
@@ -234,27 +200,3 @@ class PlaylistDialog:
                 logger.debug("Failed to destroy choose_frame", exc_info=True)
             self.choose_frame = None
         self.img_refs.clear()
-
-    def _on_canvas_configure(self, event):
-        if self._canvas_window:
-            self.canvas.itemconfig(self._canvas_window, width=event.width)
-
-    def _on_mouse_wheel(self, event):
-        if not self.canvas:
-            return
-        try:
-            delta = int(event.delta)
-            if delta != 0:
-                # macOS: delta is ±1 per notch; Windows: multiples of ±120.
-                if abs(delta) >= 120:
-                    self.canvas.yview_scroll(-delta // 120, "units")
-                else:
-                    self.canvas.yview_scroll(-delta, "units")
-                return
-        except AttributeError:
-            pass
-        # Button-4/5 (Linux): fall through to scroll by one unit.
-        if getattr(event, "num", None) == 4:
-            self.canvas.yview_scroll(-1, "units")
-        elif getattr(event, "num", None) == 5:
-            self.canvas.yview_scroll(1, "units")

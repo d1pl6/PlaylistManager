@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, colorchooser
+from tkinter import colorchooser
 from configparser import ConfigParser
 
 from utils.config import (
@@ -10,6 +10,7 @@ from utils.config import (
     restore_theme_defaults,
     THEME_PATH,
 )
+from ui.scrollable import ScrollableFrame
 from utils.scaling import px, ui_font
 from utils.theme import C, readable_fg, btn_colors
 from utils.window import center_window
@@ -52,35 +53,10 @@ def show_theme_dialog(parent, on_theme_change=None):
     )
     header_label.pack(fill="x")
 
-    canvas = tk.Canvas(win, background=win_bg, highlightthickness=0)
-    scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
-    inner = tk.Frame(canvas, background=win_bg)
-
-    inner.bind(
-        "<Configure>",
-        lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
-    )
-
-    canvas_window = canvas.create_window((0, 0), window=inner, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
-    canvas.bind(
-        "<Configure>",
-        lambda e: canvas.itemconfig(canvas_window, width=e.width),
-    )
-
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-
-    def _on_mousewheel(event):
-        # macOS: delta is ±1 per notch; Windows: multiples of ±120.
-        if abs(event.delta) >= 120:
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        else:
-            canvas.yview_scroll(-event.delta, "units")
-
-    inner.bind("<MouseWheel>", _on_mousewheel)
-    inner.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
-    inner.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
+    sf = ScrollableFrame(win, bg=win_bg, show_scrollbar=True,
+                         bind_all_mousewheel=True)
+    sf.pack(side="left", fill="both", expand=True)
+    inner = sf.content
 
     ensure_theme_file()
     theme_cfg = ConfigParser()
@@ -194,7 +170,7 @@ def show_theme_dialog(parent, on_theme_change=None):
             )
         new_win_bg = C["frame_main_bg"]
         win.configure(background=new_win_bg)
-        canvas.configure(background=new_win_bg)
+        sf.canvas.configure(background=new_win_bg)
         inner.configure(background=new_win_bg)
         button_frame.configure(background=new_win_bg)
 
@@ -278,20 +254,5 @@ def show_theme_dialog(parent, on_theme_change=None):
         bd=0,
     )
     _restore_btn.pack(side="left", expand=True, fill="x", padx=2)
-
-    for child in inner.winfo_children():
-        child.bind("<MouseWheel>", _on_mousewheel)
-        child.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
-        child.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
-        for grandchild in child.winfo_children():
-            grandchild.bind("<MouseWheel>", _on_mousewheel)
-            grandchild.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
-            grandchild.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
-
-    # Also scroll when the wheel is over the bare canvas (a short theme
-    # doesn't cover the full scroll area) - mirrors playlist_dialog.py.
-    canvas.bind("<MouseWheel>", _on_mousewheel)
-    canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
-    canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
 
     center_window(win)

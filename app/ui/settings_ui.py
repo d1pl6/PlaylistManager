@@ -1,17 +1,16 @@
 import logging
 import tkinter as tk
 import webbrowser
-from configparser import ConfigParser
 from tkinter import ttk
 
 from _version import __version__
+from ui.scrollable import ScrollableFrame
 from ui.settings_theme_ui import show_theme_dialog
 from utils.config import (
-    ensure_settings_file,
+    get_setting,
     get_setting_value,
     set_setting,
     set_setting_value,
-    SETTINGS_PATH as _settings_path,
 )
 from utils.scaling import UI_SCALE_PRESETS, ui_font
 from utils.theme import C, btn_colors, hover_bg
@@ -119,73 +118,29 @@ def show_settings_dialog(
         font=ui_font(14),
     ).pack(fill="both", pady=(0,5))
 
-    canvas = tk.Canvas(win, background=theme_win_bg, highlightthickness=0)
-    canvas.pack(side="left", fill="both", expand=True)
+    sf = ScrollableFrame(win, bg=theme_win_bg, show_scrollbar=True,
+                         bind_all_mousewheel=True)
+    sf.pack(side="left", fill="both", expand=True)
+    sf.style_scrollbar(
+        hover_bg(C["button_main_bg"]),
+        theme_win_bg,
+    )
+    content = sf.content
 
-    scrollbar = tk.Scrollbar(win, orient="vertical", command=canvas.yview)
-    scrollbar.pack(side="right", fill="y")
-    canvas.configure(yscrollcommand=scrollbar.set)
+    update_var_value = 1 if get_setting("update_check", fallback=True) else 0
+    center_var_value = 1 if get_setting("center_windows", fallback=True) else 0
+    resize_var_value = 1 if get_setting("auto_resize", fallback=False) else 0
+    global_var_value = 1 if get_setting("global_listener", fallback=True) else 0
+    tray_var_value = 1 if get_setting("hide_to_tray", fallback=False) else 0
     try:
-        _sb_thumb = hover_bg(C["button_main_bg"])
-        scrollbar.configure(
-            bg=_sb_thumb,
-            activebackground=hover_bg(_sb_thumb),
-            troughcolor=theme_win_bg,
-        )
-    except tk.TclError:
-        pass
-
-    content = tk.Frame(canvas, background=theme_win_bg)
-    content_id = canvas.create_window((0, 0), window=content, anchor="nw")
-
-    def _on_mousewheel(event):
-        try:
-            delta = int(event.delta)
-            if delta != 0:
-                canvas.yview_scroll(-delta // 120, "units")
-                return
-        except AttributeError:
-            pass
-
-        if getattr(event, "num", None) == 4:
-            canvas.yview_scroll(-1, "units")
-        elif getattr(event, "num", None) == 5:
-            canvas.yview_scroll(1, "units")
-
-    def _on_canvas_resize(event):
-        canvas.configure(scrollregion=canvas.bbox("all"))
-        canvas.itemconfigure(content_id, width=max(event.width, 1))
-
-    content.bind("<Configure>", _on_canvas_resize)
-    canvas.bind("<Configure>", _on_canvas_resize)
-    for target in (canvas, content, win):
-        target.bind("<MouseWheel>", _on_mousewheel)
-        target.bind("<Button-4>", _on_mousewheel)
-        target.bind("<Button-5>", _on_mousewheel)
-
-    ensure_settings_file()
-    cfg = ConfigParser()
-    try:
-        cfg.read(str(_settings_path))
-        update_var_value = 1 if cfg.getboolean("update_check", "is_true", fallback=True) else 0
-        center_var_value = 1 if cfg.getboolean("center_windows", "is_true", fallback=True) else 0
-        resize_var_value = 1 if cfg.getboolean("auto_resize", "is_true", fallback=False) else 0
-        global_var_value = 1 if cfg.getboolean("global_listener", "is_true", fallback=True) else 0
-        tray_var_value = 1 if cfg.getboolean("hide_to_tray", "is_true", fallback=False) else 0
-        showcase_count_value = cfg.getint("showcase", "count", fallback=0)
-        showcase_log_value = 1 if cfg.getboolean("showcase_log", "is_true", fallback=True) else 0
-        playlist_stats_value = 1 if cfg.getboolean("playlist_stats", "is_true", fallback=True) else 0
-        columns_value = cfg.getint("layout", "columns", fallback=2)
-    except Exception as e:
-        logger.error("Error loading settings, using defaults: %s", e)
-        update_var_value = 1
-        center_var_value = 1
-        resize_var_value = 0
-        global_var_value = 1
-        tray_var_value = 0
+        showcase_count_value = int(get_setting_value("showcase", "count", "0"))
+    except (ValueError, TypeError):
         showcase_count_value = 0
-        showcase_log_value = 1
-        playlist_stats_value = 1
+    showcase_log_value = 1 if get_setting("showcase_log", fallback=True) else 0
+    playlist_stats_value = 1 if get_setting("playlist_stats", fallback=True) else 0
+    try:
+        columns_value = int(get_setting_value("layout", "columns", "2"))
+    except (ValueError, TypeError):
         columns_value = 2
 
     update_var = tk.IntVar(value=update_var_value)

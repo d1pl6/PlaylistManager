@@ -152,6 +152,49 @@ def btn_colors(background: str, foreground: str) -> dict[str, str]:
     }
 
 
+def make_button(
+    parent,
+    text: str = "",
+    *,
+    bg: str,
+    fg: str,
+    font_size: int = 12,
+    command=None,
+    image=None,
+    tooltip_text: str = "",
+    relief: str = "raised",
+    **extra,
+):
+    """Create a themed ``tk.Button`` with standard styling.
+
+    Applies ``cursor="hand2"``, ``highlightthickness=0``, and hover colours
+    automatically.  Pass *tooltip_text* to attach a :class:`ToolTip`.
+
+    All extra keyword arguments are forwarded to ``tk.Button`` (e.g.
+    ``width``, ``anchor``, ``state``).
+    """
+    import tkinter as tk
+
+    from utils.scaling import ui_font
+
+    btn = tk.Button(
+        parent,
+        text=text,
+        cursor="hand2",
+        **btn_colors(bg, fg),
+        font=ui_font(font_size),
+        highlightthickness=0,
+        relief=relief,
+        command=command,
+        image=image,
+        **extra,
+    )
+    if tooltip_text:
+        from ui.tooltip import ToolTip
+        ToolTip(btn, tooltip_text)
+    return btn
+
+
 def dimmed_fg(foreground: str, background: str, factor: float = 0.5) -> str:
     """Derive a muted foreground by blending *foreground* toward *background*.
 
