@@ -196,8 +196,10 @@ def show_settings_dialog(
         app_section,
         text="Check for updates now",
         cursor="hand2",
-        **checkbutton_style,
+        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
         font=ui_font(12),
+        highlightthickness=0,
+        relief="raised",
         command=_do_check_now,
     )
     update_btn.pack(fill="both", pady=(0,5))

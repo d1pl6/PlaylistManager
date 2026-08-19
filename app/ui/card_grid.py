@@ -214,7 +214,7 @@ class CardGridManager:
             )
             playlist_name = tk.Label(
                 main_header_frame,
-                text=f"row:{row} col:{col}",
+                text="",
                 font=ui_font(12),
                 background=label_playlist_name_bg,
                 foreground=label_playlist_name_fg,
@@ -254,7 +254,7 @@ class CardGridManager:
 
             log_artist = tk.Label(
                 main_log_frame,
-                text="log_artist placeholder",
+                text="",
                 font=ui_font(12),
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
@@ -270,7 +270,7 @@ class CardGridManager:
             )
             log_name = tk.Label(
                 main_log_frame,
-                text="log_name placeholder",
+                text="",
                 font=ui_font(12),
                 background=label_playlist_log_bg,
                 foreground=label_playlist_log_fg,
@@ -431,10 +431,10 @@ class CardGridManager:
         return "n"
 
     def _restore_frame_grid(self, frame: tk.Frame, idx: int) -> None:
-        col = self.cards[idx].position
+        pos = self.cards[idx].position
         frame.grid(
-            row=col[0], column=col[1],
-            sticky=self._column_sticky(col[1]),
+            row=pos[0], column=pos[1],
+            sticky=self._column_sticky(pos[1]),
             pady=(5, 0), padx=2.5,
         )
         frame.grid_propagate(False)

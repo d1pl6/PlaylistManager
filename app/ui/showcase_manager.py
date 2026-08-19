@@ -147,11 +147,11 @@ class ShowcaseManager:
 
         card.showcase_rows = len(rows)
         if rows:
-            showcase_frame = self._build_showcase_frame(card.frame, rows)
+            showcase_frame, thumb_jobs = self._build_showcase_frame(card.frame, rows)
             if frame_idx not in self._search_results:
                 showcase_frame.grid(row=3, column=0, sticky="nsew")
             card.showcase_frame = showcase_frame
-            for thumb_label, url in showcase_frame._thumb_jobs:
+            for thumb_label, url in thumb_jobs:
                 self._fetch_song_thumb(thumb_label, url)
 
         self._card_grid._update_card_height(frame_idx, layout=True)
@@ -266,8 +266,7 @@ class ShowcaseManager:
             if url:
                 jobs.append((thumb, url))
 
-        showcase._thumb_jobs = jobs
-        return showcase
+        return showcase, jobs
 
     def _on_remove_song(
         self, main_frame: tk.Frame, song_id: int, track_id: str
@@ -365,12 +364,14 @@ class ShowcaseManager:
 
     @staticmethod
     def _frame_buttons(main_frame: tk.Frame) -> list:
-        buttons = []
-        for child in main_frame.winfo_children():
-            if isinstance(child, tk.Frame):
-                for widget in child.winfo_children():
-                    if isinstance(widget, tk.Button):
-                        buttons.append(widget)
+        buttons: list[tk.Button] = []
+        def _walk(w):
+            for child in w.winfo_children():
+                if isinstance(child, tk.Button):
+                    buttons.append(child)
+                elif isinstance(child, tk.Frame):
+                    _walk(child)
+        _walk(main_frame)
         return buttons
 
     # -- Delegated from CardGridManager ---------------------------------

@@ -11,7 +11,7 @@ import threading
 import tkinter as tk
 
 from utils.scaling import px, ui_font
-from utils.theme import C, btn_colors, dimmed_fg, load_theme
+from utils.theme import C, btn_colors, dimmed_fg
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,8 @@ class SearchManager:
 
     def update_columns(self, columns: int) -> None:
         self._columns = columns
+        if self._search_frame is not None and self._search_frame.winfo_ismapped():
+            self._search_frame.grid_configure(columnspan=columns)
 
     def on_card_closed(self, index: int) -> None:
         """Renumber search results after a card is removed from the grid."""

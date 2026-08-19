@@ -304,7 +304,7 @@ class MainWindow:
                 on_showcase_log_change=self.set_showcase_log,
                 on_playlist_stats_change=self.set_playlist_stats,
                 on_columns_change=self.set_columns,
-                on_check_updates_now=lambda on_done=None: self.ac.app._check_updates(force=True, on_done=on_done),
+                on_check_updates_now=lambda on_done=None: self.ac.check_updates(force=True, on_done=on_done),
             ),
         )
         ToolTip(self.btn_open_settings, "Settings")
@@ -935,8 +935,8 @@ class MainWindow:
                 break
         PlaylistStore.update_keybind(name, platform, "", playlist_id=displaced_id)
 
-    def _start_recording(self, frame_idx: int) -> str:
-        if frame_idx >= len(self.card_grid.cards):
+    def _start_recording(self, frame_idx: int | None) -> str:
+        if frame_idx is None or frame_idx >= len(self.card_grid.cards):
             return "break"
         if self._recording_frame_idx is not None:
             self._stop_recording(self._recording_frame_idx)
@@ -1047,9 +1047,9 @@ class MainWindow:
     # Reload database (delegates to PlaylistSyncService)
     # ------------------------------------------------------------------
 
-    def _on_reload_requested(self, frame_idx: int) -> None:
+    def _on_reload_requested(self, frame_idx: int | None) -> None:
         """User clicked the reload button for a playlist frame."""
-        if frame_idx >= len(self.card_grid.cards):
+        if frame_idx is None or frame_idx >= len(self.card_grid.cards):
             return
         card = self.card_grid.cards[frame_idx]
         playlist_name = card.name_label.cget("text")
