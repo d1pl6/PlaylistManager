@@ -1,20 +1,7 @@
-browser.json
-oauth.json
-sample.json
-.env
-tree.txt
 requirements.txt
 *.pyc
 AGENTS.md
 opencode.jsonc
-.gitignore
-plan.md
-cli.md
-screen.md
-playlist_showcase.md
-a.md
-b.md
-c.md
 0.3.0.md
 
 auth/
@@ -23,7 +10,6 @@ log/
 db/
 auth/
 cfg/
-.claude/
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
