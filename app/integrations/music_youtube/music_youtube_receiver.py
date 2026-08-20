@@ -4,10 +4,13 @@ Flask-based HTTP receiver for YouTube Music URLs from the browser extension.
 All Flask imports are **lazy** - they happen only when the receiver is
 actually started (at most ~30 s per keybind press).
 
-Security: the server is bound to localhost and issues a random per-run
+Security: the server is bound to 127.0.0.1 and issues a random per-run
 token that the extension must echo back in an ``X-PM-Token`` header.
 CORS is restricted to the YouTube Music origin, so an arbitrary webpage
-cannot read the token or POST a URL.
+cannot read the token or POST a URL.  (The token is browser-level
+protection - any *local* process can read it the same way the extension
+does; same-user local processes can already read the credential files,
+so the threat model is unchanged.)
 """
 
 import logging
@@ -22,7 +25,9 @@ from constants import FLASK_RECEIVER_PORT
 
 logger = logging.getLogger(__name__)
 
-YT_MUSIC_URL_PATTERN = r"https://music\.youtube\.com/watch\?v=([\w-]+)"
+# YouTube video IDs are exactly 11 chars; the trailing lookahead rejects
+# 12+ char IDs, while still allowing &list=... query params after the ID.
+YT_MUSIC_URL_PATTERN = r"https://music\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])"
 
 
 def extract_video_id(url: Optional[str]) -> Optional[str]:
@@ -67,12 +72,14 @@ class URLReceiverManager:
       4. Flow controller calls set_waiting(False), retrieves URL from queue, stops server.
 
     The server is short-lived (up to ~30 s per keybind press) and binds to
-    localhost only, so plain HTTP is acceptable.
+    127.0.0.1 only, so plain HTTP is acceptable.  The extension's
+    SERVER_URL (content.js) and the manifest host_permissions must match
+    this host + constants.FLASK_RECEIVER_PORT exactly.
     """
 
     def __init__(
         self,
-        host: str = "localhost",
+        host: str = "127.0.0.1",
         port: int = FLASK_RECEIVER_PORT,
         timeout: int = 30,
     ):
@@ -111,7 +118,7 @@ class URLReceiverManager:
                 r"/*": {
                     "origins": [
                         "https://music.youtube.com",
-                        f"http://localhost:{self.port}",
+                        f"http://127.0.0.1:{self.port}",
                     ],
                     "methods": ["GET", "POST", "OPTIONS"],
                     "allow_headers": ["Content-Type", "X-PM-Token"],

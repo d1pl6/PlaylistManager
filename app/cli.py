@@ -10,12 +10,13 @@ Entry points (all equivalent):
     python -m app -p ref 1,"Chill Mix"
     python -m app --list
     python -m app --login youtube_music
+    python -m app --login spotify            # interactive: prompts for the credentials
     python -m app --login spotify --client-id X --client-secret Y --refresh-token Z
     python -m app --logout youtube_music
     python -m app --logout spotify
 
 Designed for compositor-owned shortcuts (i3 / sway / hyprland / KDE / GNOME
-binds) — the Wayland-safe replacement for pynput global hotkeys (plan.md W1,
+binds) - the Wayland-safe replacement for pynput global hotkeys (plan.md W1,
 Option A). The compositor grabs the key and runs this command; no global input
 capture is needed.
 
@@ -26,6 +27,8 @@ Spotify API, platform-API-first writes. No tkinter is involved.
 
 from __future__ import annotations
 
+import getpass
+import json
 import logging
 import re
 import sys
@@ -52,7 +55,7 @@ URL_WAIT_TIMEOUT = 30
 
 
 class UsageError(Exception):
-    """Bad CLI input — mapped to exit code 2 (argparse's usage-error code)."""
+    """Bad CLI input - mapped to exit code 2 (argparse's usage-error code)."""
 
 
 # ---------------------------------------------------------------------------
@@ -94,13 +97,13 @@ def resolve_targets(
     """
     Resolve a playlist spec ("1,2,3", "1-3", names, or a mix) to entries.
 
-    Returns a list of (registry_number, entry) — registry_number is the 1-based
+    Returns a list of (registry_number, entry) - registry_number is the 1-based
     display order the user sees in the GUI (what ``--list`` prints). Repeated
     targets are silently deduped by (platform, playlist_id), first occurrence
     kept.
 
     *allow_urls* enables URL tokens, resolved against the registry by
-    (platform, playlist_id) — used by the del/ref commands. The song-add path
+    (platform, playlist_id) - used by the del/ref commands. The song-add path
     leaves it False so a URL there falls through to name lookup and fails
     with "not found".
 
@@ -133,14 +136,14 @@ def resolve_targets(
         if kind == "number":
             if not 1 <= value <= total:
                 raise UsageError(
-                    f"Playlist #{value} out of range — valid: 1–{total}"
+                    f"Playlist #{value} out of range - valid: 1–{total}"
                 )
             add(playlists[value - 1], value)
         elif kind == "range":
             start, end = value
             if start < 1 or end > total:
                 raise UsageError(
-                    f"Playlist range {start}–{end} out of range — valid: 1–{total}"
+                    f"Playlist range {start}–{end} out of range - valid: 1–{total}"
                 )
             for number in range(start, end + 1):
                 add(playlists[number - 1], number)
@@ -174,7 +177,7 @@ def resolve_targets(
                 ]
             if not matches:
                 raise UsageError(
-                    f"Playlist '{name}' not found — run 'playlistmanager --list' "
+                    f"Playlist '{name}' not found - run 'playlistmanager --list' "
                     "to see available playlists"
                 )
             if len(matches) > 1:
@@ -184,7 +187,7 @@ def resolve_targets(
                     if p in matches
                 )
                 raise UsageError(
-                    f"Playlist '{name}' is ambiguous ({candidates}) — use numbers"
+                    f"Playlist '{name}' is ambiguous ({candidates}) - use numbers"
                 )
             entry = matches[0]
             add(entry, playlists.index(entry) + 1)
@@ -310,14 +313,22 @@ def run_add(spec: str) -> int:
 
     song_manager = SongManager()
 
-    yt_targets = [t for t in targets if t[1].get("platform") == PLATFORM_YOUTUBE_MUSIC]
-    sp_targets = [t for t in targets if t[1].get("platform") == PLATFORM_SPOTIFY]
+    # Legacy registry entries predate the "platform" field - default them to
+    # YouTube Music, matching the per-target resolution in the loop below.
+    yt_targets = [
+        t
+        for t in targets
+        if (t[1].get("platform") or PLATFORM_YOUTUBE_MUSIC) == PLATFORM_YOUTUBE_MUSIC
+    ]
+    sp_targets = [
+        t for t in targets if (t[1].get("platform") or PLATFORM_YOUTUBE_MUSIC) == PLATFORM_SPOTIFY
+    ]
 
     yt = _init_yt_music() if yt_targets else None
     sp_integration = _init_spotify() if sp_targets else None
 
     # Capture ONE YouTube Music URL (+ song details) and share it across all
-    # YT playlists — the browser extension delivers it to the receiver.
+    # YT playlists - the browser extension delivers it to the receiver.
     keybind_flow = None
     yt_url = None
     yt_song_data = None
@@ -330,12 +341,14 @@ def run_add(spec: str) -> int:
         yt_url, yt_song_data, yt_error = _capture_yt_song(keybind_flow, receiver)
 
     sp_flow = None
+    sp_song_data = None
+    sp_error = ""
     if sp_targets and sp_integration is not None:
         from controllers.keybind_flow import SpotifyFlowController
 
         sp_flow = SpotifyFlowController(sp_integration, song_manager)
+        sp_song_data, sp_error = _capture_spotify_song(sp_flow)
 
-    successes = 0
     failures = 0
     for number, entry in targets:
         platform = entry.get("platform") or PLATFORM_YOUTUBE_MUSIC
@@ -343,7 +356,7 @@ def run_add(spec: str) -> int:
         if platform == PLATFORM_YOUTUBE_MUSIC:
             if keybind_flow is None:
                 ok, message = False, (
-                    "Error: YouTube Music not configured — run the GUI auth setup "
+                    "Error: YouTube Music not configured - run the GUI auth setup "
                     "first (ytmusicapi must be installed)"
                 )
             elif yt_url is None:
@@ -356,11 +369,13 @@ def run_add(spec: str) -> int:
         elif platform == PLATFORM_SPOTIFY:
             if sp_flow is None:
                 ok, message = False, (
-                    "Error: Spotify is not configured — run the GUI auth setup first"
+                    "Error: Spotify is not configured - run the GUI auth setup first"
                 )
+            elif sp_song_data is None:
+                ok, message = False, f"Error: {sp_error or 'Nothing playing'}"
             else:
                 ok, message = _run_flow(
-                    sp_flow, name,
+                    sp_flow, name, song_data=sp_song_data,
                     playlist_id=entry.get("playlist_id") or None,
                 )
         else:
@@ -369,12 +384,11 @@ def run_add(spec: str) -> int:
         line = f'#{number} "{name}" ({platform}): {message}'
         if ok:
             print(line, flush=True)
-            successes += 1
         else:
             print(line, file=sys.stderr, flush=True)
             failures += 1
 
-    return 0 if successes else 1
+    return 0 if failures == 0 else 1
 
 
 def run_add_url(url: str) -> int:
@@ -406,6 +420,29 @@ def run_add_url(url: str) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Non-editable playlists (followed, not collaborative) can be tracked
+    # read-only, but adding songs to them fails on the platform - warn.
+    if platform == PLATFORM_SPOTIFY and isinstance(details, dict):
+        try:
+            user_id = (
+                integration.spotify_api.get_user_id()
+                if integration.spotify_api
+                else None
+            )
+        except Exception:
+            user_id = None
+        if (
+            user_id
+            and details.get("owner_id")
+            and details.get("owner_id") != user_id
+            and not details.get("collaborative")
+        ):
+            print(
+                f"warning: you are not the owner or a collaborator of "
+                f"'{name}' - adding songs to it will fail on Spotify's side",
+                file=sys.stderr,
+            )
 
     thumb_url = ThumbnailService.from_data(details)
     thumb_url = PlaylistSyncService.prefer_library_thumbnail(
@@ -474,7 +511,11 @@ def run_del(spec: str) -> int:
         PlaylistStore.delete_playlist(
             name, platform=platform, playlist_id=entry.get("playlist_id", "")
         )
-        DatabaseManager.delete_playlist_db(name, platform)
+        DatabaseManager.delete_playlist_db(
+            name,
+            platform,
+            playlist_id=entry.get("playlist_id", ""),
+        )
         print(f'#{number} "{name}" ({platform}): deleted', flush=True)
     return 0
 
@@ -526,6 +567,36 @@ def run_refresh(spec: str) -> int:
     return 0 if failures == 0 else 1
 
 
+def _stored_refresh_token() -> Optional[str]:
+    """Read the refresh token from the saved spotify.json, if any.
+
+    Used by the interactive login as the "default" for the refresh-token
+    prompt - pressing Enter re-logs-in with the stored token (e.g. when
+    only the client credentials changed).
+    """
+    try:
+        from integrations.music_spotify.music_spotify import SPOTIFY_AUTH_FILE
+
+        data = json.loads(SPOTIFY_AUTH_FILE.read_text(encoding="utf-8"))
+        return data.get("refresh_token") or None
+    except (ImportError, OSError, ValueError):
+        return None
+
+
+def _prompt(label: str, hidden: bool = False) -> Optional[str]:
+    """Interactive credential prompt (getpass = hidden, like sudo).
+
+    Returns None when the input stream is closed (EOFError) so non-
+    interactive invocations fail cleanly instead of crashing.
+    """
+    try:
+        if hidden:
+            return getpass.getpass(label).strip()
+        return input(label).strip()
+    except EOFError:
+        return None
+
+
 def run_login(
     platform: str,
     client_id: Optional[str] = None,
@@ -538,12 +609,16 @@ def run_login(
     terminal running ``ytmusicapi browser`` (manual instructions instead
     when no terminal emulator is installed).
 
-    spotify: requires ``--client-id`` / ``--client-secret`` /
-    ``--refresh-token``.  Credentials are verified against ``/v1/me``
-    FIRST and only persisted on success (the verify itself writes the
-    refreshed - possibly rotated - refresh token through the canonical
-    writer).  A typo'd login can no longer overwrite and then destroy
-    previously working auth, matching the GUI's save_and_verify ordering
+    spotify: ``--login spotify`` alone prompts interactively (client id,
+    client secret, refresh token - secret/token hidden like sudo).  The
+    flags remain as overrides for scripting/compositor use.  The refresh
+    token is long-lived (the 3600 s default is the *access* token's
+    lifetime); leaving the prompt empty reuses the stored token.
+    Credentials are verified against ``/v1/me`` FIRST and only persisted
+    on success (the verify itself writes the refreshed - possibly rotated
+    - refresh token through the canonical writer).  A typo'd login can no
+    longer overwrite and then destroy previously working auth, matching
+    the GUI's save_and_verify ordering
     (auth_setup.save_and_verify_spotify_credentials).
     """
     if platform not in KNOWN_PLATFORMS:
@@ -573,20 +648,21 @@ def run_login(
         )
         return 0
 
-    # Spotify
-    missing = [
-        name
-        for name, val in (
-            ("--client-id", client_id),
-            ("--client-secret", client_secret),
-            ("--refresh-token", refresh_token),
-        )
-        if not val
-    ]
-    if missing:
+    # Spotify.  Flags override; missing values are prompted interactively
+    # (hidden input for the secret and the token, like sudo).
+    if not client_id:
+        client_id = _prompt("Client id: ")
+    if not client_secret:
+        client_secret = _prompt("Client secret: ", hidden=True)
+    if not refresh_token:
+        stored = _stored_refresh_token()
+        prompt_value = _prompt("Refresh token (leave empty to reuse stored): ", hidden=True)
+        refresh_token = prompt_value or stored
+    if not client_id or not client_secret or not refresh_token:
         print(
-            f"error: '--login spotify' requires {' '.join(missing)} "
-            "(the refresh token comes from your Spotify app's dashboard)",
+            "error: client id, client secret and a refresh token are all "
+            "required (the refresh token comes from your Spotify app's "
+            "dashboard)",
             file=sys.stderr,
         )
         return 2
@@ -652,6 +728,30 @@ def run_logout(platform: str) -> int:
     return 0
 
 
+def _capture_spotify_song(
+    sp_flow,
+) -> Tuple[Optional[Dict], str]:
+    """Fetch the currently-playing Spotify track once for CLI batch mode.
+
+    Returns ``(song_data, error)`` - on failure *song_data* is ``None``
+    and *error* describes what went wrong ("" on success).
+    """
+    try:
+        playing = sp_flow.spotify_integration.get_currently_playing()
+    except Exception as e:
+        logger.error(f"Failed to fetch Spotify currently-playing: {e}", exc_info=True)
+        return None, str(e)
+    if not playing:
+        return None, "Nothing playing on Spotify"
+    return {
+        "title": playing["title"],
+        "artists": playing["artists"],
+        "duration": playing["duration_ms"] // 1000,
+        "track_id": playing["track_id"],
+        "thumbnail": playing.get("thumbnail"),
+    }, ""
+
+
 def _capture_yt_song(
     keybind_flow, receiver
 ) -> Tuple[Optional[str], Optional[Dict], str]:
@@ -702,7 +802,7 @@ def _capture_yt_song(
 def _run_flow(
     flow, playlist_name: str, url=None, song_data=None, playlist_id=None
 ) -> Tuple[bool, str]:
-    """Run one add-flow; returns (ok, message) — message is the line tail."""
+    """Run one add-flow; returns (ok, message) - message is the line tail."""
     outcome = {"ok": None, "message": ""}
 
     def on_status(msg: str) -> None:

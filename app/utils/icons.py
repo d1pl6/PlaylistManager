@@ -1,12 +1,12 @@
 """Scaled icon loading.
 
-``tk.PhotoImage`` is pixel-fixed — it never scales with display DPI, while
+``tk.PhotoImage`` is pixel-fixed - it never scales with display DPI, while
 fonts do (see utils/scaling.py), so at 175% a 16px close button sits next
 to 1.75x text.  :class:`IconService` resizes the base PNG to
 ``round(base_px * ui_scale)`` with LANCZOS and caches the result per
 (path, size).
 
-**Main thread only** — this creates ``ImageTk.PhotoImage`` objects.
+**Main thread only** - this creates ``ImageTk.PhotoImage`` objects.
 """
 
 import logging
@@ -27,7 +27,7 @@ _RESAMPLE = getattr(Image, "Resampling", Image).LANCZOS
 class IconService:
     """Loads and caches scaled ``tk.PhotoImage`` icons.
 
-    The cache holds strong references — ``ImageTk.PhotoImage`` is otherwise
+    The cache holds strong references - ``ImageTk.PhotoImage`` is otherwise
     garbage-collected and the icon silently vanishes.
     """
 

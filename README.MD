@@ -1,13 +1,18 @@
 Add songs that you're currently listening to your chosen playlists or liked tracks using keybinds.
 
-![screenshot1](https://github.com/d1pl6/PlaylistManager/blob/dev/assets/screenshot1.png)
+<img width="326" height="249" alt="screenshot1" src="https://github.com/user-attachments/assets/e628af22-43fc-4a05-ab8e-a9b0083ad697" />
+<img width="326" height="249" alt="screenshot2" src="https://github.com/user-attachments/assets/06ec2ba7-d826-4484-8fba-136ae36493d8" />
+<img width="326" height="249" alt="screenshot3" src="https://github.com/user-attachments/assets/18873a88-2a09-4d1c-b881-5f50e6933d65" />
 
 # About
 I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage. Since i'm not using streaming platforms much, i'm using ai to create same app but on pyton.
 
-# Features
-- Easily add songs to playlists across multiple platforms
-- Pluggable integration system for adding more platforms
+# Integrations
+Currently supported:
+- YouTube Music
+- Spotify
+
+See [INTEGRATIONS.MD](INTEGRATIONS.MD)
 
 # Install
 Requires Python 3.10+
@@ -74,7 +79,7 @@ apt install -y python3-pystray
 ```
 
 > [!NOTE]
-> `python3-ytmusicapi` and `python3-pystray` are only packaged for Debian *sid/testing* and recent Ubuntu releases (universe). On Debian stable or older Ubuntu, use `pip install ytmusicapi pystray` (or `pip install ".[all]"`) instead.
+> `python3-ytmusicapi` is only packaged for Debian *testing/unstable* (not in stable); `python3-pystray` has been packaged since bookworm. On Debian stable, `apt install python3-pystray` and `pip install ytmusicapi` (or `pip install ".[all]"`) instead.
 
 > [!NOTE]
 > **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
@@ -117,15 +122,17 @@ python -m app --logout spotify            # delete spotify.json + registry entri
 
 - `--login youtube_music` opens the auth folder and a terminal for the `ytmusicapi browser`
   flow; manual instructions are printed when no terminal emulator is installed. `--login
-  spotify` needs the three credential options - they are written, verified against the
-  Spotify API, and rolled back (deleted) on verification failure.
+  spotify` takes the three credential options (or prompts for them interactively when
+  omitted; an empty refresh-token prompt reuses the stored token). Credentials are
+  verified against the Spotify API first and only persisted on success - a failed login
+  leaves previously working auth untouched.
 - `--logout` is **local-only** and idempotent: it deletes the platform's credential file(s),
   unregisters all of its playlists from the registry and removes the local song databases
   under `db/<platform>/`. Nothing is revoked on the platform itself; re-running it with
   nothing left prints "no credentials found" and exits 0. After re-login, re-add playlists
   with `-p add <URL>`.
-- Credentials passed on the command line may appear in your shell history - fine on a
-  personal machine, so don't share your creen during login.
+- Credentials passed on the command line may appear in your shell history, so don't share
+  your screen during login.
 - Unknown platform names exit with code 2.
 
 Playlist management (`-p` / `--playlist`, verbs: `add`, `del`/`delete`, `ref`/`refresh`):
@@ -204,12 +211,6 @@ GNOME
 
 `Settings → Keyboard → Custom Shortcuts → Command`
 
-# Integrations
-For now only available
-- YouTube Music
-- Spotify (not tested)
-
-See [INTEGRATIONS.MD](INTEGRATIONS.MD)
 
 # License
 PlaylistManager is licensed under the GNU-GPL-2.0-or-later. If you did not get a copy, please see <https://www.gnu.org/licenses/>.
@@ -219,6 +220,6 @@ Q: Why AI?
 
 A: I hate programming.
 
-Q: Will _patform_ will be added?
+Q: Will _patform_ be added?
 
 A: See [TODO](TODO.MD), if it doesn't exist there - open `Platform integration request` on `Issue`s page.

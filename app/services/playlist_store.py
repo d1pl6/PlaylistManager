@@ -23,7 +23,7 @@ playlists_json = Path(__file__).resolve().parents[2] / "db" / "playlists.json"
 # In-memory cache so we don't re-read the file on every operation.
 _playlist_cache: list[dict] | None = None
 _cache_timestamp: float = 0.0
-_CACHE_TTL: float = 1.0  # seconds before re-reading
+_CACHE_TTL: float = 1.0
 
 # Serialise all read/write access so concurrent mutations don't lose data.
 _lock = threading.Lock()
@@ -157,9 +157,26 @@ class PlaylistStore:
         """
         with _lock:
             playlists = PlaylistStore.load_playlists()
-            existing = _find_by_key(
-                playlists, platform=platform, name=name, playlist_id=playlist_id,
-            )
+            if playlist_id and platform:
+                # Modern path: dedup strictly by (platform, playlist_id).  A
+                # different playlist with the same name must never hijack
+                # this entry (it would rewrite the id and keep the hotkey,
+                # silently retargeting the keybind to the new playlist).
+                existing = _find_by_key(
+                    playlists, platform=platform, name="", playlist_id=playlist_id
+                )
+                if existing is None:
+                    # Legacy upgrade: an entry stored before the id field
+                    # existed, matched by name, with no id yet - adopt it.
+                    legacy = _find_by_key(
+                        playlists, platform=platform, name=name, playlist_id=""
+                    )
+                    if legacy is not None and not legacy.get("playlist_id"):
+                        existing = legacy
+            else:
+                existing = _find_by_key(
+                    playlists, platform=platform, name=name, playlist_id=""
+                )
             if existing is not None:
                 existing["name"] = name
                 existing["playlist_id"] = playlist_id
@@ -202,6 +219,40 @@ class PlaylistStore:
             )
             if target is not None:
                 target["thumbnail_url"] = thumbnail_url
+                PlaylistStore._write(playlists)
+
+    @staticmethod
+    def update_metadata(
+        name: str,
+        platform: str,
+        playlist_id: str = "",
+        *,
+        follower_count: int | None = None,
+    ):
+        """Update optional metadata fields for a single playlist.
+
+        Matches by ``(platform, playlist_id)`` when available, falling back
+        to ``(platform, name)`` for legacy entries.  Only non-None keyword
+        arguments are written - omitted fields are left untouched.
+
+        Currently supported fields:
+
+        * ``follower_count`` (``followerCount`` in the JSON) - Spotify
+          playlists report ``followers.total``; YouTube Music playlists
+          have no equivalent and default to 0.
+        """
+        with _lock:
+            playlists = PlaylistStore.load_playlists()
+            target = _find_by_key(
+                playlists, playlist_id=playlist_id, platform=platform, name=name
+            )
+            if target is None:
+                return
+            changed = False
+            if follower_count is not None:
+                target["followerCount"] = follower_count
+                changed = True
+            if changed:
                 PlaylistStore._write(playlists)
 
     @staticmethod

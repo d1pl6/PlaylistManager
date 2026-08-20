@@ -1,0 +1,402 @@
+"""ShowcaseManager - owns the last-N-songs showcase section of playlist cards.
+
+Extracted from MainWindow to reduce its size.  Handles building,
+refreshing, and removing song rows, song thumbnails, stats, log labels,
+card height, and the playlist cover thumbnail pipeline.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import tkinter as tk
+from pathlib import Path
+
+from services.playlist_store import PlaylistStore
+from services.song_manager import SongManager
+from ui.tooltip import ToolTip
+from utils.icons import IconService
+from utils.scaling import px, ui_font
+from utils.thumbnail import ThumbnailService
+from utils.theme import C, btn_colors
+
+logger = logging.getLogger(__name__)
+
+assets_dir = Path(__file__).resolve().parents[2] / "assets"
+playlist_cover_img_path = assets_dir / "playlist_image.png"
+
+
+class ShowcaseManager:
+    def __init__(
+        self,
+        root,
+        card_grid,
+        song_manager,
+        *,
+        song_placeholder_img=None,
+        close_playlist_img=None,
+        make_keybind_callbacks=None,
+        on_reload_requested=None,
+        get_search_results_height=None,
+        on_remove_done=None,
+        integrations=None,
+        card_index_fn=None,
+        search_results=None,
+    ) -> None:
+        self.root = root
+        self._card_grid = card_grid
+        self._song_manager = song_manager
+        self.song_placeholder_img = song_placeholder_img or self._load_song_placeholder()
+        self._close_playlist_img = close_playlist_img
+        self._make_keybind_callbacks = make_keybind_callbacks
+        self._on_reload_requested = on_reload_requested
+        self._get_search_results_height = get_search_results_height
+        self._on_remove_done = on_remove_done
+        self.integrations = integrations
+        self._card_index_fn = card_index_fn
+        self._search_results = search_results or {}
+        self.frame_img_refs: dict = {}
+
+    def _card_index(self, card) -> int | None:
+        if self._card_index_fn:
+            return self._card_index_fn(card)
+        try:
+            return self._card_grid.cards.index(card)
+        except ValueError:
+            return None
+
+    def _load_song_placeholder(self):
+        album_path = assets_dir / "album_img.png"
+        try:
+            return IconService.get(album_path, 40)
+        except FileNotFoundError:
+            logger.debug(
+                "album_img.png placeholder missing; falling back to playlist_image.png"
+            )
+            return IconService.get(playlist_cover_img_path, 40)
+
+    def _set_playlist_cover(self, cover_label: tk.Label, thumb_url: str) -> None:
+        def fetch() -> None:
+            img = ThumbnailService.fetch_image(thumb_url, size=(px(64), px(64)))
+            if img is not None:
+                try:
+                    self.root.after(0, lambda: self._apply_cover(cover_label, img))
+                except Exception:
+                    logger.debug("Window closed during cover download", exc_info=True)
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _apply_cover(self, cover_label: tk.Label, img) -> None:
+        try:
+            if not cover_label.winfo_exists():
+                return
+            tk_img = ThumbnailService.to_photoimage(img)
+        except Exception as e:
+            logger.error("Failed to create cover PhotoImage: %s", e)
+            return
+        try:
+            cover_label.configure(image=tk_img)
+        except tk.TclError:
+            return
+        self.frame_img_refs[cover_label] = [tk_img]
+
+    def _prune_frame_imgs(self, container) -> None:
+        for child in container.winfo_children():
+            if isinstance(child, tk.Label):
+                refs = self.frame_img_refs.pop(child, None)
+                if refs:
+                    refs.clear()
+            elif isinstance(child, tk.Frame):
+                self._prune_frame_imgs(child)
+
+    def _fetch_song_thumb(self, thumb_label: tk.Label, thumb_url: str) -> None:
+        def fetch() -> None:
+            img = ThumbnailService.fetch_image(thumb_url, size=(px(40), px(40)))
+            if img is not None:
+                try:
+                    self.root.after(0, lambda: self._apply_cover(thumb_label, img))
+                except Exception:
+                    logger.debug(
+                        "Window closed during song thumb download", exc_info=True
+                    )
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _refresh_showcase(
+        self, frame_idx: int, playlist_name: str, platform: str
+    ) -> None:
+        try:
+            card = self._card_grid.cards[frame_idx]
+        except IndexError:
+            return
+
+        old_showcase = card.showcase_frame
+        if old_showcase is not None:
+            self._prune_frame_imgs(old_showcase)
+            old_showcase.destroy()
+            card.showcase_frame = None
+
+        rows = []
+        if self._card_grid._showcase_count > 0:
+            rows = self._song_manager.get_latest_songs(
+                playlist_name,
+                self._card_grid._showcase_count,
+                platform=platform,
+                playlist_id=card.playlist_id,
+            )
+
+        card.showcase_rows = len(rows)
+        if rows:
+            showcase_frame, thumb_jobs = self._build_showcase_frame(card.frame, rows)
+            if frame_idx not in self._search_results:
+                showcase_frame.grid(row=3, column=0, sticky="nsew")
+            card.showcase_frame = showcase_frame
+            for thumb_label, url in thumb_jobs:
+                self._fetch_song_thumb(thumb_label, url)
+
+        self._card_grid._update_card_height(frame_idx, layout=True)
+
+    def _refresh_stats(
+        self, frame_idx: int, playlist_name: str, platform: str
+    ) -> None:
+        try:
+            card = self._card_grid.cards[frame_idx]
+        except IndexError:
+            return
+
+        playlist_id = card.playlist_id
+
+        sm = self._song_manager
+        song_count = sm.get_song_count(
+            playlist_name, platform=platform, playlist_id=playlist_id
+        )
+        total_seconds = sm.get_total_duration(
+            playlist_name, platform=platform, playlist_id=playlist_id
+        )
+
+        store_entry = PlaylistStore.find_playlist(
+            playlist_name, platform=platform, playlist_id=playlist_id
+        )
+        follower_count = (store_entry or {}).get("followerCount", 0) if store_entry else 0
+
+        if card.stats_songs is not None:
+            card.stats_songs.config(text=f"{song_count} song{'s' if song_count != 1 else ''}")
+        if card.stats_duration is not None:
+            card.stats_duration.config(text=self._format_duration(total_seconds))
+        if card.stats_followers is not None:
+            if follower_count > 0:
+                card.stats_followers.config(
+                    text=f"{follower_count} follower{'s' if follower_count != 1 else ''}"
+                )
+            else:
+                card.stats_followers.config(text="")
+
+    @staticmethod
+    def _format_duration(seconds: int) -> str:
+        if seconds <= 0:
+            return "\u2014"
+        h, remainder = divmod(int(seconds), 3600)
+        m, s = divmod(remainder, 60)
+        if h > 0:
+            return f"{h}h {m:02d}m"
+        if m > 0:
+            return f"{m}m {s:02d}s"
+        return f"{s}s"
+
+    def _build_showcase_frame(self, main_frame: tk.Frame, songs: list) -> tk.Frame:
+        frame_playlist_bg = C["frame_playlist_bg"]
+        label_playlist_log_bg = C["label_playlist_log_bg"]
+        label_playlist_log_fg = C["label_playlist_log_fg"]
+        remove_cols = btn_colors(C["button_playlist_bg"], C["button_playlist_fg"])
+
+        showcase = tk.Frame(main_frame, background=frame_playlist_bg)
+        showcase.grid_columnconfigure(1, weight=1)
+
+        jobs = []
+        for row_idx, song in enumerate(songs):
+            grid_row = row_idx * 2
+
+            thumb = tk.Label(
+                showcase,
+                image=self.song_placeholder_img,
+                background=label_playlist_log_bg,
+            )
+            song_name = tk.Label(
+                showcase,
+                text=song.get("title", ""),
+                font=ui_font(12),
+                background=label_playlist_log_bg,
+                foreground=label_playlist_log_fg,
+                anchor="w",
+            )
+            artists = song.get("artists", [])
+            artists_str = (
+                ", ".join(artists[:2]) if isinstance(artists, list) else str(artists)
+            )
+            song_artists = tk.Label(
+                showcase,
+                text=artists_str,
+                font=ui_font(12),
+                background=label_playlist_log_bg,
+                foreground=label_playlist_log_fg,
+                anchor="w",
+            )
+            remove_btn = tk.Button(
+                showcase,
+                image=self._close_playlist_img,
+                cursor="hand2",
+                **remove_cols,
+                highlightthickness=0,
+                relief="raised",
+                command=lambda f=main_frame, sid=song.get("id"), tid=song.get("track_id"): (
+                    self._on_remove_song(f, sid, tid)
+                ),
+            )
+            ToolTip(remove_btn, "Remove from playlist")
+
+            thumb.grid(
+                row=grid_row, column=0, rowspan=2, sticky="nsew",
+                padx=(0, 2), pady=(2, 0),
+            )
+            song_name.grid(row=grid_row, column=1, sticky="nsew")
+            remove_btn.grid(row=grid_row, column=2, rowspan=2, sticky="ne")
+            song_artists.grid(row=grid_row + 1, column=1, sticky="nsew")
+
+            url = song.get("thumbnail_url") or ""
+            if url:
+                jobs.append((thumb, url))
+
+        return showcase, jobs
+
+    def _on_remove_song(
+        self, main_frame: tk.Frame, song_id: int, track_id: str
+    ) -> None:
+        card = next((c for c in self._card_grid.cards if c.frame is main_frame), None)
+        if card is None:
+            return
+        playlist_name = card.name_label.cget("text")
+        platform = card.platform
+        status_label = card.log_status
+
+        if card.removing or card.syncing:
+            return
+        if not track_id or not song_id:
+            status_label.config(
+                text="Error", background=C["label_playlist_error_bg"]
+            )
+            return
+        card.removing = True
+
+        status_label.config(text="Removing", background=C["label_playlist_warn_bg"])
+
+        buttons = self._frame_buttons(main_frame)
+        for btn in buttons:
+            try:
+                btn.config(state="disabled", cursor="arrow")
+            except tk.TclError:
+                pass
+
+        playlist_data = PlaylistStore.find_playlist(
+            playlist_name,
+            platform,
+            playlist_id=card.playlist_id,
+        )
+        playlist_id = playlist_data.get("playlist_id", "") if playlist_data else ""
+        integration = self.integrations.get(platform) if self.integrations else None
+
+        def work() -> None:
+            ok = False
+            if not playlist_id:
+                logger.error(
+                    "No playlist_id for '%s' (%s); cannot remove track %s",
+                    playlist_name, platform, track_id,
+                )
+            elif integration is None or not integration.is_authenticated():
+                logger.error(
+                    "Integration %s not authenticated; cannot remove track %s",
+                    platform, track_id,
+                )
+            else:
+                ok = integration.remove_track(playlist_id, track_id)
+                if ok:
+                    self._song_manager.delete_song(
+                        playlist_name,
+                        song_id,
+                        platform=platform,
+                        playlist_id=playlist_id,
+                    )
+
+            def done() -> None:
+                card.removing = False
+                try:
+                    if not card.frame.winfo_exists():
+                        return
+                except tk.TclError:
+                    return
+                for btn in buttons:
+                    try:
+                        btn.config(state="normal")
+                    except tk.TclError:
+                        pass
+                if ok:
+                    status_label.config(
+                        text="Removed", background=C["label_playlist_good_bg"]
+                    )
+                    cur_idx = self._card_index(card)
+                    if cur_idx is not None:
+                        pname = card.name_label.cget("text")
+                        self._refresh_showcase(cur_idx, pname, card.platform)
+                        self._refresh_stats(cur_idx, pname, card.platform)
+                else:
+                    status_label.config(
+                        text="Error", background=C["label_playlist_error_bg"]
+                    )
+
+            try:
+                self.root.after(0, done)
+            except Exception:
+                logger.debug(
+                    "App is shutting down; dropped remove-done update",
+                    exc_info=True,
+                )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    @staticmethod
+    def _frame_buttons(main_frame: tk.Frame) -> list:
+        buttons: list[tk.Button] = []
+        def _walk(w):
+            for child in w.winfo_children():
+                if isinstance(child, tk.Button):
+                    buttons.append(child)
+                elif isinstance(child, tk.Frame):
+                    _walk(child)
+        _walk(main_frame)
+        return buttons
+
+    # -- Delegated from CardGridManager ---------------------------------
+
+    def update_card_height(self, frame_idx: int, *, layout: bool = False) -> None:
+        self._card_grid._update_card_height(frame_idx, layout=layout)
+
+    def apply_log_visibility(self, frame_idx: int) -> None:
+        self._card_grid._apply_log_visibility(frame_idx)
+
+    def apply_stats_visibility(self, frame_idx: int) -> None:
+        self._card_grid._apply_stats_visibility(frame_idx)
+
+    def update_log_labels_from_db(
+        self, frame_idx: int, playlist_name: str, platform: str
+    ) -> None:
+        self._card_grid._update_log_labels_from_db(frame_idx, playlist_name, platform)
+
+    # -- Aliases for callers that use the un-prefixed public name -------
+
+    refresh = _refresh_showcase
+    refresh_stats = _refresh_stats
+    set_playlist_cover = _set_playlist_cover
+    apply_cover = _apply_cover
+    fetch_song_thumb = _fetch_song_thumb
+    load_song_placeholder = _load_song_placeholder
+    prune_frame_imgs = _prune_frame_imgs
+    on_remove_song = _on_remove_song

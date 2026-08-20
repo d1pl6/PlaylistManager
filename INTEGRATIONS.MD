@@ -13,7 +13,7 @@
 ---
 
 ### [Spotify](https://developer.spotify.com)
-Requers premium
+Requires premium
 
 Added without tests.
 1. Login [here](https://developer.spotify.com/)
@@ -22,24 +22,24 @@ Added without tests.
 
 ### [Apple Music](https://developer.apple.com/documentation/applemusicapi/generating-developer-tokens)
 
-Won't be added in the nearest future.
+Won’t be added in the near future.
 
-### Youtube Music
-Can't import playlists using OAuth so only browser Request Headers option is avalible.
-1. Install [extension for browser](https://github.com/d1pl6/youtube-music-integration) (Firefox only)
-2. Add extension [here](about:debugging#/runtime/this-firefox) (i won't sign extension)
+### YouTube Music
+Can't import playlists using OAuth so only browser’s Request Headers option is available.
+1. Install the [browser extension](https://github.com/d1pl6/youtube-music-integration) (Firefox only)
+2. Add the extension [here](about:debugging#/runtime/this-firefox) (i won't sign extension)
 3. Open https://music.youtube.com
 4. Open Web Developers tools (F12 or Ctrl+Shift+I)
 5. Open "Network" tab and search for "browse?". If it didn't appear, scroll down the page, reload, do whatever but it should appear.
 6. Open console (cd) in `~/.config/playlistmanager/auth` or `AppData/{something}/playlistmanager/auth` folder and use `ytmusicapi browser` in console
-7. Follow instructions (copy Request Headers > paste them in console > hit Enter > Ctrl+Z or Ctrl+D > Enter). Use Ctrl+C to cancel
+7. Follow instructions (copy Request Headers > paste them in console > Enter > Ctrl+Z or Ctrl+D > Enter). Use Ctrl+C to cancel
 
-### [SoundCloud](https://soundcloud.com/you/apps/new) 
-Requeires Artist Pro to create app & use API
+### [SoundCloud](https://soundcloud.com/you/apps/new)
+Requires Artist Pro to create app & use API
 
-Will be added. Without tests (i don't have money)
+Will be added. Without tests (I don't have money)
 
-### [AmAzOn mUsIc](https://community.amazondeveloper.com/t/request-for-amazon-music-api-access/24864)
+### AmAzOn mUsIc [blocked](https://community.amazondeveloper.com/t/request-for-amazon-music-api-access/24864)
 [Unfortunately, we are not onboarding any new client to the API while in closed beta.](https://community.amazondeveloper.com/t/request-for-amazon-music-api-access/24864)
 [Check this in the future](https://github.com/AmineSoukara/amazon-music)
 

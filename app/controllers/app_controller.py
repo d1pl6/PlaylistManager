@@ -12,7 +12,7 @@ import tkinter as tk
 from typing import Callable, Optional
 
 from utils.scaling import px, ui_font
-from utils.theme import C
+from utils.theme import C, btn_colors
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,10 @@ class AppController:
                 self.app.root.destroy()
             except Exception:
                 logger.exception("Failed to force-destroy the root window")
+
+    def check_updates(self, *, force: bool = True, on_done=None) -> None:
+        """Proxy for App._check_updates - keeps the controller boundary."""
+        self.app._check_updates(force=force, on_done=on_done)
 
     def refresh_auth(
         self,
@@ -144,9 +148,7 @@ class AppController:
                 dialog,
                 text="Force-quit",
                 command=lambda: _choose(True),
-                background=C["button_main_bg"],
-                foreground=C["button_main_fg"],
-                activebackground=C["button_main_a_bg"],
+                **btn_colors(C["button_main_bg"], C["button_main_fg"]),
                 bd=0,
             ).pack(side="left", padx=(16, 4), pady=(0, 12))
 
@@ -154,9 +156,7 @@ class AppController:
                 dialog,
                 text="Cancel",
                 command=lambda: _choose(False),
-                background=C["button_head_bg"],
-                foreground=C["button_head_fg"],
-                activebackground=C["button_head_a_bg"],
+                **btn_colors(C["button_head_bg"], C["button_head_fg"]),
                 bd=0,
             ).pack(side="left", padx=(4, 16), pady=(0, 12))
 

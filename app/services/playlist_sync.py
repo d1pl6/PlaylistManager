@@ -142,7 +142,9 @@ class PlaylistSyncService:
         if not tracks:
             return 0, "No tracks"
         sm = SongManager()
-        inserted = sm.add_songs_bulk(playlist_name, tracks, platform=platform)
+        inserted = sm.add_songs_bulk(
+            playlist_name, tracks, platform=platform, playlist_id=playlist_id
+        )
         return inserted, f"{inserted} new"
 
     def reload_database_sync(
@@ -181,6 +183,15 @@ class PlaylistSyncService:
             platform, integration, playlist_id, thumb_url
         )
 
+        # Refresh follower count (Spotify playlists expose this in
+        # details; YouTube Music playlists have no equivalent).
+        follower_count = details.get("followerCount")
+        if follower_count:
+            PlaylistStore.update_metadata(
+                playlist_name, platform, playlist_id,
+                follower_count=follower_count,
+            )
+
         # Fetch the tracks BEFORE deleting the local database.  The details
         # check above proves the playlist is reachable, but a track-fetch
         # failure right after the delete (network flake) would still destroy
@@ -189,7 +200,7 @@ class PlaylistSyncService:
         # already-fetched list, so nothing is fetched twice.
         tracks = integration.get_playlist_tracks(playlist_id)
 
-        DatabaseManager.delete_playlist_db(playlist_name, platform)
+        DatabaseManager.delete_playlist_db(playlist_name, platform, playlist_id)
         logger.info("Deleted database for '%s'", playlist_name)
 
         # Persist the thumbnail regardless of the track import -
@@ -201,7 +212,9 @@ class PlaylistSyncService:
             return 0, "No tracks", thumb_url
 
         sm = SongManager()
-        inserted = sm.add_songs_bulk(playlist_name, tracks, platform=platform)
+        inserted = sm.add_songs_bulk(
+            playlist_name, tracks, platform=platform, playlist_id=playlist_id
+        )
 
         return inserted, f"{inserted} new", thumb_url
 

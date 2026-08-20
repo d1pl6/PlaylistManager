@@ -1,6 +1,6 @@
 """Unified UI scale factor (HiDPI / display scaling).
 
-Fonts scale automatically via fontconfig/``Xft.dpi`` — **not** via
+Fonts scale automatically via fontconfig/``Xft.dpi`` - **not** via
 ``tk scaling``.  Verified 2026-08-14 on this machine: at 175% display scale
 ``tk scaling`` stays 1.333 (the physical screen DPI) while fonts still render
 at 1.75x, and forcing ``tk scaling`` to 2.333 changes no font metric.  This
@@ -81,7 +81,7 @@ def xft_dpi(root=None) -> Optional[float]:
 
     Priority: the ``Xft.dpi`` X resource, then ``winfo_fpixels('1i')``
     (needs *root*), then the ``XFT_DPI`` env var.  ``None`` only when there
-    is no display connection at all (pure Wayland without XWayland) — which
+    is no display connection at all (pure Wayland without XWayland) - which
     is when the manual profile matters most.
     """
     dpi = _xrdb_xft_dpi()
@@ -104,7 +104,7 @@ def init(root=None) -> None:
     """Compute and cache the UI scale and font multiplier.
 
     Call once, right after ``tk.Tk()`` and before any widget exists (the
-    CLI never calls it — scale stays 1.0).  Calling again later (live
+    CLI never calls it - scale stays 1.0).  Calling again later (live
     re-apply) recomputes from the current settings.
     """
     global _scale, _font_mult
@@ -143,11 +143,16 @@ def px(n: float) -> int:
     return max(1, round(n * _scale))
 
 
-def ui_font(size: int, weight: str = "", family: str = "Noto") -> Tuple[str, ...]:
+def ui_font(size: int, weight: str = "", family: str = "") -> Tuple[str, ...]:
     """Tk ``font=`` spec for one point size, applying the profile multiplier.
 
+    ``family`` defaults to ``""``, which makes Tk use its default font
+    family.  (A hardcoded family like "Noto" is fragile: it is not a real
+    family name, and Tk's fuzzy fallback picks whichever installed font
+    matches best - or the Tk default when nothing does.)
+
     In auto mode ``font_mult`` is 1.0 and this returns the plain
-    ``("Noto", size)`` — fonts are already rendered at the display scale by
+    ``("", size)`` - fonts are already rendered at the display scale by
     fontconfig, so no manual adjustment (double-scaling trap).
     """
     scaled = size if _font_mult == 1.0 else round(size * _font_mult)

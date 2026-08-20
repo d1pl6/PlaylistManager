@@ -1,16 +1,8 @@
-browser.json
-oauth.json
-sample.json
-.env
-tree.txt
 requirements.txt
 *.pyc
 AGENTS.md
 opencode.jsonc
-.gitignore
-plan.md
-cli.md
-screen.md
+0.3.0.md
 
 auth/
 __pycache__/
@@ -18,7 +10,6 @@ log/
 db/
 auth/
 cfg/
-.claude/
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
@@ -29,7 +20,6 @@ youtube-music-extension/
 .cortexkit/
 .agents
 
-album_img.png
 close.png
 closeWindow.png
 hide.png

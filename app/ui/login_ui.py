@@ -3,7 +3,7 @@ Platform login / credential dialog.
 
 Responsibilities:
   - tkinter widget layout and visual feedback (status labels, buttons).
-  - Thread-safe credential verification (threading + ``win.after()``).
+  - Thread-safe credential verification (threading + win.after()).
 
 Actual credential-file i/o, terminal launching, and API verification are
 delegated to :mod:`services.auth_setup` and :mod:`utils.platform`.
@@ -22,7 +22,7 @@ from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from utils.scaling import ui_font
 from utils.icons import IconService
 from utils.window import center_window
-from utils.theme import C
+from utils.theme import C, btn_colors
 from utils.logging_config import user_log
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,6 @@ def show_login_dialog(parent, on_success=None):
     win.transient(parent)
     win.update_idletasks()
     win.grab_set()
-
 
     header = tk.Frame(win, background=frame_header_bg)
     header.pack(fill="both")
@@ -245,13 +244,13 @@ def _on_spotify(parent, on_success):
     entry_fg = C["entry_default_fg"]
     button_close_bg = C["button_close_bg"]
     button_close_fg = C["button_close_fg"]
-    button_close_a_bg = C["button_close_a_bg"]
+    button_close_btn = btn_colors(button_close_bg, button_close_fg)
     btn_test_bg = C["button_main_bg"]
-    btn_test_abg = C["button_main_a_bg"]
     btn_test_fg = C["button_main_fg"]
+    btn_test_btn = btn_colors(btn_test_bg, btn_test_fg)
     button_save_bg = C["button_save_bg"]
     button_save_fg = C["button_save_fg"]
-    button_save_a_bg = C["button_save_a_bg"]
+    button_save_btn = btn_colors(button_save_bg, button_save_fg)
     frame_bg = C["frame_main_bg"]
 
     existing = auth_setup.load_spotify_credentials()
@@ -353,12 +352,17 @@ def _on_spotify(parent, on_success):
         if not _all_filled(creds):
             status_label.config(text="All fields are required", foreground="red")
             return
-        status_label.config(text="Testing...", foreground="white")
-        btn_test.config(state="disabled")
+        status_label.config(text="Testing...", foreground=label_fg)
+        _set_busy(True)
 
         def run():
             result = auth_setup.verify_spotify_credentials(**creds)
-            win.after(0, _test_done, result)
+            try:
+                win.after(0, _test_done, result)
+            except Exception:
+                # App quit (or dialog destroyed) while the verify round
+                # trip was in flight - nothing to schedule against.
+                logger.debug("Login dialog closed during verification", exc_info=True)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -371,7 +375,7 @@ def _on_spotify(parent, on_success):
                 return
         except tk.TclError:
             return
-        btn_test.config(state="normal")
+        _set_busy(False)
         if result.get("ok"):
             status_label.config(
                 text=f"OK: {result['display_name']}",
@@ -386,12 +390,17 @@ def _on_spotify(parent, on_success):
         if not _all_filled(creds):
             status_label.config(text="All fields are required", foreground="red")
             return
-        status_label.config(text="Verifying...", foreground="white")
-        btn_save.config(state="disabled")
+        status_label.config(text="Verifying...", foreground=label_fg)
+        _set_busy(True)
 
         def run():
             result = auth_setup.save_and_verify_spotify_credentials(**creds)
-            win.after(0, _save_done, result)
+            try:
+                win.after(0, _save_done, result)
+            except Exception:
+                # App quit (or dialog destroyed) while the verify round
+                # trip was in flight - nothing to schedule against.
+                logger.debug("Login dialog closed during verification", exc_info=True)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -401,7 +410,7 @@ def _on_spotify(parent, on_success):
                 return
         except tk.TclError:
             return
-        btn_save.config(state="normal")
+        _set_busy(False)
         if result.get("ok"):
             status_label.config(
                 text=f"OK: {result['display_name']}",
@@ -416,10 +425,11 @@ def _on_spotify(parent, on_success):
     btn_delete = tk.Button(
         btn_frame,
         text="Delete",
-        background=button_close_bg,
-        foreground=button_close_fg,
-        activebackground=button_close_a_bg,
+        cursor="hand2",
+        **button_close_btn,
         font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
         command=delete_credentials,
     )
     btn_delete.pack(side="left")
@@ -427,10 +437,11 @@ def _on_spotify(parent, on_success):
     btn_test = tk.Button(
         btn_frame,
         text="Test",
-        background=btn_test_bg,
-        foreground=btn_test_fg,
-        activebackground=btn_test_abg,
+        cursor="hand2",
+        **btn_test_btn,
         font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
         command=test_credentials,
     )
     btn_test.pack(side="left", padx=5)
@@ -438,12 +449,24 @@ def _on_spotify(parent, on_success):
     btn_save = tk.Button(
         btn_frame,
         text="Save",
-        background=button_save_bg,
-        foreground=button_save_fg,
-        activebackground=button_save_a_bg,
+        cursor="hand2",
+        **button_save_btn,
         font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
         command=save_credentials,
     )
     btn_save.pack(side="right")
+
+    def _set_busy(busy: bool) -> None:
+        """Disable/enable every credential button while a verify round trip
+        is in flight - Test and Save must never run concurrently (Spotify's
+        refresh-token rotation makes a second concurrent /v1/me fail, and a
+        delete mid-verify races the file write)."""
+        state = "disabled" if busy else "normal"
+        cursor = "arrow" if busy else "hand2"
+        btn_test.config(state=state, cursor=cursor)
+        btn_save.config(state=state, cursor=cursor)
+        btn_delete.config(state=state, cursor=cursor)
 
     center_window(win)

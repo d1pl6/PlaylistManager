@@ -15,6 +15,10 @@ DEFAULT_SETTINGS = {
     "global_listener": {"is_true": "yes"},
     "hide_to_tray": {"is_true": "no"},
     "ui_scale": {"value": "auto"},
+    "showcase": {"count": "0"},          # int, 0 = off, N = show last N added songs
+    "showcase_log": {"is_true": "yes"},  # show the log_artist/log_name/log_log row
+    "playlist_stats": {"is_true": "yes"},  # show the song count / followers / duration row
+    "layout": {"columns": "2"},          # int, playlist card grid columns, clamped 1-4
 }
 
 THEME_PATH = Path(__file__).resolve().parents[2] / "cfg" / "theme.ini"
@@ -35,37 +39,26 @@ DEFAULT_THEME = {
         "background": "#303030",
         "foreground": "#DADADA",
         "selectcolor": "#505050",
-        "activebackground": "#404040",
-        "activeforeground": "#FFFFFF",
     },
     "button_header": {
         "background": "#6C6C6C",
         "foreground": "#FFFFFF",
-        "activebackground": "#868686",
     },
     "button_main": {
         "background": "#3A3A3A",
         "foreground": "#D7D7D7",
-        "activebackground": "#555555",
-        "activeforeground": "#FFFFFF",
     },
     "button_playlist": {
         "background": "#3A3A3A",
         "foreground": "#D7D7D7",
-        "activebackground": "#555555",
-        "activeforeground": "#FFFFFF",
     },
     "button_close": {
         "background": "#160000",
         "foreground": "#FFFFFF",
-        "activebackground": "#390000",
-        "activeforeground": "#FFFFFF"
     },
     "button_save": {
         "background": "#004304",
         "foreground": "#D7D7D7",
-        "activebackground": "#006B07",
-        "activeforeground": "#FFFFFF"
     },
     "entry_default": {
         "background": "#404040",
@@ -76,6 +69,21 @@ DEFAULT_THEME = {
         "background": "#404040",
         "foreground": "#FFFFFF",
         "readonlybackground": "#2A2A2A",
+    },
+    "label_playlist_stats": {
+        "background": "#2a2a2a",
+        "foreground": "#B0B0B0",
+    },
+    "scrollable_frame": {
+        "background": "#1A1A1A",
+    },
+    "search_bar": {
+        "background": "#1E1E1E",
+        "foreground": "#E0E0E0",
+    },
+    "search_result": {
+        "background": "#2A2A2A",
+        "foreground": "#C0C0C0",
     },
 }
 
@@ -126,6 +134,26 @@ def _safe_read_config(cfg: ConfigParser, path: Path) -> ConfigParser:
     return cfg
 
 
+def _strip_legacy_active_keys(cfg: ConfigParser) -> bool:
+    """Drop dead ``activebackground``/``activeforeground`` theme options.
+
+    The smart hover system (0.2.x, ``btn_colors()`` in utils/theme.py)
+    derives hover colours from the resting colours, so these options in a
+    user's ``cfg/theme.ini`` are dead configuration left over from before
+    the migration.  Runs on every app start via ``ensure_theme_file()``;
+    idempotent, so repeated calls are harmless.
+
+    MIGRATION HELPER - remove together with its call in ``ensure_theme_file``
+    in 0.3.0.
+    """
+    changed = False
+    for section in list(cfg.sections()):
+        for option in ("activebackground", "activeforeground"):
+            if cfg.remove_option(section, option):
+                changed = True
+    return changed
+
+
 def ensure_theme_file() -> None:
     cfg = ConfigParser()
     if THEME_PATH.exists():
@@ -140,6 +168,7 @@ def ensure_theme_file() -> None:
                 if key not in cfg[section]:
                     cfg[section][key] = value
                     changed = True
+    changed = _strip_legacy_active_keys(cfg) or changed
     if not THEME_PATH.exists() or changed:
         _write_ini_file(THEME_PATH, cfg)
 
@@ -171,37 +200,26 @@ THEME_PRESETS = {
             "background": "#F0F0F0",
             "foreground": "#222222",
             "selectcolor": "#D9D9D9",
-            "activebackground": "#E0E0E0",
-            "activeforeground": "#000000",
         },
         "button_header": {
             "background": "#D0D0D0",
             "foreground": "#000000",
-            "activebackground": "#BEBEBE",
         },
         "button_main": {
             "background": "#E6E6E6",
             "foreground": "#222222",
-            "activebackground": "#D2D2D2",
-            "activeforeground": "#000000",
         },
         "button_playlist": {
             "background": "#E6E6E6",
             "foreground": "#222222",
-            "activebackground": "#D2D2D2",
-            "activeforeground": "#000000",
         },
         "button_close": {
             "background": "#F4DADA",
             "foreground": "#000000",
-            "activebackground": "#E7BABA",
-            "activeforeground": "#000000",
         },
         "button_save": {
             "background": "#004304",
             "foreground": "#D7D7D7",
-            "activebackground": "#006B07",
-            "activeforeground": "#FFFFFF"
         },
         "entry_default": {
             "background": "#FFFFFF",
@@ -212,6 +230,21 @@ THEME_PRESETS = {
             "background": "#FFFFFF",
             "foreground": "#111111",
             "readonlybackground": "#F3F3F3",
+        },
+        "label_playlist_stats": {
+            "background": "#EBEBEB",
+            "foreground": "#555555",
+        },
+        "scrollable_frame": {
+            "background": "#F5F5F5",
+        },
+        "search_bar": {
+            "background": "#F0F0F0",
+            "foreground": "#111111",
+        },
+        "search_result": {
+            "background": "#F5F5F5",
+            "foreground": "#333333",
         },
     },
 }

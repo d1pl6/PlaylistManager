@@ -59,21 +59,23 @@ def parse_version(v: str) -> tuple:
     )
 
 
-def check(callback=None):
+def check(callback=None, *, force: bool = False):
     """Check for updates on GitHub in a background thread.
 
     Args:
-        callback: Optional callable(available: bool, latest_version: str | None, download_url: str | None, body: str | None, error: str | None)
+        callback: Optional callable(available, latest_version, download_url, body, error)
+        force: If True, bypasses the update_check setting.
     """
 
     def _check():
         try:
-            enabled = get_setting("update_check", True)
-            if not enabled:
-                logger.debug("Update check is disabled in settings")
-                if callback:
-                    callback(False, None, None, None, None)
-                return
+            if not force:
+                enabled = get_setting("update_check", True)
+                if not enabled:
+                    logger.debug("Update check is disabled in settings")
+                    if callback:
+                        callback(False, None, None, None, None)
+                    return
 
             resp = requests.get(API_URL, timeout=10)
             resp.raise_for_status()
@@ -87,14 +89,20 @@ def check(callback=None):
 
             if available:
                 logger.info(
-                    "Update available: v%s (current: v%s)", latest_tag, __version__
+                    "Update v%s available at %s",
+                    latest_tag,
+                    download_url,
                 )
             else:
                 logger.debug("App is up to date (v%s)", __version__)
 
             if callback:
                 callback(
-                    available, latest_tag or None, download_url or None, body or None, None
+                    available,
+                    latest_tag or None,
+                    download_url or None,
+                    body or None,
+                    None,
                 )
 
         except requests.RequestException as e:
@@ -106,5 +114,4 @@ def check(callback=None):
             if callback:
                 callback(False, None, None, None, f"Update check failed.\n{e}")
 
-    thread = threading.Thread(target=_check, daemon=True)
-    thread.start()
+    threading.Thread(target=_check, daemon=True).start()

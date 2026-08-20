@@ -49,6 +49,14 @@ class BaseIntegration:
         """
         return []
 
+    def remove_track(self, playlist_id: str, track_id: str) -> bool:
+        """Remove one track from a platform playlist.
+
+        Returns True only when the platform confirmed the removal.
+        The default returns False - implementations must override.
+        """
+        return False
+
 
 class IntegrationRegistry:
     def __init__(self):
@@ -96,7 +104,17 @@ class YouTubeMusicIntegration(BaseIntegration):
         if not self.yt_client:
             return []
         try:
-            return self.yt_client.get_library_playlists()
+            # Filter to playlists the user can actually add songs to.
+            # ytmusicapi's parse marks each item with "owned" (the library
+            # browse can surface followed/saved playlists the user is not a
+            # collaborator on - adding to them fails on the platform side).
+            # Items without the flag are kept defensively so a parser change
+            # can never hide an owned playlist.
+            return [
+                p
+                for p in self.yt_client.get_library_playlists()
+                if p.get("owned") is not False
+            ]
         except Exception as e:
             logger.error(f"YouTube Music: failed to get library playlists: {e}")
             return []
@@ -116,7 +134,7 @@ class YouTubeMusicIntegration(BaseIntegration):
         try:
             playlists = self.yt_client.get_library_playlists()
             for playlist in playlists:
-                if playlist.get("title") == name:
+                if playlist.get("owned") is not False and playlist.get("title") == name:
                     return playlist.get("playlistId")
             return None
         except Exception as e:
@@ -132,6 +150,45 @@ class YouTubeMusicIntegration(BaseIntegration):
         except Exception as e:
             logger.error(f"YouTube Music: failed to get playlist tracks: {e}")
             return []
+
+    def remove_track(self, playlist_id: str, track_id: str) -> bool:
+        if not self.yt_client:
+            return False
+        try:
+            # ytmusicapi's remove_playlist_items requires BOTH videoId and
+            # setVideoId per item - setVideoId is the playlist-scoped id the
+            # edit endpoint needs (only present when the playlist is
+            # editable).  Fetch the playlist, locate the track and pass its
+            # full item through; a track that is gone or lacks setVideoId
+            # (non-owned playlist) is reported, not raised.
+            playlist = self.yt_client.get_playlist(playlist_id, limit=None)
+            tracks = playlist.get("tracks", [])
+            target = next(
+                (
+                    t
+                    for t in tracks
+                    if t.get("videoId") == track_id and t.get("setVideoId")
+                ),
+                None,
+            )
+            if target is None:
+                logger.warning(
+                    "YouTube Music: track %s is not removable from playlist %s "
+                    "(not in the playlist, or the playlist is not editable)",
+                    track_id, playlist_id,
+                )
+                return False
+            self.yt_client.remove_playlist_items(playlist_id, [target])
+            logger.info(
+                "YouTube Music: removed track %s from playlist %s",
+                track_id, playlist_id,
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                f"YouTube Music: failed to remove track {track_id}: {e}"
+            )
+            return False
 
 
 class SpotifyIntegration(BaseIntegration):
@@ -162,15 +219,35 @@ class SpotifyIntegration(BaseIntegration):
             return []
         try:
             raw = self.spotify_api.get_playlists()
-            return [
-                {
-                    "title": p.get("name", "Unknown"),
-                    "playlistId": p.get("id", ""),
-                    "thumbnail": p.get("images", [{}])[0].get("url") if p.get("images") else None,
-                    "trackCount": p.get("tracks", {}).get("total", 0),
-                }
-                for p in raw
-            ]
+            # /me/playlists includes playlists the user merely *follows* -
+            # those reject add-song calls ("not owner or collaborator") and
+            # only clutter the picker.  Keep owned + collaborative entries.
+            owner_id = self.spotify_api.get_user_id()
+            if owner_id is None:
+                logger.warning(
+                    "Could not determine Spotify user id; non-owned "
+                    "playlists will appear in the picker"
+                )
+            out = []
+            for p in raw:
+                if (
+                    owner_id
+                    and p.get("owner", {}).get("id") != owner_id
+                    and not p.get("collaborative")
+                ):
+                    continue
+                out.append(
+                    {
+                        "title": p.get("name", "Unknown"),
+                        "playlistId": p.get("id", ""),
+                        "thumbnail": p.get("images", [{}])[0].get("url")
+                        if p.get("images")
+                        else None,
+                        "trackCount": p.get("tracks", {}).get("total", 0),
+                        "followerCount": p.get("followers", {}).get("total", 0),
+                    }
+                )
+            return out
         except Exception as e:
             logger.error(f"Spotify: failed to get library playlists: {e}")
             return []
@@ -186,6 +263,9 @@ class SpotifyIntegration(BaseIntegration):
                 "thumbnails": data.get("images", []),
                 "title": data.get("name", ""),
                 "trackCount": data.get("tracks", {}).get("total", 0),
+                "owner_id": (data.get("owner") or {}).get("id", ""),
+                "collaborative": bool(data.get("collaborative")),
+                "followerCount": (data.get("followers") or {}).get("total", 0),
             }
         except Exception as e:
             logger.error(f"Spotify: failed to get playlist details: {e}")
@@ -219,3 +299,8 @@ class SpotifyIntegration(BaseIntegration):
         if not self.spotify_api:
             return False
         return self.spotify_api.add_tracks_to_playlist(playlist_id, track_ids)
+
+    def remove_track(self, playlist_id: str, track_id: str) -> bool:
+        if not self.spotify_api:
+            return False
+        return self.spotify_api.remove_track_from_playlist(playlist_id, track_id)

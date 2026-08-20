@@ -10,40 +10,55 @@ thread).
 import logging
 import threading
 import tkinter as tk
-from tkinter import ttk
-
+from queue import Empty, Queue
+from ui.scrollable import ScrollableFrame
 from utils.scaling import px, ui_font
-from utils.theme import C
+from utils.theme import C, btn_colors
 from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
 
+# Bounded thumbnail fetch concurrency (the queue holds the backlog, so a
+# large library spawns 4 workers instead of one thread per playlist).
+_THUMB_WORKERS = 4
+# Queue sentinel telling a worker to exit.
+_WORKER_STOP = object()
+
 
 class PlaylistDialog:
-    def __init__(self, parent, on_select, on_cancel=None):
+    def __init__(self, parent, on_select, on_cancel=None, columns=2):
         self.parent = parent
         self.on_select = on_select
         self.on_cancel = on_cancel
+        # Root-grid columns the picker overlay must span (matches the
+        # card grid; the caller passes the current column count).
+        self.columns = columns
         self.choose_frame = None
-        self.canvas = None
         self.img_refs = []
+        # Bounded thumbnail pipeline: jobs are queued and consumed by a few
+        # daemon workers instead of one thread per playlist (a 100+ item
+        # library would otherwise pile up 100 threads on the fetch semaphore).
+        self._thumb_tasks: Queue = Queue()
+        for _ in range(_THUMB_WORKERS):
+            threading.Thread(target=self._thumb_worker, daemon=True).start()
 
     def show(self, playlists):
         dialog_bg = C["frame_main_bg"]
         label_fg = C["label_def_fg"]
         btn_bg = C["button_playlist_bg"]
         btn_fg = C["button_playlist_fg"]
-        btn_a_bg = C["button_playlist_a_bg"]
-        btn_a_fg = C["button_playlist_a_fg"]
+        btn_btn = btn_colors(btn_bg, btn_fg)
         close_bg = C["button_head_bg"]
         close_fg = C["button_head_fg"]
-        close_a_bg = C["button_head_a_bg"]
+        close_btn = btn_colors(close_bg, close_fg)
 
         self.choose_frame = tk.Frame(self.parent, background=dialog_bg)
-        self.choose_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        self.choose_frame.grid(
+            row=2, column=0, columnspan=self.columns, sticky="nsew"
+        )
 
         title_frame = tk.Frame(self.choose_frame, background=dialog_bg)
-        title_frame.pack(pady=5)
+        title_frame.pack(fill="x", pady=5)
 
         tk.Label(
             title_frame,
@@ -56,100 +71,89 @@ class PlaylistDialog:
         tk.Button(
             title_frame,
             text="Close",
-            background=close_bg,
-            foreground=close_fg,
-            activebackground=close_a_bg,
+            cursor="hand2",
+            **close_btn,
             font=ui_font(12),
+            highlightthickness=0,
+            relief="raised",
             command=self.cancel,
         ).pack(side="right", anchor="e")
 
-        self.canvas = tk.Canvas(
-            self.choose_frame, background=dialog_bg, highlightthickness=0
+        self.sf = ScrollableFrame(
+            self.choose_frame, bg=C["scrollable_frame_bg"], show_scrollbar=True,
+            bind_all_mousewheel=True,
         )
-        scrollbar = ttk.Scrollbar(
-            self.choose_frame, orient="vertical", command=self.canvas.yview
-        )
-        scrollable_frame = tk.Frame(
-            self.canvas,
-            background=dialog_bg,
-            cursor="hand2",
-            border=1,
-            relief="solid",
-        )
-
-        canvas = self.canvas
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
-        )
-
-        self._canvas_window = self.canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=scrollbar.set)
-        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.sf.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        scrollable_frame = self.sf.content
 
         for playlist in playlists:
             playlist_id = playlist.get("playlistId", "")
             thumb_url = ThumbnailService.from_data(playlist)
             playlist_name = playlist.get("title", "Unknown Playlist")
+            follower_count = playlist.get("followerCount", 0)
 
             btn = tk.Button(
                 scrollable_frame,
                 image="",
-                background=btn_bg,
-                foreground=btn_fg,
-                activebackground=btn_a_bg,
-                activeforeground=btn_a_fg,
+                cursor="hand2",
+                **btn_btn,
                 # NOTE: on an image-only button, Tk reads -width in PIXELS,
-                # not characters. px(40) matches the thumbnail size so the
-                # placeholder is stable and the image is never clipped
-                # (a char-width constant would cap the button at 40px and
-                # cut the scaled thumbnail).
+                # not characters.  px(40) matches the thumbnail size so the
+                # placeholder is stable and the image is never clipped.
                 width=px(40),
-                command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
+                highlightthickness=0,
+                relief="raised",
+                command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url, fc=follower_count: self._on_playlist_click(name, pid, tu, fc),
             )
             btn.pack(pady=5, padx=5)
+
             tk.Button(
                 scrollable_frame,
                 text=playlist_name,
-                background=btn_bg,
-                foreground=btn_fg,
-                activebackground=btn_a_bg,
-                activeforeground=btn_a_fg,
+                cursor="hand2",
+                **btn_btn,
                 font=ui_font(11),
                 width=40,
-                command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url: self._on_playlist_click(name, pid, tu),
+                highlightthickness=0,
+                relief="raised",
+                command=lambda name=playlist_name, pid=playlist_id, tu=thumb_url, fc=follower_count: self._on_playlist_click(name, pid, tu, fc),
             ).pack(pady=5)
 
             if thumb_url:
                 self._load_thumb_async(btn, thumb_url)
 
-        self.canvas.pack(side="left", fill="both", expand=True, padx=10, pady=10)
-        scrollbar.pack(side="right", fill="y")
-
-        scrollable_frame.bind("<MouseWheel>", self._on_mouse_wheel)
-        scrollable_frame.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
-        scrollable_frame.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
-        # Also scroll when the wheel is over the bare canvas (a short list
-        # doesn't cover the full scroll area).
-        self.canvas.bind("<MouseWheel>", self._on_mouse_wheel)
-        self.canvas.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
-        self.canvas.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
-        for child in scrollable_frame.winfo_children():
-            child.bind("<MouseWheel>", self._on_mouse_wheel)
-            child.bind("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
-            child.bind("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
-
     def _load_thumb_async(self, button: tk.Button, thumb_url: str) -> None:
-        """Download the cover in a worker; apply the PhotoImage on the main thread."""
-        def _run() -> None:
-            img = ThumbnailService.fetch_image(thumb_url, size=(px(40), px(40)))
+        """Queue a cover download; the PhotoImage is applied on the main thread."""
+        self._thumb_tasks.put((button, thumb_url))
+
+    def _thumb_worker(self) -> None:
+        """Consume queued cover jobs (daemon).  Network + PIL run here; the
+        resulting image is handed to the main thread via a guarded after()."""
+        while True:
+            item = self._thumb_tasks.get()
+            if item is _WORKER_STOP:
+                self._thumb_tasks.task_done()
+                return
+            button, thumb_url = item
+            try:
+                img = ThumbnailService.fetch_image(
+                    thumb_url, size=(px(40), px(40))
+                )
+            except Exception as e:
+                logger.debug("Thumbnail download failed: %s", e)
+                img = None
             if img is not None:
                 try:
-                    self.parent.after(0, lambda: self._apply_thumb(button, img))
+                    # Default-arg capture: the lambda must bind THIS item's
+                    # button/image, not the loop cells (reassigned on the
+                    # next get() before the main loop may run this).
+                    self.parent.after(
+                        0,
+                        lambda b=button, im=img: self._apply_thumb(b, im),
+                    )
                 except Exception:
                     logger.debug("Dialog closed during thumbnail download", exc_info=True)
-
-        threading.Thread(target=_run, daemon=True).start()
+            self._thumb_tasks.task_done()
 
     def _apply_thumb(self, button: tk.Button, img) -> None:
         try:
@@ -158,7 +162,7 @@ class PlaylistDialog:
                 return
             photo = ThumbnailService.to_photoimage(img)
         except Exception as e:
-            logger.error(f"Failed to create dialog thumbnail: {e}")
+            logger.error("Failed to create dialog thumbnail: %s", e)
             return
         try:
             button.configure(image=photo)
@@ -168,9 +172,9 @@ class PlaylistDialog:
             # and configure() - swallow the race, not a real failure.
             logger.debug("Dialog closed before thumbnail could be applied: %s", e)
 
-    def _on_playlist_click(self, playlist_name, playlist_id, thumb_url=None):
+    def _on_playlist_click(self, playlist_name, playlist_id, thumb_url=None, follower_count=0):
         self.close()
-        self.on_select(playlist_name, playlist_id, thumb_url)
+        self.on_select(playlist_name, playlist_id, thumb_url, follower_count)
 
     def cancel(self):
         if self.on_cancel:
@@ -178,17 +182,21 @@ class PlaylistDialog:
         self.close()
 
     def close(self):
+        # Stop the thumbnail workers: drop queued jobs, then signal each
+        # worker to exit.  A fetch already in flight finishes and hits the
+        # guarded after() against the destroyed dialog - a no-op.
+        try:
+            while True:
+                self._thumb_tasks.get_nowait()
+                self._thumb_tasks.task_done()
+        except Empty:
+            pass
+        for _ in range(_THUMB_WORKERS):
+            self._thumb_tasks.put(_WORKER_STOP)
         if self.choose_frame:
             try:
                 self.choose_frame.destroy()
-            except Exception as e:
-                logger.error(f"Failed to destroy choose_frame: {e}")
+            except Exception:
+                logger.debug("Failed to destroy choose_frame", exc_info=True)
+            self.choose_frame = None
         self.img_refs.clear()
-
-    def _on_canvas_configure(self, event):
-        if self._canvas_window:
-            self.canvas.itemconfig(self._canvas_window, width=event.width)
-
-    def _on_mouse_wheel(self, event):
-        if self.canvas:
-            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")

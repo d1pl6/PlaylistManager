@@ -68,22 +68,56 @@ class App:
         yt_integration.yt_client = yt_client
         self.integrations.register(yt_integration)
 
-        sp_api = None
+        # Spotify: setup_auth() verifies the stored credentials against
+        # /v1/me - a network round trip with a 15 s timeout.  Running it
+        # synchronously here would delay first paint by up to 15 s when
+        # the network is slow or offline (same rule as refresh_auth:
+        # platform round trips must never block the tkinter main thread).
+        # The verification runs on a worker thread; the finished API is
+        # swapped in via root.after when it lands.  A login or refresh
+        # that completes first wins and is never clobbered.
         spotify_auth = None
         try:
             from integrations.music_spotify.music_spotify import spotify_auth as _sp_auth
             spotify_auth = _sp_auth
-            if _sp_auth.setup_auth():
-                sp_api = _sp_auth.get_api()
-                user_log(logger, "Spotify authenticated")
-            else:
-                logger.warning("Spotify is not configured")
-        except Exception as e:
-            logger.error(f"Spotify auth failed: {e}")
-            messagebox.showwarning("Spotify", f"Spotify authentication failed:\n{e}")
+        except ImportError:
+            user_log(
+                logger,
+                "Spotify integration unavailable (requests missing)",
+            )
         sp_integration = SpotifyIntegration(auth_manager=spotify_auth)
-        sp_integration.spotify_api = sp_api
         self.integrations.register(sp_integration)
+
+        def _spotify_auth_worker() -> None:
+            ok, api = False, None
+            if spotify_auth is not None:
+                try:
+                    if spotify_auth.setup_auth():
+                        api = spotify_auth.get_api()
+                        ok = True
+                except Exception as e:
+                    logger.error(f"Spotify auth failed: {e}")
+                if not ok:
+                    logger.warning("Spotify is not configured")
+
+            def _apply() -> None:
+                if sp_integration.spotify_api is None:
+                    # No login/refresh landed in the meantime - safe to swap.
+                    sp_integration.spotify_api = api
+                if ok:
+                    user_log(logger, "Spotify authenticated")
+
+            try:
+                self.root.after(0, _apply)
+            except Exception:
+                # The window closed while verification was in flight; the
+                # credentials are picked up on the next launch.
+                logger.debug(
+                    "Spotify auth finished after the window closed - it "
+                    "applies on the next launch"
+                )
+
+        threading.Thread(target=_spotify_auth_worker, daemon=True).start()
 
         keybind_controller = KeybindController(yt_client, spotify_integration=sp_integration)
         app_controller = AppController(self)
@@ -217,34 +251,43 @@ class App:
 
         threading.Thread(target=_refresh_worker, daemon=True).start()
 
-    def _check_updates(self):
-        def on_result(
-            available, latest_version=None, download_url=None, body=None, error=None
-        ):
+    def _check_updates(self, *, force: bool = False, on_done=None):
+        """Check GitHub for a newer release.
+
+        Args:
+            force: When *False* the check honours the user's
+                ``update_check`` INI toggle; when *True* it always runs
+                (manual "Check for updates now" button).
+            on_done: Optional callback ``f(available, error)`` marshalled
+                to the main thread after the check completes.  The first
+                positional arg is a bool (``True`` when an update is
+                available), the second is *None* or an error string.
+                Used by the settings dialog to show "Up to date!" / error
+                feedback and to re-enable the button.
+        """
+        def on_result(available, latest_version=None, download_url=None, body=None, error=None):
             if available:
                 user_log(logger, "Update v%s available at %s", latest_version, download_url)
                 try:
-                    self.root.after(
-                        0, show_update_dialog, self.root, latest_version, download_url, body
-                    )
+                    self.root.after(0, show_update_dialog, self.root, latest_version, download_url, body)
                 except Exception:
                     # Check finished before mainloop() started, or the app
                     # quit while the request was in flight.  Best-effort -
                     # the updater thread must never raise uncaught.
-                    logger.debug(
-                        "Update dialog not shown: %s",
-                        "mainloop not running or app shutting down",
-                    )
+                    logger.debug("Update dialog not shown: %s", "mainloop not running or app shutting down")
             elif error:
-                logger.warning(error)
-                try:
-                    self.root.after(0, messagebox.showwarning, "Update Check Failed", error)
-                except Exception:
-                    logger.debug(
-                        "Update warning not shown: mainloop not running or app shutting down"
-                    )
+                # No modal: an offline/blocked network at startup would pop
+                # an unavoidable dialog on every launch.  USER level keeps
+                # it visible in normal runs without stealing focus.
+                user_log(logger, "Update check failed: %s", error)
 
-        updater.check(on_result)
+            if on_done:
+                try:
+                    self.root.after(0, on_done, available, error)
+                except Exception:
+                    pass
+
+        updater.check(on_result, force=force)
 
     def _start_tray(self):
         """Start the system tray icon (best effort).

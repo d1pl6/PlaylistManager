@@ -199,6 +199,7 @@ class PlaylistController:
         platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
         thumb_url: Optional[str] = None,
+        follower_count: int = 0,
     ) -> None:
         """A playlist was chosen - persist and notify the UI."""
         PlaylistStore.add_playlist(
@@ -207,6 +208,13 @@ class PlaylistController:
             playlist_id=playlist_id,
             thumbnail_url=thumb_url or "",
         )
+        if follower_count:
+            PlaylistStore.update_metadata(
+                playlist_name,
+                platform,
+                playlist_id,
+                follower_count=follower_count,
+            )
         self._choose_open = False
         self._on_add_playlist_frame(playlist_name, platform, playlist_id, thumb_url)
 
