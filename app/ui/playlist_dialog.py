@@ -18,10 +18,10 @@ from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
 
-#: Bounded thumbnail fetch concurrency (the queue holds the backlog, so a
-#: large library spawns 4 workers instead of one thread per playlist).
+# Bounded thumbnail fetch concurrency (the queue holds the backlog, so a
+# large library spawns 4 workers instead of one thread per playlist).
 _THUMB_WORKERS = 4
-#: Queue sentinel telling a worker to exit.
+# Queue sentinel telling a worker to exit.
 _WORKER_STOP = object()
 
 
@@ -30,8 +30,8 @@ class PlaylistDialog:
         self.parent = parent
         self.on_select = on_select
         self.on_cancel = on_cancel
-        #: Root-grid columns the picker overlay must span (matches the
-        #: card grid; the caller passes the current column count).
+        # Root-grid columns the picker overlay must span (matches the
+        # card grid; the caller passes the current column count).
         self.columns = columns
         self.choose_frame = None
         self.img_refs = []
@@ -80,7 +80,7 @@ class PlaylistDialog:
         ).pack(side="right", anchor="e")
 
         self.sf = ScrollableFrame(
-            self.choose_frame, bg=dialog_bg, show_scrollbar=True,
+            self.choose_frame, bg=C["scrollable_frame_bg"], show_scrollbar=True,
             bind_all_mousewheel=True,
         )
         self.sf.pack(side="left", fill="both", expand=True, padx=10, pady=10)

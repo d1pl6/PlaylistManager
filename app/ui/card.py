@@ -1,10 +1,10 @@
-"""PlaylistCard dataclass — bundles all per-playlist-card state.
+"""PlaylistCard dataclass - bundles all per-playlist-card state.
 
 Replaces the five parallel lists (``frames``, ``frame_positions``,
 ``playlist_name_labels``, ``frame_platforms``, ``active_log_labels``)
 that MainWindow previously kept in lockstep.  One ``PlaylistCard``
 instance travels with its card through renumbering, reordering, and
-deletion — no index bookkeeping required.
+deletion - no index bookkeeping required.
 """
 
 from __future__ import annotations

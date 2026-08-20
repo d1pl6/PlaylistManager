@@ -148,7 +148,7 @@ class KeybindController:
                         "reliable global hotkeys (see cli.md)."
                     )
             except Exception as e:
-                logger.error(f"Failed to start hotkey listener: {e}")
+                logger.error("Failed to start hotkey listener: %s", e)
                 self._listener = None
 
     def _stop_global_listener(self, wait: bool = True):
@@ -292,7 +292,7 @@ class KeybindController:
         combo = self._last_recording_combo
         self._last_recording_combo = ""
         self._recording_callback = None
-        logger.debug(f"Stopped recording keybind: {combo}")
+        logger.debug("Stopped recording keybind: %s", combo)
         return combo
 
     # ------------------------------------------------------------------
@@ -433,7 +433,7 @@ class KeybindController:
             )
 
         def on_error(error_msg):
-            logger.error(f"Keybind flow error: {error_msg}")
+            logger.error("Keybind flow error: %s", error_msg)
             _schedule_ui(
                 lambda: (
                     callbacks.on_reset("readonly"),
@@ -495,7 +495,7 @@ class KeybindController:
                         playlist_id=stored_playlist_id,
                     )
             except Exception as e:
-                logger.error(f"Keybind flow exception: {e}", exc_info=True)
+                logger.error("Keybind flow exception: %s", e, exc_info=True)
                 on_error(str(e))
             finally:
                 self._flow_busy.release()
@@ -510,7 +510,7 @@ class KeybindController:
             try:
                 self.song_manager = SongManager()
             except Exception as e:
-                logger.error(f"Failed to create SongManager: {e}")
+                logger.error("Failed to create SongManager: %s", e)
                 callbacks.on_status("Error", C["label_playlist_error_bg"])
                 callbacks.on_entry_state("readonly")
                 return False
@@ -556,7 +556,7 @@ class KeybindController:
             logger.info("Initialized YouTube Music flow")
             return True
         except Exception as e:
-            logger.error(f"Failed to initialize managers: {e}")
+            logger.error("Failed to initialize managers: %s", e)
             callbacks.on_status("Error", C["label_playlist_error_bg"])
             callbacks.on_entry_state("readonly")
             return False
@@ -571,7 +571,7 @@ class KeybindController:
             try:
                 receiver.stop()
             except Exception as e:
-                logger.error(f"Error stopping URL receiver: {e}")
+                logger.error("Error stopping URL receiver: %s", e)
 
     def stop_listener(self, wait: bool = True):
         if self._global_mode:

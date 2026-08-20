@@ -118,12 +118,12 @@ def show_settings_dialog(
         font=ui_font(14),
     ).pack(fill="both", pady=(0,5))
 
-    sf = ScrollableFrame(win, bg=theme_win_bg, show_scrollbar=True,
+    sf = ScrollableFrame(win, bg=C["scrollable_frame_bg"], show_scrollbar=True,
                          bind_all_mousewheel=True)
     sf.pack(side="left", fill="both", expand=True)
     sf.style_scrollbar(
         hover_bg(C["button_main_bg"]),
-        theme_win_bg,
+        C["scrollable_frame_bg"],
     )
     content = sf.content
 

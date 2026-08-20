@@ -1,4 +1,4 @@
-"""SearchManager — owns the search bar, filtering, and song-search UI.
+"""SearchManager - owns the search bar, filtering, and song-search UI.
 
 Extracted from MainWindow to reduce its size.  Manages playlist-name
 filtering and per-card song search with debounced async queries.
@@ -321,7 +321,7 @@ class SearchManager:
             title = song.get("title", "")
             artists = song.get("artists", [])
             artists_str = ", ".join(artists[:2]) if isinstance(artists, list) else str(artists)
-            label_text = f"{title} — {artists_str}" if artists_str else title
+            label_text = f"{title} - {artists_str}" if artists_str else title
 
             lbl = tk.Label(
                 row_frame,

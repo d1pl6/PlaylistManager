@@ -125,7 +125,7 @@ class MainWindow:
         self.loading_img = IconService.get(loading_img_path, 32)
 
         self.root.grid_rowconfigure(0, weight=0)
-        self.root.grid_rowconfigure(1, weight=0)   # search bar (hidden by default)
+        self.root.grid_rowconfigure(1, weight=0)   # search bar
         self.root.grid_rowconfigure(2, weight=1)
         for c in range(self._columns):
             self.root.grid_columnconfigure(c, weight=1)
@@ -147,13 +147,13 @@ class MainWindow:
             row=2, column=0, columnspan=self._columns, sticky="nsew"
         )
         self.sf = ScrollableFrame(
-            self.main_area, bg=C["root_bg"],
+            self.main_area, bg=C["scrollable_frame_bg"],
             show_scrollbar=False,
             bind_all_mousewheel=True,
         )
         self.sf.pack(side="left", fill="both", expand=True)
         self.sf.style_scrollbar(
-            hover_bg(C["button_main_bg"]), C["root_bg"],
+            hover_bg(C["button_main_bg"]), C["scrollable_frame_bg"],
         )
         self.scrollbar = self.sf.scrollbar
 
@@ -194,7 +194,7 @@ class MainWindow:
             update_card_height=self.card_grid._update_card_height,
             update_scrollregion=self.sf.update_scrollregion,
         )
-        # Search keyboard shortcuts — Ctrl+F (playlist), Ctrl+Shift+F (song).
+        # Search keyboard shortcuts
         self.root.bind("<Control-f>", self.search.toggle_playlist_search)
         self.root.bind("<Control-F>", self.search.toggle_playlist_search)
         self.root.bind("<Control-Shift-f>", self.search.toggle_song_search)
@@ -1156,7 +1156,7 @@ class MainWindow:
         )
 
     # ------------------------------------------------------------------
-    # Status banner — connectivity & service-health warnings
+    # Status banner - connectivity & service-health warnings
     # ------------------------------------------------------------------
 
     def _set_warning(self, key: str, message: str | None) -> None:
@@ -1248,7 +1248,7 @@ class MainWindow:
                 daemon=True,
             ).start()
         else:
-            # No playlists yet — just reschedule.
+            # No playlists yet - just reschedule.
             self._reschedule_service_check()
 
     def _service_health_probe(self, platforms: set[str]) -> None:

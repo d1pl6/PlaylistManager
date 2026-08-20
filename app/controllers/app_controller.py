@@ -68,7 +68,7 @@ class AppController:
                 logger.exception("Failed to force-destroy the root window")
 
     def check_updates(self, *, force: bool = True, on_done=None) -> None:
-        """Proxy for App._check_updates — keeps the controller boundary."""
+        """Proxy for App._check_updates - keeps the controller boundary."""
         self.app._check_updates(force=force, on_done=on_done)
 
     def refresh_auth(

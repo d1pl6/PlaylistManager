@@ -23,7 +23,7 @@ playlists_json = Path(__file__).resolve().parents[2] / "db" / "playlists.json"
 # In-memory cache so we don't re-read the file on every operation.
 _playlist_cache: list[dict] | None = None
 _cache_timestamp: float = 0.0
-_CACHE_TTL: float = 1.0  # seconds before re-reading
+_CACHE_TTL: float = 1.0
 
 # Serialise all read/write access so concurrent mutations don't lose data.
 _lock = threading.Lock()
@@ -233,11 +233,11 @@ class PlaylistStore:
 
         Matches by ``(platform, playlist_id)`` when available, falling back
         to ``(platform, name)`` for legacy entries.  Only non-None keyword
-        arguments are written — omitted fields are left untouched.
+        arguments are written - omitted fields are left untouched.
 
         Currently supported fields:
 
-        * ``follower_count`` (``followerCount`` in the JSON) — Spotify
+        * ``follower_count`` (``followerCount`` in the JSON) - Spotify
           playlists report ``followers.total``; YouTube Music playlists
           have no equivalent and default to 0.
         """

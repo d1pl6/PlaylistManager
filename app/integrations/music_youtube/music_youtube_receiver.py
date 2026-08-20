@@ -25,9 +25,8 @@ from constants import FLASK_RECEIVER_PORT
 
 logger = logging.getLogger(__name__)
 
-# YouTube video IDs are exactly 11 chars of [A-Za-z0-9_-]; the trailing
-# lookahead rejects 12+ char IDs ("abc...defg" must not match its first
-# 11 chars), while still allowing &list=... query params after the ID.
+# YouTube video IDs are exactly 11 chars; the trailing lookahead rejects
+# 12+ char IDs, while still allowing &list=... query params after the ID.
 YT_MUSIC_URL_PATTERN = r"https://music\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])"
 
 

@@ -16,7 +16,7 @@ Entry points (all equivalent):
     python -m app --logout spotify
 
 Designed for compositor-owned shortcuts (i3 / sway / hyprland / KDE / GNOME
-binds) — the Wayland-safe replacement for pynput global hotkeys (plan.md W1,
+binds) - the Wayland-safe replacement for pynput global hotkeys (plan.md W1,
 Option A). The compositor grabs the key and runs this command; no global input
 capture is needed.
 
@@ -55,7 +55,7 @@ URL_WAIT_TIMEOUT = 30
 
 
 class UsageError(Exception):
-    """Bad CLI input — mapped to exit code 2 (argparse's usage-error code)."""
+    """Bad CLI input - mapped to exit code 2 (argparse's usage-error code)."""
 
 
 # ---------------------------------------------------------------------------
@@ -97,13 +97,13 @@ def resolve_targets(
     """
     Resolve a playlist spec ("1,2,3", "1-3", names, or a mix) to entries.
 
-    Returns a list of (registry_number, entry) — registry_number is the 1-based
+    Returns a list of (registry_number, entry) - registry_number is the 1-based
     display order the user sees in the GUI (what ``--list`` prints). Repeated
     targets are silently deduped by (platform, playlist_id), first occurrence
     kept.
 
     *allow_urls* enables URL tokens, resolved against the registry by
-    (platform, playlist_id) — used by the del/ref commands. The song-add path
+    (platform, playlist_id) - used by the del/ref commands. The song-add path
     leaves it False so a URL there falls through to name lookup and fails
     with "not found".
 
@@ -136,14 +136,14 @@ def resolve_targets(
         if kind == "number":
             if not 1 <= value <= total:
                 raise UsageError(
-                    f"Playlist #{value} out of range — valid: 1–{total}"
+                    f"Playlist #{value} out of range - valid: 1–{total}"
                 )
             add(playlists[value - 1], value)
         elif kind == "range":
             start, end = value
             if start < 1 or end > total:
                 raise UsageError(
-                    f"Playlist range {start}–{end} out of range — valid: 1–{total}"
+                    f"Playlist range {start}–{end} out of range - valid: 1–{total}"
                 )
             for number in range(start, end + 1):
                 add(playlists[number - 1], number)
@@ -177,7 +177,7 @@ def resolve_targets(
                 ]
             if not matches:
                 raise UsageError(
-                    f"Playlist '{name}' not found — run 'playlistmanager --list' "
+                    f"Playlist '{name}' not found - run 'playlistmanager --list' "
                     "to see available playlists"
                 )
             if len(matches) > 1:
@@ -187,7 +187,7 @@ def resolve_targets(
                     if p in matches
                 )
                 raise UsageError(
-                    f"Playlist '{name}' is ambiguous ({candidates}) — use numbers"
+                    f"Playlist '{name}' is ambiguous ({candidates}) - use numbers"
                 )
             entry = matches[0]
             add(entry, playlists.index(entry) + 1)
@@ -328,7 +328,7 @@ def run_add(spec: str) -> int:
     sp_integration = _init_spotify() if sp_targets else None
 
     # Capture ONE YouTube Music URL (+ song details) and share it across all
-    # YT playlists — the browser extension delivers it to the receiver.
+    # YT playlists - the browser extension delivers it to the receiver.
     keybind_flow = None
     yt_url = None
     yt_song_data = None
@@ -356,7 +356,7 @@ def run_add(spec: str) -> int:
         if platform == PLATFORM_YOUTUBE_MUSIC:
             if keybind_flow is None:
                 ok, message = False, (
-                    "Error: YouTube Music not configured — run the GUI auth setup "
+                    "Error: YouTube Music not configured - run the GUI auth setup "
                     "first (ytmusicapi must be installed)"
                 )
             elif yt_url is None:
@@ -369,7 +369,7 @@ def run_add(spec: str) -> int:
         elif platform == PLATFORM_SPOTIFY:
             if sp_flow is None:
                 ok, message = False, (
-                    "Error: Spotify is not configured — run the GUI auth setup first"
+                    "Error: Spotify is not configured - run the GUI auth setup first"
                 )
             elif sp_song_data is None:
                 ok, message = False, f"Error: {sp_error or 'Nothing playing'}"
@@ -733,7 +733,7 @@ def _capture_spotify_song(
 ) -> Tuple[Optional[Dict], str]:
     """Fetch the currently-playing Spotify track once for CLI batch mode.
 
-    Returns ``(song_data, error)`` — on failure *song_data* is ``None``
+    Returns ``(song_data, error)`` - on failure *song_data* is ``None``
     and *error* describes what went wrong ("" on success).
     """
     try:
@@ -802,7 +802,7 @@ def _capture_yt_song(
 def _run_flow(
     flow, playlist_name: str, url=None, song_data=None, playlist_id=None
 ) -> Tuple[bool, str]:
-    """Run one add-flow; returns (ok, message) — message is the line tail."""
+    """Run one add-flow; returns (ok, message) - message is the line tail."""
     outcome = {"ok": None, "message": ""}
 
     def on_status(msg: str) -> None:

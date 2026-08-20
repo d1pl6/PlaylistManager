@@ -74,6 +74,9 @@ DEFAULT_THEME = {
         "background": "#2a2a2a",
         "foreground": "#B0B0B0",
     },
+    "scrollable_frame": {
+        "background": "#1A1A1A",
+    },
     "search_bar": {
         "background": "#1E1E1E",
         "foreground": "#E0E0E0",
@@ -140,7 +143,7 @@ def _strip_legacy_active_keys(cfg: ConfigParser) -> bool:
     the migration.  Runs on every app start via ``ensure_theme_file()``;
     idempotent, so repeated calls are harmless.
 
-    MIGRATION HELPER — remove together with its call in ``ensure_theme_file``
+    MIGRATION HELPER - remove together with its call in ``ensure_theme_file``
     in 0.3.0.
     """
     changed = False
@@ -231,6 +234,9 @@ THEME_PRESETS = {
         "label_playlist_stats": {
             "background": "#EBEBEB",
             "foreground": "#555555",
+        },
+        "scrollable_frame": {
+            "background": "#F5F5F5",
         },
         "search_bar": {
             "background": "#F0F0F0",

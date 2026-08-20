@@ -1,4 +1,4 @@
-"""CardGridManager — owns playlist card creation, layout, and lifecycle.
+"""CardGridManager - owns playlist card creation, layout, and lifecycle.
 
 Extracted from MainWindow to reduce its size.  Manages the card widgets
 inside the scrollable content frame, including creation, deletion,

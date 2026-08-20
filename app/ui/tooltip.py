@@ -2,7 +2,7 @@
 
 Theme- and scale-aware: colors come from the live palette
 (``utils.theme.C``) and the font from ``utils.scaling.ui_font``, read at
-*show* time — a theme change applies to the next hover without
+*show* time - a theme change applies to the next hover without
 re-attaching.  Usage::
 
     from ui.tooltip import ToolTip

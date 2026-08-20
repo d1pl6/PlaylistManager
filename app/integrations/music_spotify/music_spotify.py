@@ -102,7 +102,7 @@ class SpotifyAPI:
 
     def _refresh_access_token(self) -> bool:
         with self._lock:
-            # Double-check: another thread might have refreshed while we waited
+            # Double-check: another thread might have refreshed
             if self._access_token and time.time() < self._token_expires:
                 return True
             try:
@@ -295,7 +295,7 @@ class SpotifyAPI:
         # distinguish "nothing is playing" from "auth is broken".
         if not self._ensure_token():
             raise RuntimeError(
-                "Spotify authentication has expired — please re-login"
+                "Spotify authentication has expired - please re-login"
             )
         data = self._get("/me/player/currently-playing")
         if not data or not data.get("item"):

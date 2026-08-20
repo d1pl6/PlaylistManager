@@ -6,7 +6,7 @@ Add songs that you're currently listening to your chosen playlists or liked trac
 I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage. Since i'm not using streaming platforms much, i'm using ai to create same app but on pyton.
 
 # Integrations
-For now only available
+Currently supported:
 - YouTube Music
 - Spotify
 

@@ -2,17 +2,17 @@
 
 A modal Toplevel with three outcomes:
 
-- **Cancel** — nothing happens (also Escape / window close).
-- **Keep DB** — the card closes but the local SQLite database file is
+- **Cancel** - nothing happens (also Escape / window close).
+- **Keep DB** - the card closes but the local SQLite database file is
   kept, so re-adding the playlist later reuses the cached songs.
-- **Confirm** — the card closes and the database file is deleted (the
+- **Confirm** - the card closes and the database file is deleted (the
   previous unconditional behaviour).
 
 Callback-based like the platform picker: every exit path invokes exactly
 one callback, and the dialog destroys its window *first* (same
 destroy-then-callback order as ``playlist_dialog._on_playlist_click``).
 Colors come from the live palette at creation time, matching the other
-dialogs (``settings_ui`` pattern) — a theme change before the next open
+dialogs (``settings_ui`` pattern) - a theme change before the next open
 uses the new palette.
 """
 

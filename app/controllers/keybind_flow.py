@@ -53,11 +53,11 @@ class KeybindFlowController:
         playlist_name: str,
         on_status: Callable[[str], None],
         on_error: Callable[[str], None],
-            on_success: Callable[[Dict], None],
-            url: Optional[str] = None,
-            song_data: Optional[Dict] = None,
-            playlist_id: Optional[str] = None,
-        ) -> None:
+        on_success: Callable[[Dict], None],
+        url: Optional[str] = None,
+        song_data: Optional[Dict] = None,
+        playlist_id: Optional[str] = None,
+    ) -> None:
         """
         Execute the complete keybind workflow.
 
@@ -92,7 +92,7 @@ class KeybindFlowController:
                 url = self._get_url_from_receiver()
 
             # Validate URL
-            on_status("Valid")
+            on_status("Validating")
             video_id = extract_video_id(url)
             if video_id is None:
                 raise ValueError("Failed to extract video ID from URL")
@@ -121,14 +121,14 @@ class KeybindFlowController:
                     f"Playlist '{playlist_name}' was removed while the flow "
                     "was running"
                 )
-            logger.debug(f"Checking if {video_id} exists in {playlist_name}")
+            logger.debug("Checking if %s exists in %s", video_id, playlist_name)
             exists = self.song_manager.song_exists(
                 playlist_name,
                 video_id,
                 platform=PLATFORM_YOUTUBE_MUSIC,
                 playlist_id=local_playlist_id,
             )
-            logger.debug(f"Song exists: {exists}")
+            logger.debug("Song exists: %s", exists)
             if exists:
                 on_success(
                     {
@@ -142,7 +142,7 @@ class KeybindFlowController:
             # Add to YouTube Music playlist first (platform API)
             on_status("Sync")
             playlist_id = self._get_playlist_id(playlist_name, playlist_id)
-            logger.debug(f"YouTube Music playlist ID: {playlist_id}")
+            logger.debug("YouTube Music playlist ID: %s", playlist_id)
             if playlist_id is None:
                 raise RuntimeError(
                     f"Could not find YouTube Music playlist '{playlist_name}'"
@@ -160,10 +160,11 @@ class KeybindFlowController:
                     f"YouTube Music rejected adding video '{video_id}' "
                     f"(status: {status!r})"
                 )
-            logger.info(f"Added {video_id} to YouTube Music playlist {playlist_id}")
+            logger.info("Added %s to YouTube Music playlist %s", video_id, playlist_id)
 
-            # Add to local database (so platform failure doesn't
-            # leave us with a stale local entry that requires manual cleanup)
+            # Add to local database.  The platform add above succeeded
+            # (or we raised), so we never write locally when the platform
+            # rejected the song - the platform-first invariant.
             on_status("Add")
             if not _playlist_still_registered(
                 playlist_name, PLATFORM_YOUTUBE_MUSIC, local_playlist_id
@@ -200,7 +201,7 @@ class KeybindFlowController:
                 platform=PLATFORM_YOUTUBE_MUSIC,
                 playlist_id=local_playlist_id,
             )
-            logger.debug(f"Added to local DB with ID: {song_id}")
+            logger.debug("Added to local DB with ID: %s", song_id)
 
             on_success(
                 {
@@ -216,7 +217,7 @@ class KeybindFlowController:
         except ValueError as e:
             on_error(f"Validation: {str(e)}")
         except Exception as e:
-            logger.error(f"Keybind flow error: {e}", exc_info=True)
+            logger.error("Keybind flow error: %s", e, exc_info=True)
             on_error(f"Error: {str(e)}")
         finally:
             self._cleanup()
@@ -228,7 +229,7 @@ class KeybindFlowController:
                 self.url_receiver.start()
                 logger.debug("URL receiver server started")
         except Exception as e:
-            logger.error(f"Failed to start URL receiver: {e}")
+            logger.error("Failed to start URL receiver: %s", e)
             raise
 
     def _get_url_from_receiver(self, timeout: int = 30) -> str:
@@ -271,7 +272,7 @@ class KeybindFlowController:
             Exception: If song details cannot be fetched
         """
         try:
-            logger.debug(f"Fetching song details for video ID: {video_id}")
+            logger.debug("Fetching song details for video ID: %s", video_id)
 
             # Use YTMusic's get_song API to fetch details
             song_info = self.yt_music.get_song(video_id)
@@ -306,11 +307,11 @@ class KeybindFlowController:
                 "video_id": video_id,
             }
 
-            logger.info(f"Fetched song: {title} by {', '.join(artists)}")
+            logger.info("Fetched song: %s by %s", title, ", ".join(artists))
             return song_data
 
         except Exception as e:
-            logger.error(f"Error fetching song details: {e}")
+            logger.error("Error fetching song details: %s", e)
             raise
 
     def _resolve_artists(
@@ -371,7 +372,6 @@ class KeybindFlowController:
             logger.debug("get_song_related artist extraction failed", exc_info=True)
             return []
 
-
     def _get_playlist_id(self, playlist_name: str, known_id: Optional[str] = None) -> Optional[str]:
         """
         Get YouTube Music playlist ID by name, with caching.
@@ -413,7 +413,7 @@ class KeybindFlowController:
                     return pid
             return None
         except Exception as e:
-            logger.error(f"Failed to get playlist ID for '{playlist_name}': {e}")
+            logger.error("Failed to get playlist ID for '%s': %s", playlist_name, e)
             return None
 
     def _cleanup(self) -> None:
@@ -423,7 +423,7 @@ class KeybindFlowController:
                 self.url_receiver.stop()
                 logger.debug("URL receiver stopped")
         except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+            logger.error("Error during cleanup: %s", e)
 
 
 def _playlist_still_registered(
@@ -457,8 +457,8 @@ def _strip_channel_suffix(name: str) -> str:
     "Various Artists - Topic" etc.
     """
 
-    # Strip " - Topic", "– Topic", "— Topic" and similar variants
-    cleaned = re.sub(r"\s*[-–—]\s*Topic\s*$", "", name, flags=re.IGNORECASE).strip()
+    # Strip " - Topic", "– Topic", "- Topic" and similar variants
+    cleaned = re.sub(r"\s*[-–-]\s*Topic\s*$", "", name, flags=re.IGNORECASE).strip()
     return cleaned
 
 
@@ -491,7 +491,7 @@ class SpotifyFlowController:
                 self._playlist_id_cache[cache_key] = pid
             return pid
         except Exception as e:
-            logger.error(f"Failed to get Spotify playlist ID for '{playlist_name}': {e}")
+            logger.error("Failed to get Spotify playlist ID for '%s': %s", playlist_name, e)
             return None
 
     def execute_flow(
@@ -584,7 +584,7 @@ class SpotifyFlowController:
             )
             if not ok:
                 raise RuntimeError(f"Spotify rejected adding '{title}'")
-            logger.info(f"Added {track_id} to Spotify playlist {playlist_id}")
+            logger.info("Added %s to Spotify playlist %s", track_id, playlist_id)
 
             # Add to local database (platform failure won't
             # leave a stale local entry behind)
@@ -628,5 +628,5 @@ class SpotifyFlowController:
             })
 
         except Exception as e:
-            logger.error(f"Spotify flow error: {e}", exc_info=True)
+            logger.error("Spotify flow error: %s", e, exc_info=True)
             on_error(f"Error: {str(e)}")

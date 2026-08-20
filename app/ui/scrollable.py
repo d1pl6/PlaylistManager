@@ -52,7 +52,7 @@ class ScrollableFrame(tk.Frame):
         self,
         parent,
         *,
-        bg: str = "#1A1A1A",
+        bg: str = C["scrollable_frame_bg"],
         show_scrollbar: bool = True,
         bind_all_mousewheel: bool = False,
         scrollbar_width: int = 10,
@@ -207,20 +207,21 @@ class ScrollableFrame(tk.Frame):
         ``"break"`` when the event was consumed so parent bindings don't
         double-scroll.
         """
-        w = event.widget
-        if isinstance(w, str):
-            try:
-                w = self.winfo_toplevel().nametowidget(w)
-            except KeyError:
-                return None
-        # Gate: only scroll if the pointer is inside this ScrollableFrame.
-        while w is not None and w is not self.winfo_toplevel():
-            if w is self.canvas or w is self.content:
-                break
-            w = getattr(w, "master", None)
-        else:
-            return None
         try:
+            w = event.widget
+            if isinstance(w, str):
+                try:
+                    w = self.winfo_toplevel().nametowidget(w)
+                except (KeyError, tk.TclError):
+                    return None
+            # Gate: only scroll if the pointer is inside this ScrollableFrame.
+            toplevel = self.winfo_toplevel()
+            while w is not None and w is not toplevel:
+                if w is self.canvas or w is self.content:
+                    break
+                w = getattr(w, "master", None)
+            else:
+                return None
             if event.num == 4:
                 self.canvas.yview_scroll(-1, "units")
             elif event.num == 5:

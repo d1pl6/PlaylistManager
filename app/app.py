@@ -272,7 +272,7 @@ class App:
                     self.root.after(0, show_update_dialog, self.root, latest_version, download_url, body)
                 except Exception:
                     # Check finished before mainloop() started, or the app
-                    # quit while the request was in flight.  Best-effort —
+                    # quit while the request was in flight.  Best-effort -
                     # the updater thread must never raise uncaught.
                     logger.debug("Update dialog not shown: %s", "mainloop not running or app shutting down")
             elif error:

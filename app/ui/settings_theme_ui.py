@@ -53,7 +53,7 @@ def show_theme_dialog(parent, on_theme_change=None):
     )
     header_label.pack(fill="x")
 
-    sf = ScrollableFrame(win, bg=win_bg, show_scrollbar=True,
+    sf = ScrollableFrame(win, bg=C["scrollable_frame_bg"], show_scrollbar=True,
                          bind_all_mousewheel=True)
     sf.pack(side="left", fill="both", expand=True)
     inner = sf.content
@@ -170,7 +170,7 @@ def show_theme_dialog(parent, on_theme_change=None):
             )
         new_win_bg = C["frame_main_bg"]
         win.configure(background=new_win_bg)
-        sf.canvas.configure(background=new_win_bg)
+        sf.canvas.configure(background=C["scrollable_frame_bg"])
         inner.configure(background=new_win_bg)
         button_frame.configure(background=new_win_bg)
 
@@ -178,6 +178,8 @@ def show_theme_dialog(parent, on_theme_change=None):
     _create_theme_button("Frame header background", "frame_header", "background")
     _create_theme_button("Frame main background", "frame_main", "background")
     _create_theme_button("Frame playlist background", "frame_playlist", "background")
+
+    _create_theme_button("Scrollable frame background", "scrollable_frame", "background")
 
     _create_theme_button("Label default background", "label_default", "background")
     _create_theme_button("Label default foreground", "label_default", "foreground")

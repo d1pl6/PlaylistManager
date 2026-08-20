@@ -39,6 +39,7 @@ entry_playlist_fg
 entry_playlist_ro_bg
 label_playlist_stats_bg
 label_playlist_stats_fg
+scrollable_frame_bg
 search_bar_bg
 search_bar_fg
 search_result_bg

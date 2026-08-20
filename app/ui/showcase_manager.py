@@ -1,4 +1,4 @@
-"""ShowcaseManager — owns the last-N-songs showcase section of playlist cards.
+"""ShowcaseManager - owns the last-N-songs showcase section of playlist cards.
 
 Extracted from MainWindow to reduce its size.  Handles building,
 refreshing, and removing song rows, song thumbnails, stats, log labels,
