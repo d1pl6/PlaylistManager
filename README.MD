@@ -1,8 +1,8 @@
 Add songs that you're currently listening to your chosen playlists or liked tracks using keybinds.
 
-<img width="652" height="498" alt="screenshot1" src="https://github.com/user-attachments/assets/e628af22-43fc-4a05-ab8e-a9b0083ad697" />
-<img width="652" height="498" alt="screenshot2" src="https://github.com/user-attachments/assets/06ec2ba7-d826-4484-8fba-136ae36493d8" />
-<img width="652" height="498" alt="screenshot3" src="https://github.com/user-attachments/assets/18873a88-2a09-4d1c-b881-5f50e6933d65" />
+<img width="326" height="249" alt="screenshot1" src="https://github.com/user-attachments/assets/e628af22-43fc-4a05-ab8e-a9b0083ad697" />
+<img width="326" height="249" alt="screenshot2" src="https://github.com/user-attachments/assets/06ec2ba7-d826-4484-8fba-136ae36493d8" />
+<img width="326" height="249" alt="screenshot3" src="https://github.com/user-attachments/assets/18873a88-2a09-4d1c-b881-5f50e6933d65" />
 
 # About
 I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage. Since i'm not using streaming platforms much, i'm using ai to create same app but on pyton.
