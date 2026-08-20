@@ -6,11 +6,13 @@ controllers and services.
 """
 
 import logging
+import socket
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, messagebox
 
-from constants import PLATFORM_YOUTUBE_MUSIC
+from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from controllers.keybind_registry import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
 from services.database import DatabaseManager
@@ -38,6 +40,12 @@ INTEGRATION_ERROR_MSG = (
     "Add integrations following INTEGRATIONS.MD. "
     "Check your internet connection and check if the API is down."
 )
+
+# Lightweight TCP targets for service-health probes (host, port).
+_PLATFORM_API_TARGETS: dict[str, tuple[str, int]] = {
+    PLATFORM_YOUTUBE_MUSIC: ("music.youtube.com", 443),
+    PLATFORM_SPOTIFY: ("api.spotify.com", 443),
+}
 
 assets_dir = Path(__file__).resolve().parents[2] / "assets"
 playlist_cover_img_path = assets_dir / "playlist_image.png"
@@ -69,6 +77,12 @@ class MainWindow:
         self._show_stats = self._read_show_stats_setting()
         self._columns = self._read_columns_setting()
         self._song_manager = SongManager()
+
+        # Status-banner state: active warnings keyed by source
+        # ("connectivity" / "service:<platform>").
+        self._warnings: dict[str, str] = {}
+        self._connectivity_after_id: str | None = None
+        self._service_after_id: str | None = None
 
         # Set by App._start_tray() once the window exists; None when no
         # tray backend is available.
@@ -246,6 +260,12 @@ class MainWindow:
                     **btn_colors(C["button_head_bg"], C["button_head_fg"])
                 )
 
+        # Re-style the status warning banner.
+        warn_bg = C["label_playlist_warn_bg"]
+        warn_fg = C["label_playlist_warn_fg"]
+        self._warning_frame.configure(background=warn_bg)
+        self._warning_label.configure(background=warn_bg, foreground=warn_fg)
+
         self.card_grid.apply_theme()
         self.search.apply_theme()
 
@@ -316,9 +336,27 @@ class MainWindow:
         self.header_frame.grid_columnconfigure(1, weight=0)
         self.header_frame.grid_columnconfigure(2, weight=1)
 
-        self.btn_login.grid(row=0, column=0, sticky="w", padx=4, pady=4)
-        self.btn_add_playlist.grid(row=0, column=1, padx=4, pady=4)
-        self.btn_open_settings.grid(row=0, column=2, sticky="e", padx=4, pady=4)
+        # --- status warning banner (row 0, hidden by default) -----------
+        warn_bg = C["label_playlist_warn_bg"]
+        warn_fg = C["label_playlist_warn_fg"]
+        self._warning_frame = tk.Frame(
+            self.header_frame, background=warn_bg, padx=6, pady=1,
+        )
+        self._warning_label = tk.Label(
+            self._warning_frame,
+            text="",
+            font=ui_font(10),
+            background=warn_bg,
+            foreground=warn_fg,
+            anchor="center",
+        )
+        self._warning_label.pack(fill="x")
+        # Start hidden; _update_banner() grids/removes it as warnings arrive.
+        self._warning_frame.grid_remove()
+
+        self.btn_login.grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        self.btn_add_playlist.grid(row=1, column=1, padx=4, pady=4)
+        self.btn_open_settings.grid(row=1, column=2, sticky="e", padx=4, pady=4)
 
     # ------------------------------------------------------------------
     # Playlist dialog workflow (delegates to PlaylistController)
@@ -636,6 +674,9 @@ class MainWindow:
                         self.showcase.set_playlist_cover(card.cover_label, thumb_url)
 
         self.card_grid._sync_empty_state()
+
+        # Start periodic connectivity and service-health probes.
+        self._start_background_checks()
 
     # ------------------------------------------------------------------
     # Drag-to-move window
@@ -1115,6 +1156,143 @@ class MainWindow:
         )
 
     # ------------------------------------------------------------------
+    # Status banner — connectivity & service-health warnings
+    # ------------------------------------------------------------------
+
+    def _set_warning(self, key: str, message: str | None) -> None:
+        """Show or dismiss a single warning by *key*."""
+        if message:
+            self._warnings[key] = message
+        else:
+            self._warnings.pop(key, None)
+        self._update_banner()
+
+    def _update_banner(self) -> None:
+        """Rebuild the banner text and show/hide it."""
+        try:
+            if self._warnings:
+                text = " \u2022 ".join(self._warnings.values())
+                self._warning_label.config(text=text)
+                if not self._warning_frame.winfo_ismapped():
+                    self._warning_frame.grid(
+                        row=0, column=0, columnspan=3, sticky="ew",
+                    )
+            else:
+                if self._warning_frame.winfo_ismapped():
+                    self._warning_frame.grid_remove()
+            # Trigger auto-resize so the window accommodates the banner.
+            self.card_grid._auto_resize_cb()
+        except tk.TclError:
+            pass
+
+    # --- connectivity (every 30 s) ----------------------------------
+
+    def _start_background_checks(self) -> None:
+        """Kick off periodic connectivity and service-health checks."""
+        # First connectivity probe after 3 s; recurring every 30 s.
+        try:
+            self._connectivity_after_id = self.root.after(
+                3000, self._run_connectivity_check,
+            )
+        except tk.TclError:
+            pass
+        # First service-health probe after 10 s; recurring every 5 min.
+        try:
+            self._service_after_id = self.root.after(
+                10000, self._run_service_health_check,
+            )
+        except tk.TclError:
+            pass
+
+    def _run_connectivity_check(self) -> None:
+        """Launch a connectivity probe in a daemon thread."""
+        def _probe() -> None:
+            try:
+                ok = not not socket.create_connection(("1.1.1.1", 53), timeout=5)
+            except (OSError, socket.timeout):
+                ok = False
+            try:
+                self.root.after(0, self._on_connectivity_result, ok)
+            except Exception:
+                pass  # App shutting down.
+
+        threading.Thread(target=_probe, daemon=True).start()
+
+    def _on_connectivity_result(self, ok: bool) -> None:
+        self._set_warning(
+            "connectivity",
+            None if ok else "No internet connection",
+        )
+        # Schedule the next probe.
+        try:
+            self._connectivity_after_id = self.root.after(
+                30000, self._run_connectivity_check,
+            )
+        except tk.TclError:
+            pass
+
+    # --- service health (every 5 min) --------------------------------
+
+    def _run_service_health_check(self) -> None:
+        """Launch a per-platform service-health probe in a daemon thread."""
+        # Only probe platforms the user actually has playlists for.
+        platforms = {
+            p.get("platform")
+            for p in PlaylistStore.load_playlists()
+            if p.get("platform")
+        }
+        if platforms:
+            threading.Thread(
+                target=self._service_health_probe,
+                args=(platforms,),
+                daemon=True,
+            ).start()
+        else:
+            # No playlists yet — just reschedule.
+            self._reschedule_service_check()
+
+    def _service_health_probe(self, platforms: set[str]) -> None:
+        """Probe each *platform*'s API endpoint (runs in a daemon thread)."""
+        results: dict[str, bool] = {}
+        for platform in platforms:
+            target = _PLATFORM_API_TARGETS.get(platform)
+            if target is None:
+                continue
+            host, port = target
+            try:
+                socket.create_connection((host, port), timeout=10)
+                results[platform] = True
+            except (OSError, socket.timeout):
+                results[platform] = False
+        try:
+            self.root.after(0, self._on_service_health_result, results)
+        except Exception:
+            # App shut down while the probe was in flight.
+            pass
+
+    def _on_service_health_result(self, results: dict[str, bool]) -> None:
+        _DISPLAY_NAMES = {
+            PLATFORM_YOUTUBE_MUSIC: "YouTube Music",
+            PLATFORM_SPOTIFY: "Spotify",
+        }
+        for platform, ok in results.items():
+            key = f"service:{platform}"
+            if ok:
+                self._set_warning(key, None)
+            else:
+                name = _DISPLAY_NAMES.get(platform, platform)
+                self._set_warning(key, f"{name} service is unreachable")
+        self._reschedule_service_check()
+
+    def _reschedule_service_check(self) -> None:
+        try:
+            self._service_after_id = self.root.after(
+                300000, self._run_service_health_check,
+            )
+        except tk.TclError:
+            pass
+
+    # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
 
@@ -1122,6 +1300,15 @@ class MainWindow:
         self.search.dismiss()
         self.showcase.frame_img_refs.clear()
         self.card_grid.cleanup()
+        # Cancel pending connectivity / service-health timers.
+        for aid in (self._connectivity_after_id, self._service_after_id):
+            if aid is not None:
+                try:
+                    self.root.after_cancel(aid)
+                except tk.TclError:
+                    pass
+        self._connectivity_after_id = None
+        self._service_after_id = None
         # Release cached per-thread SQLite connections held by the UI thread.
         try:
             DatabaseManager.close_thread_connections()
