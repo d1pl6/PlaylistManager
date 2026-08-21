@@ -240,7 +240,7 @@ class CardGridManager:
                 readonlybackground=entry_playlist_ro_bg,
                 state="readonly",
             )
-            ToolTip(playlist_keybind, "Click to record a hotkey")
+            ToolTip(playlist_keybind, "Click to record a keybind")
 
             reload_database = tk.Button(
                 main_header_frame,
@@ -378,7 +378,7 @@ class CardGridManager:
             platform = card.platform
             playlist_id = card.playlist_id
 
-            self.kc.unregister_hotkey(
+            self.kc.unregister_keybind(
                 playlist_name, platform=platform, playlist_id=playlist_id
             )
 

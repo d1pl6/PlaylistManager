@@ -16,7 +16,7 @@ Entry points (all equivalent):
     python -m app --logout spotify
 
 Designed for compositor-owned shortcuts (i3 / sway / hyprland / KDE / GNOME
-binds) - the Wayland-safe replacement for pynput global hotkeys (plan.md W1,
+binds) - the Wayland-safe replacement for pynput global keybinds (plan.md W1,
 Option A). The compositor grabs the key and runs this command; no global input
 capture is needed.
 

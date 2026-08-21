@@ -10,7 +10,7 @@ import logging
 from typing import Callable, Dict, Optional, Set
 
 from constants import PLATFORM_YOUTUBE_MUSIC
-from utils.key_mapping import parse_hotkey
+from utils.key_mapping import parse_keybind
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ class KeybindRegistry:
     def register(
         self,
         playlist_name: str,
-        hotkey: str,
+        keybind: str,
         callbacks: KeybindCallbacks,
         platform: str,
         playlist_id: str = "",
@@ -85,43 +85,43 @@ class KeybindRegistry:
         combination.
 
         Returns the binding info of a *different* playlist that owned
-        *hotkey* before this registration (its binding is now displaced),
+        *keybind* before this registration (its binding is now displaced),
         or None when nothing was displaced.  Callers should clear the
-        displaced playlist's persisted hotkey so the store cannot
+        displaced playlist's persisted keybind so the store cannot
         resurrect a binding that no longer fires anything.
         """
         self.unregister(playlist_name, platform=platform, playlist_id=playlist_id)
         displaced = None
-        if hotkey:
+        if keybind:
             with self._lock:
-                existing = self._keybind_map.get(hotkey)
+                existing = self._keybind_map.get(keybind)
                 if existing is not None and (
                     existing["playlist_name"] != playlist_name
                     or existing.get("platform", PLATFORM_YOUTUBE_MUSIC) != platform
                     or (existing.get("playlist_id", "") or "") != (playlist_id or "")
                 ):
                     displaced = existing
-                    # Two playlists can't share one hotkey - the new binding
+                    # Two playlists can't share one keybind - the new binding
                     # silently wins, which is confusing.  Make it visible.
                     logger.warning(
-                        "Hotkey '%s' is already bound to playlist '%s' (%s) - "
+                        "Keybind '%s' is already bound to playlist '%s' (%s) - "
                         "replacing its binding with '%s' (%s)",
-                        hotkey,
+                        keybind,
                         existing["playlist_name"],
                         existing.get("platform", PLATFORM_YOUTUBE_MUSIC),
                         playlist_name,
                         platform,
                     )
-                self._keybind_map[hotkey] = {
+                self._keybind_map[keybind] = {
                     "playlist_name": playlist_name,
                     "callbacks": callbacks,
                     "platform": platform,
                     "playlist_id": playlist_id,
-                    "_parsed": parse_hotkey(hotkey),
+                    "_parsed": parse_keybind(keybind),
                 }
             logger.info(
                 "Registered keybind '%s' for playlist '%s' (platform=%s)",
-                hotkey, playlist_name, platform,
+                keybind, playlist_name, platform,
             )
         return displaced
 
@@ -160,7 +160,7 @@ class KeybindRegistry:
         Returns None when no binding is registered for the combination.
 
         Used to validate a queued keybind event at execution time: the
-        frame may have been closed (or the hotkey re-bound) between the
+        frame may have been closed (or the keybind re-bound) between the
         registry match and the ``after(0, ...)`` dispatch.
         """
         with self._lock:
@@ -176,7 +176,7 @@ class KeybindRegistry:
         return None
 
     def match(self, pressed_keys: Set[str]) -> Optional[tuple]:
-        """Return the best (specificity, hotkey_str, info) or *None*.
+        """Return the best (specificity, keybind_str, info) or *None*.
 
         "Best" means the entry whose parsed key set matches *pressed_keys*
         exactly and has the highest specificity (most keys).  This
@@ -184,12 +184,12 @@ class KeybindRegistry:
         """
         best = None
         with self._lock:
-            for hotkey_str, info in self._keybind_map.items():
+            for keybind_str, info in self._keybind_map.items():
                 expected = info["_parsed"]
                 if not expected:
                     continue
                 if expected == pressed_keys:
                     specificity = len(expected)
                     if best is None or specificity > best[0]:
-                        best = (specificity, hotkey_str, info)
+                        best = (specificity, keybind_str, info)
         return best

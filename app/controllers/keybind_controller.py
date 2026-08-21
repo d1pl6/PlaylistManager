@@ -1,11 +1,11 @@
 """
-Keybind controller - hotkey recording and flow dispatch.
+Keybind controller - keybind recording and flow dispatch.
 
 Responsibilities (after the A4 split):
   1. Key event processing (recording state machine)
   2. Credential management / flow invalidation
   3. Flow controller lazy-initialisation and dispatch
-  4. Listener lifecycle (global hotkey vs local tk bindings)
+  4. Listener lifecycle (global keybind vs local tk bindings)
 
 Delegates keybind storage/matching to :class:`KeybindRegistry` and key
 normalisation to :mod:`utils.key_mapping`.
@@ -37,7 +37,7 @@ _UNSET = object()
 
 
 class KeybindController:
-    """Orchestrates hotkey listeners, recording, and flow dispatch."""
+    """Orchestrates keybind listeners, recording, and flow dispatch."""
 
     def __init__(self, yt_client, spotify_integration=None):
         self.yt = yt_client
@@ -137,18 +137,18 @@ class KeybindController:
                 )
                 self._listener.daemon = True
                 self._listener.start()
-                logger.info("Global hotkey listener started")
+                logger.info("Global keybind listener started")
                 if is_wayland_session():
                     logger.warning(
-                        "Wayland session detected - the global hotkey "
+                        "Wayland session detected - the global keybinds "
                         "listener only captures keys while an XWayland "
                         "client has focus; native Wayland apps never "
                         "route keys through it. Bind compositor "
                         "shortcuts to 'playlistmanager add N' for "
-                        "reliable global hotkeys (see cli.md)."
+                        "reliable global keybinds (see cli.md)."
                     )
             except Exception as e:
-                logger.error("Failed to start hotkey listener: %s", e)
+                logger.error("Failed to start keybind listener: %s", e)
                 self._listener = None
 
     def _stop_global_listener(self, wait: bool = True):
@@ -159,7 +159,7 @@ class KeybindController:
             listener.stop()
             if wait:
                 listener.join(timeout=0.5)
-            logger.info("Global hotkey listener stopped")
+            logger.info("Global keybind listener stopped")
 
     def _bind_local_keys(self):
         if self._root is None:
@@ -253,7 +253,7 @@ class KeybindController:
                 if self._recording_callback and self._root:
                     self._schedule_recording_callback(self._recording_callback, combo)
         else:
-            self._check_hotkeys()
+            self._check_keybinds()
 
     def _schedule_recording_callback(self, callback: Callable, *args) -> None:
         """Schedule a recording callback on the tkinter thread, guarded.
@@ -261,7 +261,7 @@ class KeybindController:
         The recording branch of ``_handle_press`` runs on the pynput
         listener thread when global listening is enabled; the same
         mainloop-not-running / root-destroyed exceptions that
-        ``_check_hotkeys`` guards against apply here.  A stray key at
+        ``_check_keybinds`` guards against apply here.  A stray key at
         shutdown must not kill the listener.
         """
         try:
@@ -296,42 +296,42 @@ class KeybindController:
         return combo
 
     # ------------------------------------------------------------------
-    # Hotkey delegation
+    # Keybind delegation
     # ------------------------------------------------------------------
 
-    def register_hotkey(
+    def register_keybind(
         self,
         playlist_name: str,
-        hotkey: str,
+        keybind: str,
         callbacks: KeybindCallbacks,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
     ) -> Optional[Dict]:
-        """Register *hotkey* for *playlist_name*; see KeybindRegistry.register.
+        """Register *keybind* for *playlist_name*; see KeybindRegistry.register.
 
         *playlist_id* disambiguates two playlists that share a name on
         one platform.
 
         Returns the binding info displaced by this registration (a
-        different playlist that owned the same hotkey), or None.
+        different playlist that owned the same keybind), or None.
         """
         return self.registry.register(
-            playlist_name, hotkey, callbacks, platform, playlist_id
+            playlist_name, keybind, callbacks, platform, playlist_id
         )
 
-    def unregister_hotkey(
+    def unregister_keybind(
         self, playlist_name: str, platform: str = "", playlist_id: str = ""
     ):
         self.registry.unregister(
             playlist_name, platform=platform, playlist_id=playlist_id
         )
 
-    def _check_hotkeys(self):
+    def _check_keybinds(self):
         with self._pressed_keys_lock:
             pressed = frozenset(self._pressed_keys)
         match = self.registry.match(pressed)
         if match is not None:
-            _, hotkey_str, info = match
+            _, keybind_str, info = match
             playlist_name = info["playlist_name"]
             callbacks = info["callbacks"]
             platform = info.get("platform", PLATFORM_YOUTUBE_MUSIC)
@@ -347,7 +347,7 @@ class KeybindController:
                         playlist_id,
                     )
                 except Exception as e:
-                    # _check_hotkeys also runs on the pynput listener
+                    # _check_keybinds also runs on the pynput listener
                     # thread; after() raises "main thread is not in main
                     # loop" when a key lands outside the mainloop
                     # (startup/shutdown window).  A stray key must not
@@ -376,7 +376,7 @@ class KeybindController:
             return
 
         # The match + after(0, ...) dispatch is asynchronous - the frame
-        # may have been closed (or its hotkey re-bound) while the event
+        # may have been closed (or its keybind re-bound) while the event
         # was queued.  Running the flow anyway would add the song to a
         # playlist the user removed from the window and resurrect its
         # deleted local DB file, so drop stale events.
@@ -418,7 +418,7 @@ class KeybindController:
             destroyed" in that window, and an uncaught raise here would
             escape execute_flow's error handler and kill the flow thread
             with a traceback during shutdown.  Same guard as
-            ``_check_hotkeys``.
+            ``_check_keybinds``.
             """
             if self._root is None:
                 return

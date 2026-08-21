@@ -150,7 +150,7 @@ class PlaylistStore:
 
         The unique key is ``(platform, playlist_id)``.  If an entry with the
         same key already exists the existing record is updated **in-place**
-        (preserving ``hotkey``) instead of appending a duplicate.
+        (preserving ``keybind``) instead of appending a duplicate.
 
         If *playlist_id* is empty (legacy path) the fallback key
         ``(platform, name)`` is used for dedup.
@@ -160,7 +160,7 @@ class PlaylistStore:
             if playlist_id and platform:
                 # Modern path: dedup strictly by (platform, playlist_id).  A
                 # different playlist with the same name must never hijack
-                # this entry (it would rewrite the id and keep the hotkey,
+                # this entry (it would rewrite the id and keep the keybind,
                 # silently retargeting the keybind to the new playlist).
                 existing = _find_by_key(
                     playlists, platform=platform, name="", playlist_id=playlist_id
@@ -182,7 +182,7 @@ class PlaylistStore:
                 existing["playlist_id"] = playlist_id
                 if thumbnail_url:
                     existing["thumbnail_url"] = thumbnail_url
-                # hotkey is intentionally preserved - do not overwrite.
+                # keybind is intentionally preserved - do not overwrite.
                 logger.info(
                     "Updated playlist '%s' (platform=%s, id=%s)",
                     name, platform, playlist_id or "<legacy>",
@@ -192,7 +192,7 @@ class PlaylistStore:
                     {
                         "name": name,
                         "platform": platform,
-                        "hotkey": "",
+                        "keybind": "",
                         "playlist_id": playlist_id,
                         "thumbnail_url": thumbnail_url,
                     }
@@ -257,13 +257,13 @@ class PlaylistStore:
 
     @staticmethod
     def update_keybind(
-        name: str, platform: str, hotkey: str, playlist_id: str = ""
+        name: str, platform: str, keybind: str, playlist_id: str = ""
     ):
-        """Update the hotkey binding for a single playlist.
+        """Update the keybind binding for a single playlist.
 
         *playlist_id* disambiguates playlists that share *name* on the same
         platform; without it the first name match wins, which can persist a
-        hotkey to the wrong playlist.
+        keybind to the wrong playlist.
         """
         with _lock:
             playlists = PlaylistStore.load_playlists()
@@ -272,7 +272,7 @@ class PlaylistStore:
             )
             if target is None:
                 return False
-            target["hotkey"] = hotkey
+            target["keybind"] = keybind
             PlaylistStore._write(playlists)
             return True
 

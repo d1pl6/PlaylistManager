@@ -89,7 +89,7 @@ apt install -y python3-pystray
 
 # Usage
 > [!NOTE]
-> **Wayland**: applications cannot grab global keyboard events (the compositor owns input - a security design decision), so pynput hotkeys only capture XWayland apps. Bind compositor shortcuts to the CLI instead - see [Command line](#command-line) and [Global command](#global-command-for-compositor-shortcuts).
+> **Wayland**: applications cannot grab global keyboard events (the compositor owns input - a security design decision), so pynput keybinds only capture XWayland apps. Bind compositor shortcuts to the CLI instead - see [Command line](#command-line) and [Global command](#global-command-for-compositor-shortcuts).
 ```
 python -m main
 
@@ -148,7 +148,7 @@ python -m app -p refresh all                # refresh every playlist
 ```
 
 - `-p add` registers the playlist from its URL (title fetched from the platform, tracks
-  imported automatically) and updates an existing entry in place (hotkey preserved).
+  imported automatically) and updates an existing entry in place (keybind preserved).
   The `del` command is local-only: it removes the registry entry and the local song
   database, never the playlist on the platform. `ref` deletes and re-imports the local
   database, refreshing the thumbnail too.
@@ -216,6 +216,10 @@ GNOME
 PlaylistManager is licensed under the GNU-GPL-2.0-or-later. If you did not get a copy, please see <https://www.gnu.org/licenses/>.
 
 # Q & A
+Q: Current state?
+
+A: Beta.
+
 Q: Why AI?
 
 A: I hate programming.
@@ -223,3 +227,7 @@ A: I hate programming.
 Q: Will _patform_ be added?
 
 A: See [TODO](TODO.MD), if it doesn't exist there - open `Platform integration request` on `Issue`s page.
+
+Q: 1.0.0 when?
+
+A: After todo and more tests for each usecase

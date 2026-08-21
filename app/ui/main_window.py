@@ -649,15 +649,15 @@ class MainWindow:
                     card.platform = platform
                     card.playlist_id = playlist_id
 
-                    hotkey = playlist.get("hotkey", "")
-                    if hotkey:
+                    keybind = playlist.get("keybind", "")
+                    if keybind:
                         entry = card.keybind_entry
                         entry.config(state="normal")
-                        entry.insert(0, hotkey)
+                        entry.insert(0, keybind)
                         entry.config(state="readonly")
-                        displaced = self.kc.register_hotkey(
+                        displaced = self.kc.register_keybind(
                             name,
-                            hotkey,
+                            keybind,
                             self._make_keybind_callbacks(i),
                             platform=platform,
                             playlist_id=playlist_id,
@@ -944,13 +944,13 @@ class MainWindow:
     # ------------------------------------------------------------------
 
     def _clear_displaced_keybind(self, displaced: dict) -> None:
-        """Clear a hotkey that was just taken over by another playlist.
+        """Clear a keybind that was just taken over by another playlist.
 
         Recording the same combo on playlist B silently displaces playlist
         A's binding (``KeybindRegistry.register`` returns the displaced
         info).  A's entry must stop showing the stolen combo and its
         persisted keybind must be cleared - otherwise the app would
-        display a hotkey that fires B, and a restart would resurrect the
+        display a keybind that fires B, and a restart would resurrect the
         collision (leaving the combo bound to nothing once B's frame is
         closed).
         """
@@ -1023,8 +1023,8 @@ class MainWindow:
             if not was_recording_here:
                 return
             # Escape / focus-out during recording: commit the empty combo so
-            # the previously registered hotkey is removed and the store
-            # matches what the entry now shows - a stale hotkey firing with
+            # the previously registered keybind is removed and the store
+            # matches what the entry now shows - a stale keybind firing with
             # a blank entry is confusing.
             playlist_name = self.card_grid.cards[cur_idx].name_label.cget("text")
             platform = self.card_grid.cards[cur_idx].platform
@@ -1032,7 +1032,7 @@ class MainWindow:
             PlaylistStore.update_keybind(
                 playlist_name, platform, "", playlist_id=playlist_id
             )
-            self.kc.unregister_hotkey(
+            self.kc.unregister_keybind(
                 playlist_name, platform=platform, playlist_id=playlist_id
             )
 
@@ -1061,7 +1061,7 @@ class MainWindow:
             PlaylistStore.update_keybind(
                 playlist_name, platform, combo, playlist_id=playlist_id
             )
-            displaced = self.kc.register_hotkey(
+            displaced = self.kc.register_keybind(
                 playlist_name,
                 combo,
                 self._make_keybind_callbacks(frame_idx),
@@ -1074,7 +1074,7 @@ class MainWindow:
             PlaylistStore.update_keybind(
                 playlist_name, platform, "", playlist_id=playlist_id
             )
-            self.kc.unregister_hotkey(
+            self.kc.unregister_keybind(
                 playlist_name, platform=platform, playlist_id=playlist_id
             )
 
