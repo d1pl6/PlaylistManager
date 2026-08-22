@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Tuple
 
 from platformdirs import user_config_dir
 
-from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from utils.logging_config import user_log
 from utils.platform import get_terminal_command, open_directory
 
@@ -178,14 +177,28 @@ def save_and_verify_spotify_credentials(
 # Multi-platform credential deletion (CLI --logout)
 # ---------------------------------------------------------------------------
 
-# platform -> primary credential file(s) deleted on logout.
+# platform id -> primary credential file(s) deleted on logout.
 # Deliberately only the auth-dir file - NOT the repo fallback browser.json
 # copies (decision cli.md 15.12.2: CLI and GUI logins are never used
 # simultaneously, so a stale fallback copy is not a practical concern).
 PLATFORM_CREDENTIAL_FILES = {
-    PLATFORM_YOUTUBE_MUSIC: [BROWSER_FILE],
-    PLATFORM_SPOTIFY: [SPOTIFY_FILE],
+    "youtube_music": [BROWSER_FILE],
+    "spotify": [SPOTIFY_FILE],
 }
+
+
+def build_credential_files(plugin_registry) -> Dict[str, List[Path]]:
+    """Build the platform -> credential-files mapping from the manifests.
+
+    The Step 1 replacement for the hardcoded :data:`PLATFORM_CREDENTIAL_FILES`
+    once every platform declares ``auth_file`` in its plugin.json - see
+    0.3.0/step1.md.
+    """
+    out: Dict[str, List[Path]] = {}
+    for pid, plugin in plugin_registry.get_all().items():
+        if plugin.auth_file:
+            out[pid] = [AUTH_DIR / plugin.auth_file]
+    return out
 
 
 def delete_platform_credentials(platform: str) -> Tuple[List[Path], List[Path]]:
@@ -195,9 +208,9 @@ def delete_platform_credentials(platform: str) -> Tuple[List[Path], List[Path]]:
     ones that did not exist.  Raises ``OSError`` on the first failed
     unlink so callers can report the error.
 
-    Adding a future platform: add its identifier to
-    ``constants.KNOWN_PLATFORMS`` and its credential file(s) to
-    :data:`PLATFORM_CREDENTIAL_FILES`.
+    Adding a future platform: declare ``auth_file`` in its plugin.json
+    (and switch :data:`PLATFORM_CREDENTIAL_FILES` over to
+    :func:`build_credential_files`).
     """
     deleted: List[Path] = []
     missing: List[Path] = []

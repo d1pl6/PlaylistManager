@@ -16,7 +16,6 @@ import logging
 from typing import Callable, Dict, Optional, Set
 
 from pynput import keyboard
-from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from utils.key_mapping import (
     MODIFIER_NAMES,
     normalize_key,
@@ -31,17 +30,17 @@ from utils.theme import C
 
 logger = logging.getLogger(__name__)
 
-# Sentinel for update_credentials - distinguishes "don't touch this
-# client" from "explicitly clear it" (None).
-_UNSET = object()
-
 
 class KeybindController:
     """Orchestrates keybind listeners, recording, and flow dispatch."""
 
-    def __init__(self, yt_client, spotify_integration=None):
-        self.yt = yt_client
-        self.spotify_integration = spotify_integration
+    def __init__(self, plugin_registry, integrations):
+        # Plugin metadata (plugin_loader.PluginRegistry) and live platform
+        # clients (services.integration.IntegrationRegistry).  Flows are
+        # built lazily per platform from these two - the controller holds
+        # no platform-specific references itself.
+        self.plugin_registry = plugin_registry
+        self.integrations = integrations
         self.song_manager: Optional[SongManager] = None
 
         # Guards the single in-flight flow.  Acquired synchronously here on
@@ -50,10 +49,10 @@ class KeybindController:
         # event-loop tick could both pass the busy check.
         self._flow_busy = threading.Lock()
 
-        # Flow controllers - lazily created on first keybind trigger
-        self._keybind_flow = None
-        self._spotify_flow = None
-        self._url_receiver = None
+        # Flow controllers / URL receivers, keyed by platform id -
+        # lazily created on first keybind trigger for that platform.
+        self._flows: Dict[str, object] = {}
+        self._receivers: Dict[str, object] = {}
 
         # Registry
         self.registry = KeybindRegistry()
@@ -77,29 +76,34 @@ class KeybindController:
     # Credentials
     # ------------------------------------------------------------------
 
-    def update_credentials(self, yt_client=_UNSET, spotify_integration=_UNSET):
-        """Update API clients and invalidate active flow controllers.
+    def update_credentials(self, refreshed_ids: Optional[list] = None):
+        """Invalidate flow controllers so they re-initialize with fresh clients.
 
-        Called from the UI thread after re-authentication.  The flow
-        controllers are set to None so they will be lazily re-created
-        on the next keybind trigger with the new credentials.
+        Called from the UI thread after re-authentication.  Flows are
+        dropped so they will be lazily re-created on the next keybind
+        trigger, pulling the new clients from the integration registry.
 
-        Passing ``None`` for a client explicitly **clears** it - after a
-        failed re-auth a stale authenticated client must not keep being
-        used silently (flows then report "not authenticated" instead).
-        Omit the argument to leave that client untouched.
+        When *refreshed_ids* is given, only those platforms' flows are
+        cleared (a scoped refresh must not deauthenticate the platforms it
+        did not touch).  ``None`` clears all flows - legacy callers that
+        re-authenticated everything.
 
-        The old URL receiver is stopped to free port 5000 before a new
-        receiver is created on the next keybind.
+        The affected URL receivers are stopped to free their ports before
+        a new receiver is created on the next keybind.
         """
-        self.stop_receiver()
-        if yt_client is not _UNSET:
-            self.yt = yt_client
-        if spotify_integration is not _UNSET:
-            self.spotify_integration = spotify_integration
-        self._keybind_flow = None
-        self._spotify_flow = None
-        self._url_receiver = None
+        if refreshed_ids is not None:
+            for pid in refreshed_ids:
+                self._flows.pop(pid, None)
+                receiver = self._receivers.pop(pid, None)
+                if receiver is not None:
+                    try:
+                        receiver.stop()
+                    except Exception as e:
+                        logger.error("Error stopping URL receiver: %s", e)
+        else:
+            self.stop_receiver()
+            self._flows.clear()
+            self._receivers.clear()
         logger.info("KeybindController credentials updated, flows invalidated")
 
     # ------------------------------------------------------------------
@@ -304,7 +308,7 @@ class KeybindController:
         playlist_name: str,
         keybind: str,
         callbacks: KeybindCallbacks,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str = "youtube_music",
         playlist_id: str = "",
     ) -> Optional[Dict]:
         """Register *keybind* for *playlist_name*; see KeybindRegistry.register.
@@ -334,7 +338,9 @@ class KeybindController:
             _, keybind_str, info = match
             playlist_name = info["playlist_name"]
             callbacks = info["callbacks"]
-            platform = info.get("platform", PLATFORM_YOUTUBE_MUSIC)
+            # Legacy bindings predate the platform field - they were all
+            # YouTube Music entries.
+            platform = info.get("platform", "youtube_music")
             playlist_id = info.get("playlist_id", "")
             if self._root:
                 try:
@@ -362,7 +368,7 @@ class KeybindController:
         self,
         playlist_name: str,
         callbacks: KeybindCallbacks,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str = "youtube_music",
         playlist_id: str = "",
     ):
         """Execute the add-to-playlist flow for the given keybind.
@@ -478,22 +484,14 @@ class KeybindController:
 
         def run_flow():
             try:
-                if platform == PLATFORM_SPOTIFY:
-                    if self._spotify_flow is None:
-                        on_error("Spotify not initialized")
-                        return
-                    self._spotify_flow.execute_flow(
-                        playlist_name, on_status, on_error, on_success,
-                        playlist_id=stored_playlist_id,
-                    )
-                else:
-                    if self._keybind_flow is None:
-                        on_error("Flow not initialized")
-                        return
-                    self._keybind_flow.execute_flow(
-                        playlist_name, on_status, on_error, on_success,
-                        playlist_id=stored_playlist_id,
-                    )
+                flow = self._flows.get(platform)
+                if flow is None:
+                    on_error("Flow not initialized")
+                    return
+                flow.execute_flow(
+                    playlist_name, on_status, on_error, on_success,
+                    playlist_id=stored_playlist_id,
+                )
             except Exception as e:
                 logger.error("Keybind flow exception: %s", e, exc_info=True)
                 on_error(str(e))
@@ -503,9 +501,15 @@ class KeybindController:
         threading.Thread(target=run_flow, daemon=True).start()
 
     def _ensure_initialized(
-        self, platform: str, callbacks: KeybindCallbacks
+        self, platform_id: str, callbacks: KeybindCallbacks
     ) -> bool:
-        """Lazily initialise SongManager and the appropriate flow controller."""
+        """Lazily initialise SongManager and the appropriate flow controller.
+
+        Construction is data-driven from the plugin manifest: extension-type
+        plugins get a URL receiver injected, api-type plugins talk to their
+        platform directly.  No platform-specific branches here - adding a
+        platform never touches this file.
+        """
         if self.song_manager is None:
             try:
                 self.song_manager = SongManager()
@@ -515,48 +519,44 @@ class KeybindController:
                 callbacks.on_entry_state("readonly")
                 return False
 
-        if platform == PLATFORM_SPOTIFY:
-            if self._spotify_flow is not None:
-                return True
-            if (
-                self.spotify_integration is None
-                or not self.spotify_integration.is_authenticated()
-            ):
-                callbacks.on_status("Error", C["label_playlist_error_bg"])
-                callbacks.on_entry_state("readonly")
-                logger.error("Spotify not authenticated.")
-                return False
-
-            from controllers.keybind_flow import SpotifyFlowController
-
-            self._spotify_flow = SpotifyFlowController(
-                self.spotify_integration, self.song_manager
-            )
-            logger.info("Initialized Spotify flow")
+        if platform_id in self._flows:
             return True
 
-        if self._keybind_flow is not None:
-            return True
-        if self.yt is None:
+        integration = self.integrations.get(platform_id)
+        if integration is None or not integration.is_authenticated():
             callbacks.on_status("Error", C["label_playlist_error_bg"])
             callbacks.on_entry_state("readonly")
-            logger.error("YouTube Music not authenticated.")
+            logger.error("%s not authenticated.", platform_id)
+            return False
+
+        plugin = self.plugin_registry.get(platform_id)
+        if plugin is None or not plugin.flow_class:
+            callbacks.on_status("Error", C["label_playlist_error_bg"])
+            callbacks.on_entry_state("readonly")
+            logger.error(
+                "No keybind flow declared for platform '%s'", platform_id
+            )
             return False
 
         try:
-            from integrations.music_youtube.music_youtube_receiver import (
-                URLReceiverManager,
-            )
-            from controllers.keybind_flow import KeybindFlowController
+            flow_cls = plugin.import_flow()
 
-            self._url_receiver = URLReceiverManager()
-            self._keybind_flow = KeybindFlowController(
-                self.yt, self.song_manager, self._url_receiver
+            if plugin.flow_type == "extension":
+                receiver_cls = plugin.import_receiver_class()
+                receiver = receiver_cls()
+                self._receivers[platform_id] = receiver
+                flow = flow_cls(integration, self.song_manager, receiver)
+            else:
+                # "api" type - reads the platform directly, no receiver.
+                flow = flow_cls(integration, self.song_manager)
+
+            self._flows[platform_id] = flow
+            logger.info(
+                "Initialized %s flow (%s)", plugin.display_name, plugin.flow_type
             )
-            logger.info("Initialized YouTube Music flow")
             return True
         except Exception as e:
-            logger.error("Failed to initialize managers: %s", e)
+            logger.error("Failed to initialize %s flow: %s", platform_id, e)
             callbacks.on_status("Error", C["label_playlist_error_bg"])
             callbacks.on_entry_state("readonly")
             return False
@@ -566,8 +566,8 @@ class KeybindController:
     # ------------------------------------------------------------------
 
     def stop_receiver(self):
-        receiver = self._url_receiver
-        if receiver is not None:
+        """Stop every URL receiver (all extension-type platforms)."""
+        for receiver in list(self._receivers.values()):
             try:
                 receiver.stop()
             except Exception as e:
@@ -585,7 +585,5 @@ class KeybindController:
         self.stop_listener(wait=False)
         self.stop_receiver()
         self.song_manager = None
-        self._url_receiver = None
-        self._keybind_flow = None
-        self._spotify_flow = None
-        self.spotify_integration = None
+        self._flows.clear()
+        self._receivers.clear()

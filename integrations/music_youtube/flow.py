@@ -1,22 +1,35 @@
+"""
+YouTube Music add-song flow (keybind workflow).
+
+Moved from app/controllers/keybind_flow.py in 0.3.0 - this is the
+plugin's implementation of the "extension" flow type: the browser
+extension posts the current tab URL to a local receiver server, and
+this flow turns it into an added song.
+"""
+
 from __future__ import annotations
+
 import logging
 import re
 from typing import TYPE_CHECKING, Callable, Dict, Optional
-from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
-from services.playlist_store import PlaylistStore
+
+from services.integration import BaseFlowController
+from services.playlist_store import PlaylistStore, playlist_still_registered
 from services.song_manager import SongManager
 from utils.logging_config import trace_log
-from integrations.music_youtube.music_youtube_receiver import extract_video_id
+
+from .music_youtube_receiver import extract_video_id
 
 if TYPE_CHECKING:
-    from ytmusicapi import YTMusic
-    from integrations.music_youtube.music_youtube_receiver import URLReceiverManager
-    from services.integration import SpotifyIntegration
+    from .integration import YouTubeMusicIntegration
 
 logger = logging.getLogger(__name__)
 
+# Mirrors plugin.json "id" - flows key local-DB writes by it.
+PLATFORM = "youtube_music"
 
-class KeybindFlowController:
+
+class YouTubeMusicFlow(BaseFlowController):
     """
     Orchestrates the complete keybind workflow:
     1. Start Flask receiver server
@@ -29,19 +42,21 @@ class KeybindFlowController:
 
     def __init__(
         self,
-        yt_music_api: YTMusic,
+        youtube_integration: YouTubeMusicIntegration,
         song_manager: SongManager,
         url_receiver: URLReceiverManager,
     ):
         """
-        Initialize the keybind flow controller.
+        Initialize the flow controller.
 
         Args:
-            yt_music_api: Authenticated YTMusic instance
+            youtube_integration: Authenticated YouTubeMusicIntegration (its
+                ``yt_client`` is captured for this flow's lifetime; re-auth
+                replaces the whole flow object).
             song_manager: SongManager instance
             url_receiver: URLReceiverManager instance
         """
-        self.yt_music = yt_music_api
+        self.yt_music = youtube_integration.yt_client
         self.song_manager = song_manager
         self.url_receiver = url_receiver
         # keyed by (playlist_name, known_id) so two playlists that share a
@@ -114,8 +129,8 @@ class KeybindFlowController:
             # local DB access: a playlist frame closed while this flow was
             # waiting/validating must not resurrect its deleted database.
             on_status("Check")
-            if not _playlist_still_registered(
-                playlist_name, PLATFORM_YOUTUBE_MUSIC, local_playlist_id
+            if not playlist_still_registered(
+                playlist_name, PLATFORM, local_playlist_id
             ):
                 raise RuntimeError(
                     f"Playlist '{playlist_name}' was removed while the flow "
@@ -125,7 +140,7 @@ class KeybindFlowController:
             exists = self.song_manager.song_exists(
                 playlist_name,
                 video_id,
-                platform=PLATFORM_YOUTUBE_MUSIC,
+                platform=PLATFORM,
                 playlist_id=local_playlist_id,
             )
             logger.debug("Song exists: %s", exists)
@@ -166,8 +181,8 @@ class KeybindFlowController:
             # (or we raised), so we never write locally when the platform
             # rejected the song - the platform-first invariant.
             on_status("Add")
-            if not _playlist_still_registered(
-                playlist_name, PLATFORM_YOUTUBE_MUSIC, local_playlist_id
+            if not playlist_still_registered(
+                playlist_name, PLATFORM, local_playlist_id
             ):
                 # The playlist was deleted while the platform add was in
                 # flight.  The platform copy is authoritative and done;
@@ -198,7 +213,7 @@ class KeybindFlowController:
                 song_data["duration"],
                 video_id,
                 song_data.get("thumbnail"),
-                platform=PLATFORM_YOUTUBE_MUSIC,
+                platform=PLATFORM,
                 playlist_id=local_playlist_id,
             )
             logger.debug("Added to local DB with ID: %s", song_id)
@@ -248,6 +263,53 @@ class KeybindFlowController:
         url = self.url_receiver.get_received_url(timeout=timeout)
         logger.debug("Received URL from receiver")
         return url
+
+    def capture(
+        self, timeout: int = 30
+    ) -> tuple[Optional[str], Optional[Dict], str]:
+        """Capture the current song once - CLI batch mode helper.
+
+        Starts the receiver, waits for the extension's URL, validates it
+        and fetches song details.  Returns ``(url, song_data, error)``;
+        on failure *url* and *song_data* are ``None`` and *error*
+        describes what went wrong ("" on success).  The result feeds
+        ``execute_flow(url=..., song_data=...)`` so one captured song can
+        be added to several playlists.
+        """
+        url = None
+        try:
+            self._start_server()
+            self.url_receiver.set_waiting(True)
+            print(
+                "Waiting for YouTube Music URL... "
+                "(play the song in the browser with the extension installed)",
+                flush=True,
+            )
+            url = self._get_url_from_receiver(timeout=timeout)
+        except TimeoutError:
+            return None, None, "Timeout: no URL received from the browser extension"
+        except Exception as e:
+            logger.error(
+                "Failed to capture the YouTube Music URL: %s", e, exc_info=True
+            )
+            return None, None, f"failed to start the URL receiver: {e}"
+        finally:
+            try:
+                self.url_receiver.set_waiting(False)
+            except Exception:
+                pass
+            self._cleanup()
+
+        video_id = extract_video_id(url)
+        if video_id is None:
+            logger.error("Could not extract a video ID from '%s'", url)
+            return None, None, "could not extract a video ID from the received URL"
+        try:
+            song_data = self.fetch_song_details(video_id)
+        except Exception as e:
+            logger.error("Failed to fetch song details: %s", e, exc_info=True)
+            return None, None, f"failed to fetch song details: {e}"
+        return url, song_data, ""
 
     def fetch_song_details(self, video_id: str) -> Dict:
         """
@@ -426,30 +488,6 @@ class KeybindFlowController:
             logger.error("Error during cleanup: %s", e)
 
 
-def _playlist_still_registered(
-    playlist_name: str, platform: str, playlist_id: Optional[str]
-) -> bool:
-    """True when the playlist is still registered in the store.
-
-    A playlist frame closed mid-flow deletes the store entry and its
-    local database; without this check the flow would resurrect the
-    deleted DB (song_exists()/add_song() recreate the file on first
-    access) and leave an orphan behind.  Legacy entries (no id) resolve
-    by name.  A store read failure errs on the permissive side - the
-    platform add may already have succeeded and must not be reported as
-    a failure.
-    """
-    try:
-        return (
-            PlaylistStore.find_playlist(
-                playlist_name, platform=platform, playlist_id=playlist_id or ""
-            )
-            is not None
-        )
-    except Exception:
-        return True
-
-
 def _strip_channel_suffix(name: str) -> str:
     """Remove common YouTube Music channel suffixes from an artist name.
 
@@ -457,176 +495,6 @@ def _strip_channel_suffix(name: str) -> str:
     "Various Artists - Topic" etc.
     """
 
-    # Strip " - Topic", "– Topic", "- Topic" and similar variants
+    # Strip " - Topic", "- Topic" and similar variants
     cleaned = re.sub(r"\s*[-–-]\s*Topic\s*$", "", name, flags=re.IGNORECASE).strip()
     return cleaned
-
-
-class SpotifyFlowController:
-    def __init__(
-        self,
-        spotify_integration: SpotifyIntegration,
-        song_manager: SongManager,
-    ):
-        self.spotify_integration = spotify_integration
-        self.song_manager = song_manager
-        # keyed by (playlist_name, known_id) so two playlists that share a
-        # name (different ids) cannot poison each other's cache entry
-        self._playlist_id_cache: Dict[tuple, str] = {}
-
-    def _get_playlist_id(self, playlist_name: str, known_id: Optional[str] = None) -> Optional[str]:
-        """Get Spotify playlist ID by name, with caching."""
-        cache_key = (playlist_name, known_id or "")
-        cached = self._playlist_id_cache.get(cache_key)
-        if cached is not None:
-            return cached
-
-        if known_id:
-            self._playlist_id_cache[cache_key] = known_id
-            return known_id
-
-        try:
-            pid = self.spotify_integration.get_playlist_id_by_name(playlist_name)
-            if pid:
-                self._playlist_id_cache[cache_key] = pid
-            return pid
-        except Exception as e:
-            logger.error("Failed to get Spotify playlist ID for '%s': %s", playlist_name, e)
-            return None
-
-    def execute_flow(
-        self,
-        playlist_name: str,
-        on_status: Callable[[str], None],
-        on_error: Callable[[str], None],
-        on_success: Callable[[Dict], None],
-        url: Optional[str] = None,
-        song_data: Optional[Dict] = None,
-        playlist_id: Optional[str] = None,
-    ) -> None:
-        """Execute the add-to-playlist flow for the currently playing track.
-
-        When ``song_data`` is provided (CLI batch mode), the pre-fetched
-        dict is reused across all target playlists so the same song is
-        added to every playlist.  Without it the flow reads the
-        currently-playing track from the Spotify API.  ``url`` is unused
-        (accepted for caller uniformity).  ``playlist_id`` skips the
-        by-name playlist lookup when the store already knows it.
-        """
-        try:
-            on_status("Fetch")
-            if song_data is None:
-                playing = self.spotify_integration.get_currently_playing()
-                if not playing:
-                    on_error("Nothing playing")
-                    return
-
-                title = playing["title"]
-                artists = playing["artists"]
-                duration = playing["duration_ms"] // 1000
-                track_id = playing["track_id"]
-                thumbnail = playing.get("thumbnail")
-
-                song_data = {
-                    "title": title,
-                    "artists": artists,
-                    "duration": duration,
-                    "track_id": track_id,
-                    "thumbnail": thumbnail,
-                }
-            else:
-                title = song_data["title"]
-                artists = song_data["artists"]
-                duration = song_data["duration"]
-                track_id = song_data["track_id"]
-                thumbnail = song_data.get("thumbnail")
-
-            on_status("Check")
-            # Store-liveness first (see KeybindFlowController): a closed
-            # frame must not resurrect its deleted database.
-            if not _playlist_still_registered(
-                playlist_name, PLATFORM_SPOTIFY, playlist_id
-            ):
-                raise RuntimeError(
-                    f"Playlist '{playlist_name}' was removed while the flow "
-                    "was running"
-                )
-            # Exact track_id check - NOT the info-match heuristic.  A
-            # (title, artists, duration) match can be a different track with
-            # identical metadata ("Intro" by the same artist), which would be
-            # reported as already-present and never added to the playlist.
-            # The track_id is stable for Spotify, so matching it is exact;
-            # add_song_by_info keeps the info-match as its INSERT-side
-            # fallback for metadata drift.
-            if self.song_manager.song_exists(
-                playlist_name,
-                track_id,
-                platform=PLATFORM_SPOTIFY,
-                playlist_id=playlist_id or "",
-            ):
-                on_success({
-                    "status": "exists",
-                    "song": song_data,
-                    "message": f"'{title}' already in playlist",
-                })
-                return
-
-            # Add to Spotify playlist first (platform API)
-            on_status("Sync")
-            local_playlist_id = playlist_id or ""  # see KeybindFlowController note
-            playlist_id = self._get_playlist_id(playlist_name, playlist_id)
-            if playlist_id is None:
-                raise RuntimeError(
-                    f"Could not find Spotify playlist '{playlist_name}'"
-                )
-            ok = self.spotify_integration.add_tracks_to_playlist(
-                playlist_id, [track_id]
-            )
-            if not ok:
-                raise RuntimeError(f"Spotify rejected adding '{title}'")
-            logger.info("Added %s to Spotify playlist %s", track_id, playlist_id)
-
-            # Add to local database (platform failure won't
-            # leave a stale local entry behind)
-            on_status("Add")
-            if not _playlist_still_registered(
-                playlist_name, PLATFORM_SPOTIFY, local_playlist_id
-            ):
-                # Playlist deleted while the platform add was in flight -
-                # the platform copy is done and authoritative; write
-                # nothing locally (a fresh database would just orphan).
-                logger.warning(
-                    "Playlist '%s' removed mid-flow - platform add done, "
-                    "local record skipped",
-                    playlist_name,
-                )
-                on_success(
-                    {
-                        "status": "added",
-                        "song": song_data,
-                        "song_id": None,
-                        "message": f"Added '{title}' (playlist was removed)",
-                    }
-                )
-                return
-            song_id = self.song_manager.add_song_by_info(
-                playlist_name,
-                title,
-                artists,
-                duration,
-                track_id,
-                thumbnail,
-                platform=PLATFORM_SPOTIFY,
-                playlist_id=local_playlist_id,
-            )
-
-            on_success({
-                "status": "added",
-                "song": song_data,
-                "song_id": song_id,
-                "message": f"Added '{title}'",
-            })
-
-        except Exception as e:
-            logger.error("Spotify flow error: %s", e, exc_info=True)
-            on_error(f"Error: {str(e)}")

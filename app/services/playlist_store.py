@@ -14,7 +14,8 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional
 
-from constants import PLATFORM_YOUTUBE_MUSIC
+# Legacy entries predate the platform field; they were all YouTube Music.
+PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 
 logger = logging.getLogger(__name__)
 
@@ -438,3 +439,27 @@ class PlaylistStore:
             # entry that visibly exists.
             _playlist_cache = playlists
             _cache_timestamp = time.monotonic()
+
+
+def playlist_still_registered(
+    playlist_name: str, platform: str, playlist_id: Optional[str]
+) -> bool:
+    """True when the playlist is still registered in the store.
+
+    A playlist frame closed mid-flow deletes the store entry and its
+    local database; without this check a keybind flow would resurrect
+    the deleted DB (song_exists()/add_song() recreate the file on first
+    access) and leave an orphan behind.  Legacy entries (no id) resolve
+    by name.  A store read failure errs on the permissive side - the
+    platform add may already have succeeded and must not be reported as
+    a failure.
+    """
+    try:
+        return (
+            PlaylistStore.find_playlist(
+                playlist_name, platform=platform, playlist_id=playlist_id or ""
+            )
+            is not None
+        )
+    except Exception:
+        return True

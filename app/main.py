@@ -10,6 +10,11 @@ import argparse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+# Top-level plugin packages (integrations/<id>/) resolve against the repo
+# root - required in this legacy launch mode, where nothing else puts the
+# repo root on sys.path (plugin_loader._ensure_import_paths also guards
+# this, but imports in this file run first).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cli import (
     run_add,

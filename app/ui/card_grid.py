@@ -11,7 +11,6 @@ import logging
 import tkinter as tk
 from typing import TYPE_CHECKING, Callable
 
-from constants import PLATFORM_YOUTUBE_MUSIC
 from controllers.keybind_registry import KeybindCallbacks
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
@@ -300,7 +299,7 @@ class CardGridManager:
                 log_artist=log_artist,
                 log_name=log_name,
                 log_status=log_status,
-                platform=PLATFORM_YOUTUBE_MUSIC,
+                platform="youtube_music",
             )
             card.position = (row, col)
 

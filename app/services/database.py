@@ -7,7 +7,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from constants import PLATFORM_YOUTUBE_MUSIC
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +195,7 @@ class DatabaseManager:
     def get_playlist_db_path(
         self,
         playlist_name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str = "youtube_music",
         playlist_id: str = "",
     ) -> Path:
         """Get the database file path for a playlist.
@@ -245,7 +244,7 @@ class DatabaseManager:
     def get_db_connection(
         self,
         playlist_name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str = "youtube_music",
         playlist_id: str = "",
     ) -> sqlite3.Connection:
         """Get a connection to the playlist's database, creating it if needed."""
@@ -268,7 +267,7 @@ class DatabaseManager:
     def get_connection(
         self,
         playlist_name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str = "youtube_music",
         playlist_id: str = "",
     ) -> Iterator[sqlite3.Connection]:
         """Context manager: yields a thread-cached connection.

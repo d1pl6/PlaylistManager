@@ -3,7 +3,11 @@ import json
 import logging
 import threading
 from typing import Dict, List, Optional, Callable
-from constants import PLATFORM_YOUTUBE_MUSIC, PLATFORM_SPOTIFY
+# Platform ids are declared by the plugin manifests (integrations/*/
+# plugin.json); these local constants mirror the built-in ids so this
+# service stays importable without the loader.
+PLATFORM_YOUTUBE_MUSIC = "youtube_music"
+PLATFORM_SPOTIFY = "spotify"
 from services.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -191,7 +195,7 @@ class SongManager:
         Args:
             playlist_name: Name of the playlist
             tracks: List of track dicts from the platform API
-            platform: Platform identifier (PLATFORM_YOUTUBE_MUSIC or PLATFORM_SPOTIFY)
+            platform: Platform identifier ("youtube_music" or "spotify")
             playlist_id: Stable API identifier - selects this playlist's
                 own database file (see DatabaseManager._db_stem)
 

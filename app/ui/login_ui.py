@@ -18,7 +18,6 @@ from tkinter import messagebox
 from typing import Any, Optional, cast
 
 from services import auth_setup
-from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from utils.scaling import ui_font
 from utils.icons import IconService
 from utils.window import center_window
@@ -140,7 +139,7 @@ def _on_youtube_music(parent, on_success):
         # scoped refresh doesn't re-verify (and possibly deauthenticate)
         # Spotify.
         _poll_for_browser_json(
-            parent, lambda: on_success(PLATFORM_YOUTUBE_MUSIC)
+            parent, lambda: on_success("youtube_music")
         )
 
 
@@ -340,7 +339,7 @@ def _on_spotify(parent, on_success):
                     foreground=C["label_playlist_good_fg"],
                 )
                 if on_success:
-                    on_success(PLATFORM_SPOTIFY)
+                    on_success("spotify")
             else:
                 status_label.config(text="No credentials file found", foreground="red")
         except Exception as e:
@@ -417,7 +416,7 @@ def _on_spotify(parent, on_success):
                 foreground=C["label_playlist_good_fg"],
             )
             if on_success:
-                on_success(PLATFORM_SPOTIFY)
+                on_success("spotify")
         else:
             status_label.config(text=result.get("error", "Error"), foreground="red")
 

@@ -10,7 +10,6 @@ import logging
 import threading
 from typing import Callable, Optional
 
-from constants import PLATFORM_YOUTUBE_MUSIC
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
 from services.song_manager import SongManager
@@ -233,7 +232,7 @@ class PlaylistSyncService:
         wins over the details header.  Other platforms return *details_thumb*
         unchanged.
         """
-        if platform != PLATFORM_YOUTUBE_MUSIC:
+        if platform != "youtube_music":
             return details_thumb
         try:
             for p in integration.get_library_playlists():

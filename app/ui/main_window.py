@@ -12,7 +12,10 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, messagebox
 
-from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
+# Platform ids are declared by the plugin manifests (integrations/*/
+# plugin.json); these local constants mirror the built-in ids.
+PLATFORM_YOUTUBE_MUSIC = "youtube_music"
+PLATFORM_SPOTIFY = "spotify"
 from controllers.keybind_registry import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
 from services.database import DatabaseManager

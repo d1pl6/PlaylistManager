@@ -34,14 +34,10 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
-from constants import (
-    KNOWN_PLATFORMS,
-    PLATFORM_SPOTIFY,
-    PLATFORM_YOUTUBE_MUSIC,
-)
-from integrations.music_youtube.music_youtube_receiver import URLReceiverManager, extract_video_id
+from plugin_loader import PluginRegistry, get_default_registry
 from services import auth_setup
 from services.database import DatabaseManager
+from services.integration import IntegrationRegistry
 from services.playlist_store import PlaylistStore
 from services.playlist_sync import PlaylistSyncService
 from services.playlist_url import parse_playlist_url
@@ -123,7 +119,7 @@ def resolve_targets(
         # (platform, playlist_id or name) so distinct legacy playlists are
         # not collapsed into a single dedup key.
         key = (
-            entry.get("platform") or PLATFORM_YOUTUBE_MUSIC,
+            entry.get("platform") or "youtube_music",
             entry.get("playlist_id") or entry.get("name"),
         )
         if key in seen:
@@ -204,73 +200,76 @@ def resolve_targets_for(
 
 
 # ---------------------------------------------------------------------------
-# Auth bootstrap (mirrors App.__init__ in app/app.py)
+# Auth bootstrap (generic - driven by the plugin manifests)
 # ---------------------------------------------------------------------------
 
 
-def _init_yt_music():
-    """Return an authenticated YTMusic client, or None if unavailable."""
+def _init_platform(plugin_registry, platform_id: str):
+    """Authenticate one platform via its plugin. Returns the integration
+    with a live client, or ``None`` when unavailable/unconfigured."""
+    plugin = plugin_registry.get(platform_id)
+    if plugin is None:
+        return None
     try:
-        from integrations.music_youtube.music_youtube import youtube_auth
-
-        if youtube_auth.setup_auth():
-            return youtube_auth.get_yt_music()
-        logger.warning("YouTube Music not configured (no browser.json)")
-    except ImportError:
-        user_log(
-            logger, "ytmusicapi not installed - YouTube Music integration disabled"
+        auth_manager = None
+        if plugin.auth_module:
+            auth_manager = plugin.import_auth_attr()
+        integration_cls = plugin.import_integration()
+    except Exception as e:
+        logger.error(
+            "%s integration unavailable: %s", platform_id, e, exc_info=True
         )
-    except Exception as e:
-        logger.error(f"YouTube Music auth failed: {e}", exc_info=True)
-    return None
+        return None
 
-
-def _init_spotify():
-    """Return an authenticated SpotifyIntegration, or None if unavailable."""
+    integration = integration_cls(auth_manager=auth_manager)
     try:
-        from integrations.music_spotify.music_spotify import spotify_auth
-        from services.integration import SpotifyIntegration
-
-        if spotify_auth.setup_auth():
-            integration = SpotifyIntegration(auth_manager=spotify_auth)
-            integration.spotify_api = spotify_auth.get_api()
-            return integration
-        logger.warning("Spotify is not configured (no spotify.json)")
+        if not integration.authenticate():
+            logger.warning(
+                "%s is not configured - run the GUI auth setup first",
+                plugin.display_name,
+            )
+            return None
     except Exception as e:
-        logger.error(f"Spotify auth failed: {e}", exc_info=True)
-    return None
+        logger.error("%s auth failed: %s", plugin.display_name, e, exc_info=True)
+        return None
+    return integration
 
 
-def _auth_error(platform: str) -> str:
+def _auth_error(plugin) -> str:
     """Message for an unconfigured platform, matching the song-add path."""
-    if platform == PLATFORM_YOUTUBE_MUSIC:
-        return (
-            "YouTube Music not configured - run the GUI auth setup first "
-            "(ytmusicapi must be installed)"
-        )
-    return f"{platform} not configured - run the GUI auth setup first"
+    return f"{plugin.display_name} not configured - run the GUI auth setup first"
 
 
 def _build_integrations():
-    """Return an IntegrationRegistry with the authenticated integrations.
+    """Return an IntegrationRegistry covering every discovered plugin.
 
-    Mirrors App.__init__ (app.py:33-75) headlessly: no tkinter, no
-    messageboxes. Integrations without credentials stay registered with no
-    client so PlaylistSyncService can still report a per-platform error.
+    Mirrors App.__init__ headlessly: no tkinter, no messageboxes.  Every
+    loadable integration is registered; consumers gate on
+    ``is_authenticated()`` so an unconfigured or failed platform simply
+    reports a per-platform error instead of disappearing.
     """
-    from services.integration import IntegrationRegistry, YouTubeMusicIntegration
-
     registry = IntegrationRegistry()
-
-    yt_client = _init_yt_music()
-    yt_integration = YouTubeMusicIntegration()
-    yt_integration.yt_client = yt_client
-    registry.register(yt_integration)
-
-    sp_integration = _init_spotify()
-    if sp_integration is not None:
-        registry.register(sp_integration)
-
+    plugin_registry = get_default_registry()
+    for pid, plugin in plugin_registry.get_all().items():
+        try:
+            auth_manager = None
+            if plugin.auth_module:
+                auth_manager = plugin.import_auth_attr()
+            integration_cls = plugin.import_integration()
+            registry.register(integration_cls(auth_manager=auth_manager))
+        except Exception as e:
+            user_log(
+                logger, "%s integration unavailable (%s)", plugin.display_name, e
+            )
+    # Authenticate after registration - authenticate() is a network round
+    # trip and must never keep a broken plugin from being registered.
+    for integration in registry.get_all().values():
+        try:
+            integration.authenticate()
+        except Exception as e:
+            logger.error(
+                "%s auth failed: %s", integration.display_name, e, exc_info=True
+            )
     return registry
 
 
@@ -311,75 +310,63 @@ def run_add(spec: str) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
+    plugin_registry = get_default_registry()
     song_manager = SongManager()
 
-    # Legacy registry entries predate the "platform" field - default them to
-    # YouTube Music, matching the per-target resolution in the loop below.
-    yt_targets = [
-        t
-        for t in targets
-        if (t[1].get("platform") or PLATFORM_YOUTUBE_MUSIC) == PLATFORM_YOUTUBE_MUSIC
-    ]
-    sp_targets = [
-        t for t in targets if (t[1].get("platform") or PLATFORM_YOUTUBE_MUSIC) == PLATFORM_SPOTIFY
-    ]
+    # Legacy registry entries predate the "platform" field - default them
+    # to YouTube Music, matching PlaylistStore.
+    targets_by_platform: Dict[str, list] = {}
+    for number, entry in targets:
+        platform = entry.get("platform") or "youtube_music"
+        targets_by_platform.setdefault(platform, []).append((number, entry))
 
-    yt = _init_yt_music() if yt_targets else None
-    sp_integration = _init_spotify() if sp_targets else None
+    # Per platform: authenticate once, build its flow via the plugin
+    # manifest, capture the current song ONCE and share it across all of
+    # that platform's target playlists.
+    contexts: Dict[str, dict] = {}
+    for platform, group in targets_by_platform.items():
+        ctx = {"flow": None, "url": None, "song_data": None, "error": ""}
+        contexts[platform] = ctx
 
-    # Capture ONE YouTube Music URL (+ song details) and share it across all
-    # YT playlists - the browser extension delivers it to the receiver.
-    keybind_flow = None
-    yt_url = None
-    yt_song_data = None
-    yt_error = ""
-    if yt_targets and yt is not None:
-        from controllers.keybind_flow import KeybindFlowController
-
-        receiver = URLReceiverManager()
-        keybind_flow = KeybindFlowController(yt, song_manager, receiver)
-        yt_url, yt_song_data, yt_error = _capture_yt_song(keybind_flow, receiver)
-
-    sp_flow = None
-    sp_song_data = None
-    sp_error = ""
-    if sp_targets and sp_integration is not None:
-        from controllers.keybind_flow import SpotifyFlowController
-
-        sp_flow = SpotifyFlowController(sp_integration, song_manager)
-        sp_song_data, sp_error = _capture_spotify_song(sp_flow)
+        plugin = plugin_registry.get(platform)
+        if plugin is None or not plugin.flow_class:
+            ctx["error"] = f"unsupported platform '{platform}'"
+            continue
+        integration = _init_platform(plugin_registry, platform)
+        if integration is None:
+            ctx["error"] = _auth_error(plugin)
+            continue
+        try:
+            flow_cls = plugin.import_flow()
+            if plugin.flow_type == "extension":
+                receiver_cls = plugin.import_receiver_class()
+                flow = flow_cls(integration, song_manager, receiver_cls())
+            else:
+                # "api" type - reads the platform directly, no receiver.
+                flow = flow_cls(integration, song_manager)
+            ctx["flow"] = flow
+            ctx["url"], ctx["song_data"], ctx["error"] = flow.capture(URL_WAIT_TIMEOUT)
+        except Exception as e:
+            logger.error("%s flow/capture failed: %s", platform, e, exc_info=True)
+            ctx["flow"] = None
+            ctx["error"] = str(e)
 
     failures = 0
     for number, entry in targets:
-        platform = entry.get("platform") or PLATFORM_YOUTUBE_MUSIC
+        platform = entry.get("platform") or "youtube_music"
         name = entry.get("name")
-        if platform == PLATFORM_YOUTUBE_MUSIC:
-            if keybind_flow is None:
-                ok, message = False, (
-                    "Error: YouTube Music not configured - run the GUI auth setup "
-                    "first (ytmusicapi must be installed)"
-                )
-            elif yt_url is None:
-                ok, message = False, f"Error: {yt_error or 'Timeout: no URL received'}"
-            else:
-                ok, message = _run_flow(
-                    keybind_flow, name, url=yt_url, song_data=yt_song_data,
-                    playlist_id=entry.get("playlist_id") or None,
-                )
-        elif platform == PLATFORM_SPOTIFY:
-            if sp_flow is None:
-                ok, message = False, (
-                    "Error: Spotify is not configured - run the GUI auth setup first"
-                )
-            elif sp_song_data is None:
-                ok, message = False, f"Error: {sp_error or 'Nothing playing'}"
-            else:
-                ok, message = _run_flow(
-                    sp_flow, name, song_data=sp_song_data,
-                    playlist_id=entry.get("playlist_id") or None,
-                )
+        ctx = contexts[platform]
+        if ctx["flow"] is None:
+            ok, message = False, f"Error: {ctx['error']}"
+        elif plugin_registry.get(platform).flow_type == "extension" and ctx["url"] is None:
+            ok, message = False, f"Error: {ctx['error'] or 'Timeout: no URL received'}"
+        elif ctx["song_data"] is None:
+            ok, message = False, f"Error: {ctx['error'] or 'Nothing playing'}"
         else:
-            ok, message = False, f"Error: unsupported platform '{platform}'"
+            ok, message = _run_flow(
+                ctx["flow"], name, url=ctx["url"], song_data=ctx["song_data"],
+                playlist_id=entry.get("playlist_id") or None,
+            )
 
         line = f'#{number} "{name}" ({platform}): {message}'
         if ok:
@@ -423,7 +410,7 @@ def run_add_url(url: str) -> int:
 
     # Non-editable playlists (followed, not collaborative) can be tracked
     # read-only, but adding songs to them fails on the platform - warn.
-    if platform == PLATFORM_SPOTIFY and isinstance(details, dict):
+    if platform == "spotify" and isinstance(details, dict):
         try:
             user_id = (
                 integration.spotify_api.get_user_id()
@@ -507,7 +494,7 @@ def run_del(spec: str) -> int:
         name = entry.get("name")
         # Legacy entries may lack the platform field - default to YT like
         # PlaylistStore does, so delete_playlist_db never sees None.
-        platform = entry.get("platform") or PLATFORM_YOUTUBE_MUSIC
+        platform = entry.get("platform") or "youtube_music"
         PlaylistStore.delete_playlist(
             name, platform=platform, playlist_id=entry.get("playlist_id", "")
         )
@@ -539,7 +526,7 @@ def run_refresh(spec: str) -> int:
     failures = 0
     for number, entry in targets:
         name = entry.get("name")
-        platform = entry.get("platform") or PLATFORM_YOUTUBE_MUSIC
+        platform = entry.get("platform") or "youtube_music"
         playlist_id = entry.get("playlist_id", "")
         if not playlist_id:
             print(
@@ -575,11 +562,12 @@ def _stored_refresh_token() -> Optional[str]:
     only the client credentials changed).
     """
     try:
-        from integrations.music_spotify.music_spotify import SPOTIFY_AUTH_FILE
-
-        data = json.loads(SPOTIFY_AUTH_FILE.read_text(encoding="utf-8"))
+        plugin = get_default_registry().get("spotify")
+        if plugin is None or not plugin.auth_path:
+            return None
+        data = json.loads(plugin.auth_path.read_text(encoding="utf-8"))
         return data.get("refresh_token") or None
-    except (ImportError, OSError, ValueError):
+    except (OSError, ValueError):
         return None
 
 
@@ -621,15 +609,15 @@ def run_login(
     the GUI's save_and_verify ordering
     (auth_setup.save_and_verify_spotify_credentials).
     """
-    if platform not in KNOWN_PLATFORMS:
+    known = get_default_registry().get_platform_ids()
+    if platform not in known:
         print(
-            f"error: unknown platform '{platform}' "
-            f"(use {', '.join(KNOWN_PLATFORMS)})",
+            f"error: unknown platform '{platform}' (use {', '.join(known)})",
             file=sys.stderr,
         )
         return 2
 
-    if platform == PLATFORM_YOUTUBE_MUSIC:
+    if platform == "youtube_music":
         result = auth_setup.setup_ytmusic_auth()
         if result.get("manual"):
             print(
@@ -693,10 +681,10 @@ def run_logout(platform: str) -> int:
     Idempotent: a second run with nothing left prints "no credentials
     found" and still exits 0.
     """
-    if platform not in KNOWN_PLATFORMS:
+    known = get_default_registry().get_platform_ids()
+    if platform not in known:
         print(
-            f"error: unknown platform '{platform}' "
-            f"(use {', '.join(KNOWN_PLATFORMS)})",
+            f"error: unknown platform '{platform}' (use {', '.join(known)})",
             file=sys.stderr,
         )
         return 2
@@ -726,77 +714,6 @@ def run_logout(platform: str) -> int:
     if n_dbs:
         print(f"{platform}: deleted {n_dbs} local database file(s)")
     return 0
-
-
-def _capture_spotify_song(
-    sp_flow,
-) -> Tuple[Optional[Dict], str]:
-    """Fetch the currently-playing Spotify track once for CLI batch mode.
-
-    Returns ``(song_data, error)`` - on failure *song_data* is ``None``
-    and *error* describes what went wrong ("" on success).
-    """
-    try:
-        playing = sp_flow.spotify_integration.get_currently_playing()
-    except Exception as e:
-        logger.error(f"Failed to fetch Spotify currently-playing: {e}", exc_info=True)
-        return None, str(e)
-    if not playing:
-        return None, "Nothing playing on Spotify"
-    return {
-        "title": playing["title"],
-        "artists": playing["artists"],
-        "duration": playing["duration_ms"] // 1000,
-        "track_id": playing["track_id"],
-        "thumbnail": playing.get("thumbnail"),
-    }, ""
-
-
-def _capture_yt_song(
-    keybind_flow, receiver
-) -> Tuple[Optional[str], Optional[Dict], str]:
-    """
-    Capture the current YouTube Music URL from the browser extension and fetch
-    its song details. Returns ``(url, song_data, error)`` - on failure both
-    url and song_data are None and *error* describes what went wrong ("" on
-    success).
-    """
-    url = None
-    try:
-        receiver.start()
-        receiver.set_waiting(True)
-        print(
-            "Waiting for YouTube Music URL... "
-            "(play the song in the browser with the extension installed)",
-            flush=True,
-        )
-        url = receiver.get_received_url(timeout=URL_WAIT_TIMEOUT)
-    except TimeoutError:
-        return None, None, "Timeout: no URL received from the browser extension"
-    except Exception as e:
-        logger.error(f"Failed to capture the YouTube Music URL: {e}", exc_info=True)
-        return None, None, f"failed to start the URL receiver: {e}"
-    finally:
-        try:
-            receiver.set_waiting(False)
-        except Exception:
-            pass
-        try:
-            if receiver.is_running():
-                receiver.stop()
-        except Exception:
-            pass
-
-    video_id = extract_video_id(url)
-    if video_id is None:
-        logger.error(f"Could not extract a video ID from '{url}'")
-        return None, None, "could not extract a video ID from the received URL"
-    try:
-        song_data = keybind_flow.fetch_song_details(video_id)
-    except Exception as e:
-        logger.error(f"Failed to fetch song details: {e}", exc_info=True)
-        return None, None, f"failed to fetch song details: {e}"
-    return url, song_data, ""
 
 
 def _run_flow(
