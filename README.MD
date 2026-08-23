@@ -4,7 +4,22 @@ Add songs that you're currently listening to your chosen playlists or liked trac
 <img width="326" height="249" alt="screenshot2" src="https://github.com/user-attachments/assets/06ec2ba7-d826-4484-8fba-136ae36493d8" />
 <img width="326" height="249" alt="screenshot3" src="https://github.com/user-attachments/assets/18873a88-2a09-4d1c-b881-5f50e6933d65" />
 
-# About
+# Content
+- [Why?](#why)
+- [Integrations](#integrations)
+- [Install](#install)
+  - [Windows / Mac OS](#windows--mac-os)
+  - [Linux](#linux)
+    - [Arch](#arch)
+    - [Debian / Ubuntu](#debian--ubuntu)
+  - [Optional dependencies](#optional-dependencies)
+- [Usage](#usage)
+  - [CLI](#cli)
+    -[Global install (linux)](#global-install-for-compositor-shortcuts)
+- [License](#license)
+- [Q&A](#q--a)
+
+# Why?
 I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage. Since i'm not using streaming platforms much, i'm using ai to create same app but on pyton.
 
 # Integrations
@@ -49,8 +64,7 @@ pacman -S tk python-pillow python-requests python-platformdirs python-flask pyth
 apt install -y python3-tk python3-pil python3-requests python3-platformdirs python3-flask python3-flask-cors python3-pynput
 ```
 
-### Optional dependencies
-#### Integrations
+## Optional dependencies
 **Windows / macOS**:
 ```
 # Integrations
@@ -108,7 +122,7 @@ python main.py
 6. Wait database creation (might take longer if you have a lot of songs in playlist)
 7. Create keybind (click on 2nd line after playlist name)
 
-# Command line
+## CLI
 See [Global command](#global-command-for-compositor-shortcuts)
 
 Authentication (`--login` / `--logout`) - the headless equivalent of the GUI login tiles:
@@ -173,7 +187,7 @@ python -m app -a 1,"Chill Mix",3  # mixed numbers and names
 python -m app --list              # show the numbered playlist list
 ```
 
-## Global command (for compositor shortcuts)
+### Global install (for compositor shortcuts)
 `python -m app ...` only works from the repo root. To bind the command from anywhere
 (i3 / hyprland / etc), install a global `playlistmanager` command.
 
@@ -226,7 +240,7 @@ A: I hate programming.
 
 Q: Will _patform_ be added?
 
-A: See [TODO](TODO.MD), if it doesn't exist there - open `Platform integration request` on `Issue`s page.
+A: See [TODO](TODO.MD), if it doesn't exist there - open `Platform integration request` on [Issue](https://github.com/d1pl6/PlaylistManager/issues) page.
 
 Q: 1.0.0 when?
 

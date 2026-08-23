@@ -67,14 +67,14 @@ def save_spotify_credentials(
 ) -> None:
     """Write Spotify credentials to disk with secure permissions.
 
-    Delegates to :func:`integrations.music_spotify.music_spotify
+    Delegates to :func:`integrations.spotify.spotify
     .save_spotify_credentials_file` so the token-refresh path (which
     lives on :class:`SpotifyAPI`) and the login UI write through the
     same single writer.
 
     Raises ``OSError`` on write failure.
     """
-    from integrations.music_spotify.music_spotify import (
+    from integrations.spotify.spotify import (
         save_spotify_credentials_file,
     )
 
@@ -128,7 +128,7 @@ def verify_spotify_credentials(
     invalidated during the check and replaced).
     """
     try:
-        from integrations.music_spotify.music_spotify import SpotifyAuthManager
+        from integrations.spotify.spotify import SpotifyAuthManager
 
         me, api = SpotifyAuthManager.verify_credentials(
             client_id, client_secret, refresh_token

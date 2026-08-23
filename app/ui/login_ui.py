@@ -35,11 +35,40 @@ LOGOS_DIR = ASSETS_DIR / "logos"
 # ======================================================================
 
 
-def show_login_dialog(parent, on_success=None):
+def show_login_dialog(parent, on_success=None, integrations=None):
+    """Show the platform-picker login dialog.
+
+    *integrations* is an iterable of loaded integration objects (anything
+    with ``.id`` / ``.display_name`` - normally
+    ``IntegrationRegistry.get_all().values()``).  Only platforms whose
+    integration actually loaded get a tile: with the plugin directory
+    removed or its optional dependency missing there is no working flow
+    behind the login, so offering it would only end in errors.
+    """
     frame_main_bg = C["frame_main_bg"]
     frame_header_bg = C["frame_head_bg"]
     label_bg = C["label_def_bg"]
     label_fg = C["label_def_fg"]
+
+    # platform id -> (login handler, logo file).  The handlers are the
+    # platform-specific UI flows below; a loaded integration without a
+    # flow entry is skipped with a warning instead of rendering a dead
+    # tile.
+    flows = {
+        "youtube_music": (_on_youtube_music, LOGOS_DIR / "youtube-music.png"),
+        "spotify": (_on_spotify, LOGOS_DIR / "spotify.png"),
+    }
+
+    available = []
+    for integration in integrations or []:
+        flow = flows.get(integration.id)
+        if flow is None:
+            logger.warning(
+                "No login flow for platform '%s' - hiding its login option",
+                integration.id,
+            )
+            continue
+        available.append((integration.display_name, *flow))
 
     win = tk.Toplevel(parent)
     win.title("Login")
@@ -59,22 +88,27 @@ def show_login_dialog(parent, on_success=None):
         font=ui_font(14),
     ).pack(fill="both", pady=5, padx=5)
 
+    if not available:
+        tk.Label(
+            win,
+            text="No music services installed",
+            background=label_bg,
+            foreground=label_fg,
+            font=ui_font(10),
+        ).pack(pady=20, padx=40)
+        center_window(win)
+        return
+
     platforms_frame = tk.Frame(win, background=label_bg)
     platforms_frame.pack(pady=20, padx=20)
 
-    _create_platform_button(
-        platforms_frame,
-        "YouTube Music",
-        LOGOS_DIR / "youtube-music.png",
-        lambda: _on_youtube_music(win, on_success),
-    ).pack(side="left", padx=20)
-
-    _create_platform_button(
-        platforms_frame,
-        "Spotify",
-        LOGOS_DIR / "spotify.png",
-        lambda: _on_spotify(win, on_success),
-    ).pack(side="left", padx=20)
+    for display_name, handler, icon_path in available:
+        _create_platform_button(
+            platforms_frame,
+            display_name,
+            icon_path,
+            lambda h=handler: h(win, on_success),
+        ).pack(side="left", padx=20)
 
     center_window(win)
 
@@ -162,7 +196,7 @@ def _browser_file_ready() -> bool:
     that window.
     """
     try:
-        from integrations.music_youtube.music_youtube import (
+        from integrations.youtube_music.youtube_music import (
             BROWSER_FILE as YT_BROWSER_FILE,
             BROWSER_FILE_FALLBACKS,
         )

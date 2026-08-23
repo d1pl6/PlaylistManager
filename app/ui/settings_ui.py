@@ -162,7 +162,7 @@ def show_settings_dialog(
         font=ui_font(12),
         command=lambda: _toggle_setting("update_check", update_var),
         variable=update_var,
-    ).pack(fill="both", pady=(0,5))
+    ).pack(fill="both", pady=(0,5), padx=16)
 
     def _do_check_now():
         if not callable(on_check_updates_now):
@@ -202,7 +202,7 @@ def show_settings_dialog(
         relief="raised",
         command=_do_check_now,
     )
-    update_btn.pack(fill="both", pady=(0,5))
+    update_btn.pack(fill="both", pady=(0,5), padx=16)
 
     tk.Checkbutton(
         app_section,
@@ -216,7 +216,7 @@ def show_settings_dialog(
             center_var.get() and center_window(win),
         ),
         variable=center_var,
-    ).pack(fill="both", pady=(0,5))
+    ).pack(fill="both", pady=(0,5), padx=16)
 
     def _on_auto_resize_toggle():
         _toggle_setting("auto_resize", resize_var)
@@ -232,7 +232,7 @@ def show_settings_dialog(
         font=ui_font(12),
         command=_on_auto_resize_toggle,
         variable=resize_var,
-    ).pack(fill="both", pady=(0,5))
+    ).pack(fill="both", pady=(0,5), padx=16)
 
     def _on_global_toggle():
         _toggle_setting("global_listener", global_var)
@@ -248,7 +248,7 @@ def show_settings_dialog(
         font=ui_font(12),
         command=_on_global_toggle,
         variable=global_var,
-    ).pack(fill="both", pady=(0,5))
+    ).pack(fill="both", pady=(0,5), padx=16)
 
     def _on_tray_toggle():
         _toggle_setting("hide_to_tray", tray_var)
@@ -265,7 +265,7 @@ def show_settings_dialog(
         command=_on_tray_toggle,
         variable=tray_var,
     )
-    tray_ck.pack(fill="both")
+    tray_ck.pack(fill="both", pady=(0,5), padx=16)
     if not getattr(tray_available, "available", False):
         tray_ck.configure(state="disabled", cursor="arrow")
 
@@ -289,8 +289,37 @@ def show_settings_dialog(
         if on_showcase_log_change is not None:
             on_showcase_log_change(showcase_log_var.get() == 1)
 
+    showcase_log_var = tk.IntVar(value=showcase_log_value)
+    tk.Checkbutton(
+        appearance_section,
+        text="Show log row (artist / song / status)",
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=_on_showcase_log_toggle,
+        variable=showcase_log_var,
+    ).pack(fill="both", pady=(0,5), padx=16)
+
+    def _on_playlist_stats_toggle():
+        _toggle_setting("playlist_stats", playlist_stats_var)
+        if on_playlist_stats_change is not None:
+            on_playlist_stats_change(playlist_stats_var.get() == 1)
+
+    playlist_stats_var = tk.IntVar(value=playlist_stats_value)
+    tk.Checkbutton(
+        appearance_section,
+        text="Show playlist stats (songs / duration / followers)",
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=_on_playlist_stats_toggle,
+        variable=playlist_stats_var,
+    ).pack(fill="both", pady=(0,5), padx=16)
+
     showcase_row = tk.Frame(appearance_section, background=theme_check_bg)
-    showcase_row.pack(fill="both", pady=(0,5))
+    showcase_row.pack(fill="both", pady=(0,5), padx=16)
     tk.Label(
         showcase_row,
         text="Show last N added songs:",
@@ -322,35 +351,6 @@ def show_settings_dialog(
         font=ui_font(9),
     ).pack(side="left", pady=(0,5))
 
-    showcase_log_var = tk.IntVar(value=showcase_log_value)
-    tk.Checkbutton(
-        appearance_section,
-        text="Show log row (artist / song / status)",
-        cursor="hand2",
-        selectcolor=theme_check_select,
-        **checkbutton_style,
-        font=ui_font(10),
-        command=_on_showcase_log_toggle,
-        variable=showcase_log_var,
-    ).pack(fill="both", pady=(0,5))
-
-    def _on_playlist_stats_toggle():
-        _toggle_setting("playlist_stats", playlist_stats_var)
-        if on_playlist_stats_change is not None:
-            on_playlist_stats_change(playlist_stats_var.get() == 1)
-
-    playlist_stats_var = tk.IntVar(value=playlist_stats_value)
-    tk.Checkbutton(
-        appearance_section,
-        text="Show playlist stats (songs / duration / followers)",
-        cursor="hand2",
-        selectcolor=theme_check_select,
-        **checkbutton_style,
-        font=ui_font(10),
-        command=_on_playlist_stats_toggle,
-        variable=playlist_stats_var,
-    ).pack(fill="both", pady=(0,5))
-
     def _on_ui_scale_change(value: str) -> None:
         try:
             set_setting_value("ui_scale", "value", value)
@@ -358,7 +358,7 @@ def show_settings_dialog(
             logger.error("Failed to write ui_scale setting: %s", e)
 
     scale_row = tk.Frame(appearance_section, background=theme_check_bg)
-    scale_row.pack(fill="both", pady=(0, 5))
+    scale_row.pack(fill="both", pady=(0, 5), padx=16)
     tk.Label(
         scale_row,
         text="UI scale:",
@@ -384,7 +384,7 @@ def show_settings_dialog(
     )
     tk.Label(
         scale_row,
-        text="(restart to apply; auto follows the display)",
+        text="(restart to apply)",
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(9),
@@ -402,7 +402,7 @@ def show_settings_dialog(
                 pass
 
     columns_row = tk.Frame(appearance_section, background=theme_check_bg)
-    columns_row.pack(fill="both", pady=(0,5))
+    columns_row.pack(fill="both", pady=(0,5), padx=16)
     tk.Label(
         columns_row,
         text="Card columns:",
@@ -436,7 +436,7 @@ def show_settings_dialog(
 
     tk.Button(
         appearance_section,
-        text="Theme Settings",
+        text="Theme Settings (restart to apply)",
         cursor="hand2",
         **btn_colors(C["button_main_bg"], C["button_main_fg"]),
         font=ui_font(12),
@@ -444,7 +444,7 @@ def show_settings_dialog(
         relief="raised",
         bd=0,
         command=lambda: show_theme_dialog(win, on_theme_change=on_theme_change),
-    ).pack(fill="both")
+    ).pack(fill="both", pady=(0,4), padx=16)
 
     about_section = tk.Frame(content, background=theme_win_bg)
     about_section.pack(fill="both", padx=8, pady=(0, 8))
@@ -452,24 +452,51 @@ def show_settings_dialog(
 
     tk.Label(
         about_section,
-        text=f"PlaylistManager v{__version__}",
+        text="Authour: d1pl",
         background=theme_win_bg,
         foreground=theme_label_fg,
         font=ui_font(12),
         anchor="w",
-    ).pack(fill="x", pady=(0,4), padx=8)
+    ).pack(fill="x", pady=(0,4), padx=16)
 
     repo_label = tk.Label(
         about_section,
-        text=f"Link: {REPO_URL}",
+        text=f"Repo: {REPO_URL}",
         background=theme_win_bg,
         foreground=C["button_main_fg"],
-        font=ui_font(9),
+        font=ui_font(12),
         anchor="w",
         cursor="hand2",
     )
-    repo_label.pack(fill="x", padx=8, pady=(0, 4))
+    repo_label.pack(fill="x", padx=16, pady=(0, 4))
     repo_label.bind("<Button-1>", lambda _event: _open_repo())
+
+    tk.Label(
+        about_section,
+        text=f"Version: {__version__}",
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        font=ui_font(12),
+        anchor="w",
+    ).pack(fill="x", pady=(0,4), padx=16)
+
+    tk.Label(
+        about_section,
+        text="Support:",
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        font=ui_font(12),
+        anchor="w",
+    ).pack(fill="x", pady=(0,4), padx=16)
+
+    tk.Label(
+        about_section,
+        text="monero: soon",
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        font=ui_font(12),
+        anchor="w",
+    ).pack(fill="x", pady=(0,4), padx=16)
 
     if center_var_value == 1:
         center_window(win)

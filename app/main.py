@@ -34,54 +34,40 @@ def parse_args():
         description="PlaylistManager - add the currently-playing song to your playlists.",
     )
     p.add_argument(
-        "-v", "--verbose", action="count", default=0,
-        help="more logging: -v = INFO, -vv = DEBUG (same as --debug)",
+        "--verbose", "-v", action="count", default=0,
+        help="normal logging. INFO, DEBUG",
     )
     p.add_argument(
-        "--debug", action="store_true",
-        help="verbose logging (DEBUG level, same as -vv)",
+        "--debug", "-vv", action="store_true",
+        help="verbose logging (DEBUG level)",
     )
     p.add_argument(
-        "--trace", action="store_true",
+        "--trace", "-vvv", action="store_true",
         help="ultra-verbose logging (TRACE level + third-party debug)",
     )
     p.add_argument(
-        "-a", "--add-song", dest="add_song_targets", metavar="PLAYLISTS",
+        "--add-song", "-a", dest="add_song_targets", metavar="PLAYLISTS",
         help='add the currently-playing song to playlist(s), e.g. "1,2,3", "1-3"',
     )
     p.add_argument(
-        "-p", "--playlist", dest="playlist_args", nargs="+",
-        metavar="ACTION [TARGETS]...",
-        help='playlist management: "add <URL>", "del <TARGETS>", "ref <TARGETS>" '
-             '(del/ref accept numbers, names and playlist URLs; "all" targets every '
-             "playlist; delete/refresh are aliases)",
+        "--playlist", "-p", dest="playlist_args",
+        metavar="ACTION <PLAYLIST>",
+        help='options: "add <URL>", "del <TARGETS>", "ref <TARGETS>" '
+             '(add/delete/refresh accept numbers, names and playlist URLs;'
+             '`del/ref all` targets every playlist)',
     )
     p.add_argument(
-        "-l", "--list", dest="list_only", action="store_true",
+        "--list", "-l", dest="list_only", action="store_true",
         help="print numbered playlists and exit",
     )
     p.add_argument(
         "--login", dest="login_platform", metavar="PLATFORM",
         help='log in to a platform: "youtube_music" or "spotify" '
-             "(spotify also needs --client-id/--client-secret/--refresh-token; "
-            "omit them to be prompted interactively)",
     )
     p.add_argument(
         "--logout", dest="logout_platform", metavar="PLATFORM",
         help="log out of a platform: delete its credentials, registry "
              "entries and local databases",
-    )
-    p.add_argument(
-        "--client-id", dest="client_id", metavar="ID",
-        help="Spotify client ID (with --login spotify)",
-    )
-    p.add_argument(
-        "--client-secret", dest="client_secret", metavar="SECRET",
-        help="Spotify client secret (with --login spotify)",
-    )
-    p.add_argument(
-        "--refresh-token", dest="refresh_token", metavar="TOKEN",
-        help="Spotify refresh token (with --login spotify)",
     )
     return p.parse_args()
 

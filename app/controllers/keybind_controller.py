@@ -542,8 +542,7 @@ class KeybindController:
             flow_cls = plugin.import_flow()
 
             if plugin.flow_type == "extension":
-                receiver_cls = plugin.import_receiver_class()
-                receiver = receiver_cls()
+                receiver = plugin.build_receiver()
                 self._receivers[platform_id] = receiver
                 flow = flow_cls(integration, self.song_manager, receiver)
             else:

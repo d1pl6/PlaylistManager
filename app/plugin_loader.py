@@ -3,7 +3,7 @@ Plugin discovery for platform integrations.
 
 Each supported music platform lives in its own top-level package under
 ``<repo>/integrations/<directory>/`` with a ``plugin.json`` manifest
-(directory name is the import root; the ``id`` inside is the data key):
+(the ``id`` inside is the data key):
 
     {
       "id": "youtube_music",
@@ -13,8 +13,9 @@ Each supported music platform lives in its own top-level package under
       "flow_type": "extension",
       "flow_module": "flow",
       "flow_class": "YouTubeMusicFlow",
-      "receiver_module": "music_youtube_receiver",
-      "receiver_class": "URLReceiverManager"
+      "receiver_module": "youtube_music_receiver",
+      "receiver_class": "URLReceiverManager",
+      "receiver_port": 5000
     }
 
 Discovery scans the directory tree and reads the manifests. It never
@@ -95,18 +96,21 @@ class PluginInfo:
     integration_module: str = "integration"
     integration_class: str = ""
     # Auth-manager singleton inside the plugin package (module + attribute),
-    # e.g. music_youtube.youtube_auth. Resolved lazily like every class ref.
+    # e.g. youtube_music.youtube_auth. Resolved lazily like every class ref.
     auth_module: str = ""
     auth_attr: str = ""
     flow_module: str = ""
     flow_class: str = ""
     receiver_module: str = ""
     receiver_class: str = ""
+    # TCP port the extension-type receiver binds (plugin.json
+    # "receiver_port"). None = receiver module's own default applies.
+    receiver_port: Optional[int] = None
 
     def _import(self, module_name: str):
         """Import ``integrations.<dir>.<module_name>`` and cache the module.
 
-        Keyed by the DIRECTORY name (``music_spotify``), not the plugin id
+        Keyed by the DIRECTORY name (``spotify``), not the plugin id
         (``spotify``): the two only need to agree for readability.
         """
         cache_key = f"_module_{module_name}"
@@ -150,6 +154,20 @@ class PluginInfo:
     def import_receiver_class(self):
         """Lazily import and return the URL-receiver class."""
         return self._class("receiver_module", "receiver_class")
+
+    def build_receiver(self, **kwargs):
+        """Construct a fresh receiver with the manifest-declared port.
+
+        The port lives in plugin.json ("receiver_port") - the single
+        Python-side source of truth. When the manifest omits it, the
+        receiver module's own default applies (kwargs pass through
+        untouched). Callers may still override any constructor kwarg,
+        including port, for tests.
+        """
+        cls = self.import_receiver_class()
+        if self.receiver_port is not None:
+            kwargs.setdefault("port", self.receiver_port)
+        return cls(**kwargs)
 
     @property
     def auth_path(self) -> Optional[Path]:
@@ -276,6 +294,18 @@ class PluginRegistry:
             )
             return None
 
+        receiver_port = raw.get("receiver_port", None)
+        if receiver_port is not None and (
+            isinstance(receiver_port, bool)
+            or not isinstance(receiver_port, int)
+            or not (1 <= receiver_port <= 65535)
+        ):
+            logger.warning(
+                "Skipping plugin '%s': receiver_port must be an integer "
+                "in 1..65535 (got %r)", plugin_id, receiver_port,
+            )
+            return None
+
         return PluginInfo(
             id=plugin_id,
             display_name=raw["display_name"],
@@ -291,6 +321,7 @@ class PluginRegistry:
             flow_class=raw.get("flow_class", ""),
             receiver_module=raw.get("receiver_module", ""),
             receiver_class=raw.get("receiver_class", ""),
+            receiver_port=receiver_port,
         )
 
     @property

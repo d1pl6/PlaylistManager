@@ -132,14 +132,14 @@ def resolve_targets(
         if kind == "number":
             if not 1 <= value <= total:
                 raise UsageError(
-                    f"Playlist #{value} out of range - valid: 1–{total}"
+                    f"Playlist #{value} out of range - valid: 1-{total}"
                 )
             add(playlists[value - 1], value)
         elif kind == "range":
             start, end = value
             if start < 1 or end > total:
                 raise UsageError(
-                    f"Playlist range {start}–{end} out of range - valid: 1–{total}"
+                    f"Playlist range {start}-{end} out of range - valid: 1-{total}"
                 )
             for number in range(start, end + 1):
                 add(playlists[number - 1], number)
@@ -339,8 +339,9 @@ def run_add(spec: str) -> int:
         try:
             flow_cls = plugin.import_flow()
             if plugin.flow_type == "extension":
-                receiver_cls = plugin.import_receiver_class()
-                flow = flow_cls(integration, song_manager, receiver_cls())
+                flow = flow_cls(
+                    integration, song_manager, plugin.build_receiver()
+                )
             else:
                 # "api" type - reads the platform directly, no receiver.
                 flow = flow_cls(integration, song_manager)

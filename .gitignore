@@ -16,10 +16,10 @@ cfg/
 !.vscode/launch.json
 !.vscode/extensions.json
 .history/*
-youtube-music-extension/
 .cortexkit/
 .agents
 0.3.0/
+integrations/*
 
 close.png
 closeWindow.png

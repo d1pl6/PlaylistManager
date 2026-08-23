@@ -289,7 +289,9 @@ class MainWindow:
             highlightthickness=0,
             relief="raised",
             command=lambda: show_login_dialog(
-                self.root, on_success=self.ac.refresh_auth
+                self.root,
+                on_success=self.ac.refresh_auth,
+                integrations=list(self.integrations.get_all().values()),
             ),
         )
         ToolTip(self.btn_login, "Log in to music services")
@@ -637,16 +639,43 @@ class MainWindow:
             on_song_added=on_song_added,
         )
 
+    @staticmethod
+    def _filter_available_playlists(playlists, available_platforms):
+        """Pair each store entry with its platform, skipping dead ones.
+
+        Returns ``[(playlist_dict, platform)]`` for every entry whose
+        *platform* is in *available_platforms*.  A playlist whose plugin
+        directory is absent (or whose optional dependency failed to
+        import) has no working flow behind it - its card would offer
+        keybinds and reloads that can only fail.  The entry itself stays
+        untouched in db/playlists.json: restoring the integration brings
+        the card back on the next launch.  Legacy entries without a
+        *platform* field were all YouTube Music.
+        """
+        visible = []
+        for playlist in playlists:
+            platform = playlist.get("platform") or PLATFORM_YOUTUBE_MUSIC
+            if platform in available_platforms:
+                visible.append((playlist, platform))
+            else:
+                logger.info(
+                    "Hiding playlist '%s' (no %s integration loaded)",
+                    playlist.get("name"), platform,
+                )
+        return visible
+
     def setup(self) -> None:
         self.kc.set_root(self.root)
-        playlists = PlaylistStore.load_playlists()
-        if playlists:
-            self.card_grid.create_main_frame(len(playlists))
-            for i, playlist in enumerate(playlists):
+        visible = self._filter_available_playlists(
+            PlaylistStore.load_playlists(),
+            set(self.integrations.get_all()),
+        )
+        if visible:
+            self.card_grid.create_main_frame(len(visible))
+            for i, (playlist, platform) in enumerate(visible):
                 if i < len(self.card_grid.cards):
                     card = self.card_grid.cards[i]
                     name = playlist.get("name", f"Playlist {i + 1}")
-                    platform = playlist.get("platform", PLATFORM_YOUTUBE_MUSIC)
                     playlist_id = playlist.get("playlist_id", "")
                     card.name_label.config(text=name)
                     card.platform = platform
@@ -1238,12 +1267,14 @@ class MainWindow:
 
     def _run_service_health_check(self) -> None:
         """Launch a per-platform service-health probe in a daemon thread."""
-        # Only probe platforms the user actually has playlists for.
+        # Only probe platforms the user actually has playlists for AND
+        # whose integration is loaded - with no integration there is
+        # nothing to reach and nothing to warn about.
+        available = set(self.integrations.get_all())
         platforms = {
-            p.get("platform")
+            p.get("platform") or PLATFORM_YOUTUBE_MUSIC
             for p in PlaylistStore.load_playlists()
-            if p.get("platform")
-        }
+        } & available
         if platforms:
             threading.Thread(
                 target=self._service_health_probe,
@@ -1274,16 +1305,13 @@ class MainWindow:
             pass
 
     def _on_service_health_result(self, results: dict[str, bool]) -> None:
-        _DISPLAY_NAMES = {
-            PLATFORM_YOUTUBE_MUSIC: "YouTube Music",
-            PLATFORM_SPOTIFY: "Spotify",
-        }
         for platform, ok in results.items():
             key = f"service:{platform}"
             if ok:
                 self._set_warning(key, None)
             else:
-                name = _DISPLAY_NAMES.get(platform, platform)
+                integration = self.integrations.get(platform)
+                name = integration.display_name if integration else platform
                 self._set_warning(key, f"{name} service is unreachable")
         self._reschedule_service_check()
 
