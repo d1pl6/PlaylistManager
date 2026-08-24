@@ -731,8 +731,18 @@ def _run_flow(
         outcome["message"] = msg
 
     def on_success(result: Dict) -> None:
+        status = result.get("status")
         outcome["ok"] = True
-        outcome["message"] = result.get("message", "Added")
+        if status == "duplicate":
+            # Queued in db/extra.json, added nowhere - the CLI keeps
+            # going (continue-on-error policy); resolution happens in
+            # the GUI's activity window.
+            outcome["message"] = (
+                f"{result.get('message', 'maybe-duplicate')} "
+                "[queued as maybe-duplicate - resolve in the GUI]"
+            )
+        else:
+            outcome["message"] = result.get("message", "Added")
 
     try:
         flow.execute_flow(

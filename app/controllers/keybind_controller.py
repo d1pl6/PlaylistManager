@@ -24,6 +24,7 @@ from utils.key_mapping import (
 )
 from utils.platform import is_wayland_session
 from controllers.keybind_registry import KeybindCallbacks, KeybindRegistry
+from services import duplicate_queue
 from services.playlist_store import PlaylistStore
 from services.song_manager import SongManager
 from utils.theme import C
@@ -440,6 +441,12 @@ class KeybindController:
 
         def on_error(error_msg):
             logger.error("Keybind flow error: %s", error_msg)
+            # Persist for the activity window's Errors tab - the red card
+            # status alone is gone at the next keybind.
+            try:
+                duplicate_queue.record_error(playlist_name, platform, error_msg)
+            except Exception:
+                logger.debug("Could not log flow error to extra.json", exc_info=True)
             _schedule_ui(
                 lambda: (
                     callbacks.on_reset("readonly"),
@@ -454,6 +461,10 @@ class KeybindController:
                     callbacks.on_status("Added", C["label_playlist_good_bg"])
                 elif status == "exists":
                     callbacks.on_status("Exists", C["label_playlist_warn_bg"])
+                elif status == "duplicate":
+                    # Queued in db/extra.json, added nowhere - resolved
+                    # later in the activity window's Duplicates tab.
+                    callbacks.on_status("Dup?", C["label_playlist_warn_bg"])
                 else:
                     callbacks.on_status("Error", C["label_playlist_error_bg"])
 
@@ -499,6 +510,21 @@ class KeybindController:
                 self._flow_busy.release()
 
         threading.Thread(target=run_flow, daemon=True).start()
+
+    def get_flow(self, platform_id: str):
+        """Return the initialized flow for *platform_id*, building it lazily.
+
+        Public accessor for the activity window's Add action, which runs
+        ``execute_flow`` itself with the queued record's pre-captured
+        url/song_data (the keybind path builds flows through
+        ``handle_keybind`` instead).  Returns None when initialization
+        fails (not authenticated, no flow declared) - the caller is
+        responsible for reporting that; the no-op callbacks here keep
+        init-failure silent instead of poking a card widget.
+        """
+        if not self._ensure_initialized(platform_id, KeybindCallbacks()):
+            return None
+        return self._flows.get(platform_id)
 
     def _ensure_initialized(
         self, platform_id: str, callbacks: KeybindCallbacks

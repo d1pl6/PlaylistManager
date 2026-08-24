@@ -58,7 +58,8 @@ def show_settings_dialog(
     on_showcase_log_change=None,
     on_playlist_stats_change=None,
     on_columns_change=None,
-    on_check_updates_now=None
+    on_check_updates_now=None,
+    on_check_duplicates_now=None,
     ):
     """Show the settings dialog.
 
@@ -85,6 +86,9 @@ def show_settings_dialog(
         on_columns_change: optional callback applied live with the new
             card column count (int) when the combobox changes - without
             it the change only takes effect after a restart.
+        on_check_duplicates_now: optional callback(on_done) running a
+            manual duplicate scan off-thread; *on_done* receives
+            ``(found_count, error_or_None)`` on the UI thread.
     """
     theme_win_bg = C["frame_main_bg"]
     theme_header_bg = C["frame_head_bg"]
@@ -269,6 +273,71 @@ def show_settings_dialog(
     if not getattr(tray_available, "available", False):
         tray_ck.configure(state="disabled", cursor="arrow")
 
+    dupcheck_section = tk.Frame(content, background=theme_win_bg)
+    dupcheck_section.pack(fill="both", padx=8, pady=(0, 8))
+    _section_header(dupcheck_section, "Duplicate check")
+
+    def _on_dup_check_toggle():
+        _toggle_setting("duplicate_check", dup_var)
+
+    dup_var = tk.IntVar(value=1 if get_setting("duplicate_check", fallback=False) else 0)
+    tk.Checkbutton(
+        dupcheck_section,
+        text="Extra duplicate check",
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=_on_dup_check_toggle,
+        variable=dup_var,
+    ).pack(fill="both", pady=(0,0), padx=16)
+
+    tk.Label(
+        dupcheck_section,
+        text="(asks when a similar song is already in the playlist)",
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        font=ui_font(9),
+        anchor="w",
+    ).pack(fill="x", padx=16)
+
+    def _do_dup_check_now():
+        if not callable(on_check_duplicates_now):
+            return
+        dup_btn.configure(state="disabled", text="Scanning\u2026")
+
+        def _on_complete(found, error):
+            try:
+                if error:
+                    dup_btn.configure(state="normal", text="Scan failed \u2014 try again")
+                elif found:
+                    dup_btn.configure(state="normal", text=f"{found} found!")
+                else:
+                    dup_btn.configure(state="normal", text="No duplicates found")
+            except tk.TclError:
+                return
+            try:
+                win.after(
+                    4000,
+                    lambda: dup_btn.configure(text="Check for duplicates now"),
+                )
+            except tk.TclError:
+                pass
+
+        on_check_duplicates_now(on_done=_on_complete)
+
+    dup_btn = tk.Button(
+        dupcheck_section,
+        text="Check for duplicates now",
+        cursor="hand2",
+        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+        font=ui_font(12),
+        highlightthickness=0,
+        relief="raised",
+        command=_do_dup_check_now,
+    )
+    dup_btn.pack(fill="both", pady=(4,5), padx=16)
+
     appearance_section = tk.Frame(content, background=theme_win_bg)
     appearance_section.pack(fill="both", padx=8, pady=(0, 8))
     _section_header(appearance_section, "Appearance")
@@ -452,7 +521,7 @@ def show_settings_dialog(
 
     tk.Label(
         about_section,
-        text="Authour: d1pl",
+        text="Author: d1pl",
         background=theme_win_bg,
         foreground=theme_label_fg,
         font=ui_font(12),

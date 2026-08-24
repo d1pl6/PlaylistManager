@@ -179,7 +179,7 @@ def save_and_verify_spotify_credentials(
 
 # platform id -> primary credential file(s) deleted on logout.
 # Deliberately only the auth-dir file - NOT the repo fallback browser.json
-# copies (decision cli.md 15.12.2: CLI and GUI logins are never used
+# copies (song cli.md 15.12.2: CLI and GUI logins are never used
 # simultaneously, so a stale fallback copy is not a practical concern).
 PLATFORM_CREDENTIAL_FILES = {
     "youtube_music": [BROWSER_FILE],

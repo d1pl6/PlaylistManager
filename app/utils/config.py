@@ -19,6 +19,10 @@ DEFAULT_SETTINGS = {
     "showcase_log": {"is_true": "yes"},  # show the log_artist/log_name/log_log row
     "playlist_stats": {"is_true": "yes"},  # show the song count / followers / duration row
     "layout": {"columns": "2"},          # int, playlist card grid columns, clamped 1-4
+    # Extra duplicate check: near-duplicate detection on the add path
+    # (same artist + similar title + close duration).  Knobs are read by
+    # services/duplicate_check.py callers.
+    "duplicate_check": {"is_true": "no", "title_threshold": "0.85", "duration_tolerance": "5"},
 }
 
 THEME_PATH = Path(__file__).resolve().parents[2] / "cfg" / "theme.ini"
@@ -42,7 +46,7 @@ DEFAULT_THEME = {
     },
     "button_header": {
         "background": "#6C6C6C",
-        "foreground": "#FFFFFF",
+        "foreground": "#000000",
     },
     "button_main": {
         "background": "#3A3A3A",

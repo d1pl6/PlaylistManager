@@ -95,11 +95,15 @@ class BaseFlowController:
         playlist_id: str | None = None,
         url: str | None = None,
         song_data: dict | None = None,
+        skip_duplicate_check: bool = False,
     ) -> None:
         """Run one add-song attempt for *playlist_name*.
 
         Exactly one of *on_success* / *on_error* fires when the flow
         finishes. *url* / *song_data*, when given, skip song acquisition
-        (pre-captured by the caller).
+        (pre-captured by the caller). *skip_duplicate_check* bypasses the
+        opt-in near-duplicate check - used ONLY by the activity window's
+        Add action, otherwise Add would re-trigger the check it is
+        trying to satisfy.
         """
         raise NotImplementedError

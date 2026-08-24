@@ -18,12 +18,15 @@ PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 PLATFORM_SPOTIFY = "spotify"
 from controllers.keybind_registry import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
+from services import duplicate_queue
 from services.database import DatabaseManager
-from services.playlist_store import PlaylistStore
+from services.duplicate_check import find_duplicate_pairs
+from services.playlist_store import PlaylistStore, playlist_still_registered
 from services.playlist_sync import PlaylistSyncService
 from services.song_manager import SongManager
 from utils.icons import IconService
 from utils.scaling import px, ui_font
+from ui.activity_window import show_activity_window
 from ui.card_grid import CardGridManager
 from ui.search_manager import SearchManager
 from ui.showcase_manager import ShowcaseManager
@@ -257,11 +260,19 @@ class MainWindow:
 
         header_bg = C["frame_head_bg"]
         self.header_frame.configure(background=header_bg)
+        self._header_right.configure(background=header_bg)
+
+        def _style_header_button(widget) -> None:
+            widget.configure(**btn_colors(C["button_head_bg"], C["button_head_fg"]))
+
         for widget in self.header_frame.winfo_children():
             if isinstance(widget, tk.Button):
-                widget.configure(
-                    **btn_colors(C["button_head_bg"], C["button_head_fg"])
-                )
+                _style_header_button(widget)
+            elif isinstance(widget, tk.Frame):
+                # The right-side cluster (Activity + Settings buttons).
+                for sub in widget.winfo_children():
+                    if isinstance(sub, tk.Button):
+                        _style_header_button(sub)
 
         # Re-style the status warning banner.
         warn_bg = C["label_playlist_warn_bg"]
@@ -311,8 +322,12 @@ class MainWindow:
 
         open_settings_img_path = assets_dir / "settings.png"
         self.open_settings_img = IconService.get(open_settings_img_path, 32)
+        # Right-side header cluster: Activity badge button + Settings.
+        self._header_right = tk.Frame(
+            self.header_frame, background=C["frame_head_bg"]
+        )
         self.btn_open_settings = tk.Button(
-            self.header_frame,
+            self._header_right,
             image=self.open_settings_img,
             cursor="hand2",
             **btn_header_colors,
@@ -330,16 +345,35 @@ class MainWindow:
                 on_playlist_stats_change=self.set_playlist_stats,
                 on_columns_change=self.set_columns,
                 on_check_updates_now=lambda on_done=None: self.ac.check_updates(force=True, on_done=on_done),
+                on_check_duplicates_now=self._run_duplicate_scan,
             ),
         )
         ToolTip(self.btn_open_settings, "Settings")
 
+        self.btn_activity = tk.Button(
+            self._header_right,
+            text="Activity",
+            cursor="hand2",
+            **btn_header_colors,
+            highlightthickness=0,
+            relief="raised",
+            font=ui_font(11),
+            command=self._open_activity_window,
+        )
+        ToolTip(self.btn_activity, "Errors and duplicate songs")
+        self.btn_activity.pack(side="left", padx=(0, 4))
+        self.btn_open_settings.pack(side="left")
+
         # Span the whole card grid so the header background bar matches the
         # window width at any column count.
         self.header_frame.grid(row=0, column=0, columnspan=self._columns, sticky="nsew")
-        self.header_frame.grid_columnconfigure(0, weight=1)
+        # `uniform` forces the two side columns to EQUAL width even though
+        # the right cluster (Activity + Settings) is naturally wider than
+        # the lone login button - without it, "Add playlist" drifts off
+        # center toward the narrow side.
+        self.header_frame.grid_columnconfigure(0, weight=1, uniform="header_sides")
         self.header_frame.grid_columnconfigure(1, weight=0)
-        self.header_frame.grid_columnconfigure(2, weight=1)
+        self.header_frame.grid_columnconfigure(2, weight=1, uniform="header_sides")
 
         # --- status warning banner (row 0, hidden by default) -----------
         warn_bg = C["label_playlist_warn_bg"]
@@ -361,7 +395,7 @@ class MainWindow:
 
         self.btn_login.grid(row=1, column=0, sticky="w", padx=4, pady=4)
         self.btn_add_playlist.grid(row=1, column=1, padx=4, pady=4)
-        self.btn_open_settings.grid(row=1, column=2, sticky="e", padx=4, pady=4)
+        self._header_right.grid(row=1, column=2, sticky="e", padx=4, pady=4)
 
     # ------------------------------------------------------------------
     # Playlist dialog workflow (delegates to PlaylistController)
@@ -536,6 +570,13 @@ class MainWindow:
             card.log_status.config(text="OK", background=C["label_playlist_good_bg"])
         elif status_text == "Error":
             card.log_status.config(text=status_text, background=C["label_playlist_error_bg"])
+            # Persist for the activity window's Errors tab.
+            try:
+                duplicate_queue.record_error(
+                    playlist_name, card.platform, "Track import failed"
+                )
+            except Exception:
+                logger.debug("Could not log import error", exc_info=True)
         else:
             card.log_status.config(text=status_text, background=C["label_playlist_warn_bg"])
         self.showcase.update_log_labels_from_db(
@@ -639,6 +680,312 @@ class MainWindow:
             on_song_added=on_song_added,
         )
 
+    # ------------------------------------------------------------------
+    # Activity window (errors + duplicate songs)
+    # ------------------------------------------------------------------
+
+    def _open_activity_window(self) -> None:
+        """Open (or re-lift) the non-modal activity window."""
+        show_activity_window(
+            self.root,
+            load_data=self._load_activity_data,
+            on_song=self._handle_activity_song,
+            on_close=self.refresh_activity_badge,
+        )
+        self.refresh_activity_badge()
+
+    def _load_activity_data(self) -> dict:
+        """Fresh data snapshot for the activity window (UI thread)."""
+        return {
+            "pending": duplicate_queue.list_pending(),
+            "errors": duplicate_queue.list_errors(),
+            "songs": duplicate_queue.list_songs(),
+            "pairs": list(getattr(self, "_last_scan_pairs", []) or []),
+        }
+
+    def refresh_activity_badge(self) -> None:
+        """Update the header button text: 'Activity' / 'Activity (N)'."""
+        try:
+            n = duplicate_queue.activity_count()
+        except Exception:
+            n = 0
+        try:
+            self.btn_activity.configure(
+                text="Activity" if not n else f"Activity ({n})"
+            )
+        except tk.TclError:
+            pass
+
+    def _poll_activity_stamp(self) -> None:
+        """2 s badge poll driven by extra.json's mtime.
+
+        Catches mutations from every source - keybind flows, this UI, and
+        even the CLI process writing the same file - without any pub-sub
+        plumbing.  A stat() per tick is far cheaper than re-reading.
+        """
+        current = duplicate_queue.stamp()
+        if current != getattr(self, "_activity_stamp", None):
+            self._activity_stamp = current
+            self.refresh_activity_badge()
+        try:
+            self._activity_poll_after_id = self.root.after(
+                2000, self._poll_activity_stamp
+            )
+        except tk.TclError:
+            pass  # app shutting down
+
+    # -- song dispatch ------------------------------------------------
+
+    def _handle_activity_song(self, record: dict, action: str) -> None:
+        """Dispatcher passed to the activity window (runs on UI thread)."""
+        kind = record.get("kind")
+        if kind == "pair":
+            pair_key = record["pair_key"]
+            if action == "not_duplicate":
+                duplicate_queue.set_song(pair_key, "not_duplicate")
+            elif action == "remove_newer":
+                self._remove_scanner_duplicate(record)
+            elif action == "undo":
+                duplicate_queue.delete_song(pair_key)
+            return
+
+        if kind == "clear_errors" and action == "clear":
+            duplicate_queue.clear_errors()
+            self.refresh_activity_badge()
+            return
+
+        # Pending add songs.
+        if action == "dismiss":
+            duplicate_queue.remove_pending(record["id"])
+            duplicate_queue.set_song(record["pair_key"], "dismissed")
+        elif action == "add":
+            duplicate_queue.remove_pending(record["id"])
+            alive = playlist_still_registered(
+                record.get("playlist_name", ""),
+                record.get("platform", ""),
+                record.get("playlist_id") or None,
+            )
+            if not alive:
+                duplicate_queue.record_error(
+                    record.get("playlist_name", ""),
+                    record.get("platform", ""),
+                    "Playlist closed before the queued song was added",
+                )
+            else:
+                duplicate_queue.set_song(record["pair_key"], "added")
+                threading.Thread(
+                    target=self._pending_add_worker,
+                    args=(dict(record),),
+                    daemon=True,
+                ).start()
+        else:
+            logger.warning("Unknown activity action %r", action)
+        self.refresh_activity_badge()
+
+    def _pending_add_worker(self, rec: dict) -> None:
+        """Daemon-thread half of the Add action.
+
+        Re-runs the real flow with the queued record's pre-captured
+        url/song_data; ``skip_duplicate_check`` prevents Add from
+        re-triggering the very check that queued it.
+        """
+        platform = rec.get("platform", "")
+
+        def _ui(fn) -> None:
+            try:
+                self.root.after(0, fn)
+            except Exception:
+                pass  # app shutting down (rule: guard every worker after())
+
+        flow = self.kc.get_flow(platform)
+        if flow is None:
+            duplicate_queue.record_error(
+                rec.get("playlist_name", ""),
+                platform,
+                f"{platform} unavailable - could not add '{rec.get('title', '')}'",
+            )
+            _ui(self.refresh_activity_badge)
+            return
+
+        song_data = {
+            "title": rec.get("title", ""),
+            "artists": rec.get("artists") or [],
+            "duration": rec.get("duration"),
+            "track_id": rec.get("track_id"),
+            "thumbnail": rec.get("thumbnail_url"),
+        }
+
+        def on_status(msg: str) -> None:
+            pass
+
+        def on_error(msg: str) -> None:
+            duplicate_queue.add_pending(rec)  # re-enqueue for another try
+            duplicate_queue.record_error(rec.get("playlist_name", ""), platform, msg)
+            _ui(self.refresh_activity_badge)
+
+        def on_success(result: dict) -> None:
+            # added / exists / duplicate all resolve the queue entry;
+            # badge refresh keeps the count honest either way.
+            _ui(self.refresh_activity_badge)
+
+        try:
+            flow.execute_flow(
+                rec.get("playlist_name", ""),
+                on_status,
+                on_error,
+                on_success,
+                url=rec.get("url"),
+                song_data=song_data,
+                playlist_id=rec.get("playlist_id") or None,
+                skip_duplicate_check=True,
+            )
+        except Exception as e:
+            logger.error("Activity Add failed: %s", e, exc_info=True)
+            duplicate_queue.add_pending(rec)
+            duplicate_queue.record_error(
+                rec.get("playlist_name", ""), platform, str(e)
+            )
+            _ui(self.refresh_activity_badge)
+
+    def _remove_scanner_duplicate(self, pair_record: dict) -> None:
+        """Remove-newer action: platform-first removal, then the local row.
+
+        Mirrors the add-path ordering and showcase_manager's established
+        removal chain (find_playlist -> authenticated integration ->
+        remove_track -> delete_song): removing only locally would let the
+        next reload resurrect the pair from platform truth.
+        """
+        newer = pair_record.get("newer") or {}
+        name = pair_record.get("playlist_name", "")
+        platform = pair_record.get("platform", "")
+        pid = pair_record.get("playlist_id", "") or ""
+        playlist_data = PlaylistStore.find_playlist(
+            name, platform, playlist_id=pid or None
+        )
+        platform_playlist_id = (
+            playlist_data.get("playlist_id", "") if playlist_data else ""
+        )
+        integration = (
+            self.integrations.get(platform) if self.integrations else None
+        )
+
+        def work():
+            ok = False
+            reason = ""
+            if not platform_playlist_id:
+                reason = f"No platform playlist id for '{name}' - cannot remove"
+            elif integration is None or not integration.is_authenticated():
+                reason = f"{platform} not authenticated - cannot remove"
+            else:
+                ok = integration.remove_track(
+                    platform_playlist_id, newer.get("track_id")
+                )
+                if not ok:
+                    reason = "Platform refused the removal"
+
+            def apply():
+                if not ok:
+                    duplicate_queue.record_error(name, platform, reason)
+                    self.refresh_activity_badge()
+                    return
+                if SongManager().delete_song(
+                    name, newer.get("id"), platform=platform, playlist_id=pid
+                ):
+                    duplicate_queue.set_song(
+                        pair_record["pair_key"], "added"
+                    )
+                    idx = self._find_frame_index_by_name(name)
+                    if idx is not None:
+                        self.showcase.refresh(idx, name, platform)
+                        self.showcase.refresh_stats(idx, name, platform)
+                else:
+                    # Platform side already removed; surface the mirror
+                    # drift instead of pretending all went well.
+                    duplicate_queue.record_error(
+                        name,
+                        platform,
+                        "Removed from the platform but the local row "
+                        "could not be deleted",
+                    )
+                self.refresh_activity_badge()
+
+            try:
+                self.root.after(0, apply)
+            except Exception:
+                pass  # app shutting down
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # -- manual scan ("Check for duplicates now") --------------------------
+
+    def _run_duplicate_scan(self, on_done) -> None:
+        """Settings-button scan: fuzzy-pair every registered playlist.
+
+        Runs off-thread; *on_done(found_count, error_or_None)* marshals
+        back to the Settings dialog on the UI thread (same contract as
+        update checks).
+        """
+
+        def _scan():
+            found = 0
+            error = None
+            pairs = []
+            try:
+                song_manager = SongManager()
+                for pl in PlaylistStore.load_playlists():
+                    name = pl.get("name", "")
+                    platform = pl.get("platform", "")
+                    pid = pl.get("playlist_id") or ""
+                    songs = song_manager.get_all_songs(
+                        name, platform=platform, playlist_id=pid
+                    )
+                    for match in find_duplicate_pairs(songs):
+                        key = duplicate_queue.make_pair_key(
+                            platform,
+                            pid,
+                            match["older"].get("track_id"),
+                            match["newer"].get("track_id"),
+                        )
+                        song = (
+                            duplicate_queue.get_song(key) or {}
+                        ).get("song")
+                        if song in ("added", "not_duplicate"):
+                            continue  # already resolved / whitelisted
+                        found += 1
+                        pairs.append(
+                            {
+                                "kind": "pair",
+                                "pair_key": key,
+                                "playlist_name": name,
+                                "platform": platform,
+                                "playlist_id": pid,
+                                "newer": match["newer"],
+                                "older": match["older"],
+                                "similarity": match["similarity"],
+                            }
+                        )
+            except Exception as e:
+                logger.error("Duplicate scan failed: %s", e, exc_info=True)
+                error = str(e)
+
+            # Publish results on the UI thread; the window renders them.
+            def _publish():
+                self._last_scan_pairs = pairs
+                if callable(on_done):
+                    try:
+                        on_done(found, error)
+                    except tk.TclError:
+                        pass
+                if found and not error:
+                    self._open_activity_window()
+
+            try:
+                self.root.after(0, _publish)
+            except Exception:
+                pass  # app shutting down
+
+        threading.Thread(target=_scan, daemon=True).start()
+
     @staticmethod
     def _filter_available_playlists(playlists, available_platforms):
         """Pair each store entry with its platform, skipping dead ones.
@@ -731,7 +1078,7 @@ class MainWindow:
         """Hide the window to the tray when minimized (if enabled).
 
         ``<Unmap>`` fires for reasons other than minimize (our own
-        ``withdraw()``, WM restarts), so the decision is deferred and
+        ``withdraw()``, WM restarts), so the song is deferred and
         gated on ``state() == "iconic"`` - that distinguishes a real
         minimize from ``withdraw()`` (state ``withdrawn``), which
         prevents recursion.  The WM may take a few event-loop ticks to
@@ -779,7 +1126,7 @@ class MainWindow:
         self._hide_after_id = self.root.after(0, _maybe_hide)
 
     def _on_map(self, event) -> None:
-        """Cancel a pending hide-to-tray decision once the window maps.
+        """Cancel a pending hide-to-tray song once the window maps.
 
         If the user restores the window within the retry window, the
         pending ``after`` callback must not hide it again.
@@ -1232,6 +1579,13 @@ class MainWindow:
         try:
             self._service_after_id = self.root.after(
                 10000, self._run_service_health_check,
+            )
+        except tk.TclError:
+            pass
+        # Activity badge poll (extra.json mtime, every 2 s).
+        try:
+            self._activity_poll_after_id = self.root.after(
+                2000, self._poll_activity_stamp
             )
         except tk.TclError:
             pass
