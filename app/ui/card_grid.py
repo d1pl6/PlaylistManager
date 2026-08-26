@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
-from typing import TYPE_CHECKING, Callable
 import webbrowser
-from plugin_loader import get_default_registry
+from typing import TYPE_CHECKING, Callable
 
 from controllers.keybind_registry import KeybindCallbacks
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
+from services.playlist_url import build_playlist_url
 from ui.card import PlaylistCard
 from ui.close_playlist_dialog import show_close_playlist_dialog
 from ui.tooltip import ToolTip
@@ -26,27 +26,6 @@ if TYPE_CHECKING:
     from ui.scrollable import ScrollableFrame
 
 logger = logging.getLogger(__name__)
-
-# Platform -> playlist URL formatter
-def _build_playlist_url(platform: str, playlist_id: str) -> str | None:
-    if not playlist_id:
-        return None
-    try:
-        registry = get_default_registry()
-        plugin = registry.get(platform)
-        host = (plugin.url_hosts[0] if plugin and plugin.url_hosts else None)
-    except Exception:
-        host = None
-
-    if platform == "youtube_music":
-        host = host or "music.youtube.com"
-        return f"https://{host}/playlist?list={playlist_id}"
-    if platform == "spotify":
-        host = host or "open.spotify.com"
-        return f"https://{host}/playlist/{playlist_id}"
-    if host:
-        return f"https://{host}/{playlist_id}"
-    return None
 
 # Base design sizes of the playlist card, in unscaled pixels; every value
 # is multiplied by the UI scale (utils/scaling).
@@ -329,7 +308,7 @@ class CardGridManager:
             def _open_card_playlist(_event, c=card):
                 try:
                     pid = c.playlist_id or ""
-                    url = _build_playlist_url(c.platform, pid)
+                    url = build_playlist_url(c.platform, pid)
                     if not url:
                         return
                     webbrowser.open(url)
@@ -337,6 +316,7 @@ class CardGridManager:
                     logger.debug("Failed to open playlist URL", exc_info=True)
 
             playlist_name.bind("<Button-1>", _open_card_playlist)
+            playlist_name.configure(cursor="hand2")
 
             close_playlist["command"] = lambda c=card: self._confirm_close_playlist(c)
             playlist_keybind.bind(

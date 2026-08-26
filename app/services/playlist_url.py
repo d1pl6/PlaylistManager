@@ -1,9 +1,12 @@
 """
-Playlist URL parsing for the CLI.
+Playlist URL parsing and building.
 
-Maps a platform playlist URL to a stable ``(platform, playlist_id)`` pair.
-Used by ``playlistmanager -p add <URL>`` and by ``del`` / ``ref`` URL targets.
-Pure stdlib, no network.
+Maps a platform playlist URL to a stable ``(platform, playlist_id)`` pair
+(:func:`parse_playlist_url`), and builds browseable URLs from platform
+metadata (:func:`build_playlist_url`, :func:`build_song_url`).
+
+Used by ``playlistmanager -p add <URL>``, by ``del`` / ``ref`` URL
+targets, and by the UI (click-to-open in card_grid / showcase_manager).
 
 Host knowledge lives in the plugin manifests (``url_hosts`` in each
 integrations/*/plugin.json); this module matches only generic URL shapes:
@@ -14,7 +17,7 @@ integrations/*/plugin.json); this module matches only generic URL shapes:
 - ``<platform>:playlist:<id>`` URI form - Spotify
 """
 
-from typing import Tuple
+from typing import Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 _SUPPORTED_FORMS = (
@@ -126,3 +129,89 @@ def parse_playlist_url(
     if len(segments) <= idx + 1 or not segments[idx + 1]:
         raise ValueError(f"No playlist ID in URL '{url}'")
     return pid, segments[idx + 1]
+
+
+# ------------------------------------------------------------------
+# URL building (inverse of parsing)
+# ------------------------------------------------------------------
+
+# Per-platform URL templates.  The first path segment is the playlist
+# URL shape, the second is the song/track URL shape.  ``None`` means
+# "use the plugin host with a generic ``/<id>`` fallback".
+_PLATFORM_URL_TEMPLATES: dict[str, tuple[str | None, str | None]] = {
+    "youtube_music": (
+        "https://{host}/playlist?list={id}",
+        "https://{host}/watch?v={id}",
+    ),
+    "spotify": (
+        "https://{host}/playlist/{id}",
+        "https://{host}/track/{id}",
+    ),
+}
+
+# Hardcoded fallback hosts (used when the plugin manifest doesn't declare
+# url_hosts or the registry can't be loaded).
+_PLATFORM_DEFAULT_HOSTS: dict[str, str] = {
+    "youtube_music": "music.youtube.com",
+    "spotify": "open.spotify.com",
+}
+
+
+def _resolve_host(
+    platform: str,
+    plugin_registry=None,
+) -> str | None:
+    """Return the best-guess host for *platform* from the plugin registry."""
+    try:
+        if plugin_registry is None:
+            from plugin_loader import get_default_registry
+            plugin_registry = get_default_registry()
+        plugin = plugin_registry.get(platform)
+        if plugin and plugin.url_hosts:
+            return plugin.url_hosts[0]
+    except Exception:
+        pass
+    return _PLATFORM_DEFAULT_HOSTS.get(platform)
+
+
+def build_playlist_url(
+    platform: str,
+    playlist_id: str,
+    plugin_registry=None,
+) -> str | None:
+    """Build a browseable playlist URL from platform metadata.
+
+    Returns ``None`` when *playlist_id* is empty or the platform is unknown.
+    """
+    if not playlist_id:
+        return None
+    templates = _PLATFORM_URL_TEMPLATES.get(platform)
+    if templates and templates[0]:
+        host = _resolve_host(platform, plugin_registry) or ""
+        return templates[0].format(host=host, id=playlist_id)
+    # Unknown platform — try generic ``/<id>`` with the resolved host.
+    host = _resolve_host(platform, plugin_registry)
+    if host:
+        return f"https://{host}/{playlist_id}"
+    return None
+
+
+def build_song_url(
+    platform: str,
+    track_id: str,
+    plugin_registry=None,
+) -> str | None:
+    """Build a browseable song/track URL from platform metadata.
+
+    Returns ``None`` when *track_id* is empty or the platform is unknown.
+    """
+    if not track_id:
+        return None
+    templates = _PLATFORM_URL_TEMPLATES.get(platform)
+    if templates and templates[1]:
+        host = _resolve_host(platform, plugin_registry) or ""
+        return templates[1].format(host=host, id=track_id)
+    host = _resolve_host(platform, plugin_registry)
+    if host:
+        return f"https://{host}/{track_id}"
+    return None

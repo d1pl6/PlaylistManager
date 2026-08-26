@@ -505,7 +505,7 @@ class MainWindow:
             status_label.config(text="Sync", background=C["label_playlist_warn_bg"])
 
             if thumb_url:
-                self.showcase.set_playlist_cover(card.cover_label, thumb_url)
+                self.showcase.set_playlist_cover(card.cover_label, thumb_url, card=card)
 
             frame_idx = len(self.card_grid.cards) - 1
             self.showcase.refresh_stats(frame_idx, playlist_name, platform)
@@ -610,11 +610,10 @@ class MainWindow:
             except tk.TclError:
                 pass
             if thumb_url:
-                self.showcase.set_playlist_cover(card.cover_label, thumb_url)
+                self.showcase.set_playlist_cover(card.cover_label, thumb_url, card=card)
 
     # ------------------------------------------------------------------
     # Keybind setup (called once after __init__)
-    # ------------------------------------------------------------------
 
     def _make_keybind_callbacks(self, frame_idx: int) -> KeybindCallbacks:
         """Build a :class:`KeybindCallbacks` bound to *frame_idx* widgets.
@@ -1050,7 +1049,7 @@ class MainWindow:
 
                     thumb_url = playlist.get("thumbnail_url", "")
                     if thumb_url:
-                        self.showcase.set_playlist_cover(card.cover_label, thumb_url)
+                        self.showcase.set_playlist_cover(card.cover_label, thumb_url, card=card)
 
         self.card_grid._sync_empty_state()
 

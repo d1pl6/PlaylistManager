@@ -10,41 +10,21 @@ from __future__ import annotations
 import logging
 import threading
 import tkinter as tk
-from pathlib import Path
 import webbrowser
+from pathlib import Path
+
 from PIL import Image
 
 from services.playlist_store import PlaylistStore
+from services.playlist_url import build_song_url
 from services.song_manager import SongManager
 from ui.tooltip import ToolTip
 from utils.icons import IconService
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
-from plugin_loader import get_default_registry
 from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
-
-# Build a song URL using the plugin manifest's first declared host when possible.
-def _build_song_url(platform: str, track_id: str) -> str | None:
-    if not track_id:
-        return None
-    try:
-        registry = get_default_registry()
-        plugin = registry.get(platform)
-        host = (plugin.url_hosts[0] if plugin and plugin.url_hosts else None)
-    except Exception:
-        host = None
-
-    if platform == "youtube_music":
-        host = host or "music.youtube.com"
-        return f"https://{host}/watch?v={track_id}"
-    if platform == "spotify":
-        host = host or "open.spotify.com"
-        return f"https://{host}/track/{track_id}"
-    if host:
-        return f"https://{host}/{track_id}"
-    return None
 
 assets_dir = Path(__file__).resolve().parents[2] / "assets"
 playlist_cover_img_path = assets_dir / "playlist_image.png"
@@ -99,7 +79,7 @@ class ShowcaseManager:
             )
             return IconService.get(playlist_cover_img_path, 40)
 
-    def _set_playlist_cover(self, cover_label: tk.Label, thumb_url: str) -> None:
+    def _set_playlist_cover(self, cover_label: tk.Label, thumb_url: str, *, card=None) -> None:
         def fetch() -> None:
             img = ThumbnailService.fetch_image(thumb_url, size=(px(64), px(64)))
             if img is not None:
@@ -109,9 +89,11 @@ class ShowcaseManager:
                     logger.debug("Window closed during cover download", exc_info=True)
 
         threading.Thread(target=fetch, daemon=True).start()
-        # attach original URL for high-res open
+        # Attach metadata for double-click-to-open-image.
         try:
             cover_label._orig_thumb_url = thumb_url
+            if card is not None:
+                cover_label._owning_card = card
             cover_label.bind("<Double-Button-1>", lambda e: self._open_image_window(cover_label))
         except Exception:
             pass
@@ -139,7 +121,7 @@ class ShowcaseManager:
             elif isinstance(child, tk.Frame):
                 self._prune_frame_imgs(child)
 
-    def _fetch_song_thumb(self, thumb_label: tk.Label, thumb_url: str) -> None:
+    def _fetch_song_thumb(self, thumb_label: tk.Label, thumb_url: str, *, card=None) -> None:
         def fetch() -> None:
             img = ThumbnailService.fetch_image(thumb_url, size=(px(40), px(40)))
             if img is not None:
@@ -151,9 +133,11 @@ class ShowcaseManager:
                     )
 
         threading.Thread(target=fetch, daemon=True).start()
-        # attach original URL for high-res open
+        # Attach metadata for double-click-to-open-image.
         try:
             thumb_label._orig_thumb_url = thumb_url
+            if card is not None:
+                thumb_label._owning_card = card
             thumb_label.bind("<Double-Button-1>", lambda e, t=thumb_label: self._open_image_window(t))
         except Exception:
             pass
@@ -188,7 +172,7 @@ class ShowcaseManager:
                 showcase_frame.grid(row=3, column=0, sticky="nsew")
             card.showcase_frame = showcase_frame
             for thumb_label, url in thumb_jobs:
-                self._fetch_song_thumb(thumb_label, url)
+                self._fetch_song_thumb(thumb_label, url, card=card)
 
         self._card_grid._update_card_height(frame_idx, layout=True)
 
@@ -248,6 +232,12 @@ class ShowcaseManager:
         showcase = tk.Frame(main_frame, background=frame_playlist_bg)
         showcase.grid_columnconfigure(1, weight=1)
 
+        # Resolve the owning card once — constant for the entire showcase.
+        card = next(
+            (c for c in self._card_grid.cards if c.frame is main_frame), None
+        )
+        platform = card.platform if card is not None else None
+
         jobs = []
         for row_idx, song in enumerate(songs):
             grid_row = row_idx * 2
@@ -299,22 +289,25 @@ class ShowcaseManager:
             song_artists.grid(row=grid_row + 1, column=1, sticky="nsew")
 
             track_id = song.get("track_id") or ""
-            if track_id:
-                # Resolve platform from the card that owns this frame.
-                card = next((c for c in self._card_grid.cards if c.frame is main_frame), None)
-                platform = card.platform if card is not None else None
-                url = _build_song_url(platform, track_id) if platform else None
-                if url:
-                    song_name.bind("<Button-1>", lambda _e, u=url: webbrowser.open(u))
+            if track_id and platform:
+                song_url = build_song_url(platform, track_id)
+                if song_url:
+                    song_name.bind(
+                        "<Button-1>", lambda _e, u=song_url: webbrowser.open(u)
+                    )
+                    song_name.configure(cursor="hand2")
 
-            url = song.get("thumbnail_url") or ""
-            # attach track id for YouTube maxres lookup
+            # Attach metadata for double-click-to-open-image and YouTube
+            # maxres lookup.
             try:
                 thumb._track_id = song.get("track_id")
+                if card is not None:
+                    thumb._owning_card = card
             except Exception:
                 pass
-            if url:
-                jobs.append((thumb, url))
+            thumb_url = song.get("thumbnail_url") or ""
+            if thumb_url:
+                jobs.append((thumb, thumb_url))
 
         return showcase, jobs
 
@@ -326,21 +319,22 @@ class ShowcaseManager:
             YouTube Music, try standard YouTube maxres/sd/hq urls.
           - Otherwise use the attached _orig_thumb_url and fetch the full image.
         """
-        # Resolve platform by finding the owning card for this widget.
-        # Walk up the parent chain to find the owning card.frame
-        card = None
-        try:
-            parent = widget
-            while parent is not None:
-                for c in self._card_grid.cards:
-                    if c.frame is parent:
-                        card = c
+        # Resolve the owning card from the attached attribute, falling back
+        # to a widget-tree walk for legacy widgets that lack it.
+        card = getattr(widget, "_owning_card", None)
+        if card is None:
+            try:
+                parent = widget
+                while parent is not None:
+                    for c in self._card_grid.cards:
+                        if c.frame is parent:
+                            card = c
+                            break
+                    if card:
                         break
-                if card:
-                    break
-                parent = getattr(parent, "master", None)
-        except Exception:
-            card = None
+                    parent = getattr(parent, "master", None)
+            except Exception:
+                card = None
         platform = card.platform if card is not None else None
 
         track_id = getattr(widget, "_track_id", None)
@@ -393,30 +387,22 @@ class ShowcaseManager:
                     lbl.image = photo
                     lbl.pack()
 
-                    # Cleanup function to clear the specific cached full image.
                     def _cleanup():
                         try:
                             ThumbnailService.clear_cache_for(used_url, None)
                         except Exception:
                             logger.debug("Failed clearing cached image %r", used_url, exc_info=True)
 
-                    # Ensure cleanup runs when the window is closed/destroyed.
-                    def _on_destroy(ev):
-                        try:
-                            if ev.widget is win:
-                                _cleanup()
-                        except Exception:
-                            pass
+                    def _close():
+                        _cleanup()
+                        win.destroy()
 
-                    win.bind("<Destroy>", _on_destroy)
-                    win.protocol("WM_DELETE_WINDOW", lambda: ( _cleanup(), win.destroy() ))
+                    win.protocol("WM_DELETE_WINDOW", _close)
 
-                    # Bind Escape and 'q'/'Q' to close the window.
                     def _close_on_key(ev):
                         try:
                             if getattr(ev, "keysym", "").lower() in ("escape", "q"):
-                                _cleanup()
-                                win.destroy()
+                                _close()
                         except Exception:
                             pass
 
