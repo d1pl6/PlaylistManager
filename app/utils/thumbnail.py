@@ -170,6 +170,73 @@ class ThumbnailService:
         return img
 
     @staticmethod
+    def fetch_full_image(thumb_url: Optional[str]) -> Optional[Image.Image]:
+        """Download the original image without resizing.
+
+        Returns a PIL Image or None on failure. Thread-safe; do not call
+        Tk methods from worker threads.
+        """
+        if not thumb_url:
+            return None
+
+        if thumb_url.lower().startswith("http://"):
+            thumb_url = "https://" + thumb_url[7:]
+        if not thumb_url.lower().startswith("https://"):
+            logger.warning("Rejected non-HTTPS thumbnail URL: %s", thumb_url)
+            return None
+
+        key = (thumb_url, None)
+        with ThumbnailService._cache_lock:
+            hit = ThumbnailService._cache.get(key)
+            if hit is not None:
+                ts, cached = hit
+                if time.monotonic() - ts < ThumbnailService._CACHE_TTL_SECONDS:
+                    return cached.copy()
+                del ThumbnailService._cache[key]
+
+        with ThumbnailService._fetch_semaphore:
+            try:
+                resp = _session.get(thumb_url, timeout=10)
+                resp.raise_for_status()
+                img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+            except requests.RequestException as e:
+                logger.error("Network error fetching full thumbnail from %s: %s", thumb_url, e)
+                return None
+            except Exception as e:
+                logger.error("Failed to fetch full thumbnail from %s: %s", thumb_url, e)
+                return None
+
+        with ThumbnailService._cache_lock:
+            now = time.monotonic()
+            expired = [
+                k
+                for k, (ts, _) in ThumbnailService._cache.items()
+                if now - ts >= ThumbnailService._CACHE_TTL_SECONDS
+            ]
+            for k in expired:
+                del ThumbnailService._cache[k]
+            if len(ThumbnailService._cache) >= ThumbnailService._CACHE_MAX_ENTRIES:
+                oldest = min(
+                    ThumbnailService._cache,
+                    key=lambda k: ThumbnailService._cache[k][0],
+                )
+                del ThumbnailService._cache[oldest]
+            ThumbnailService._cache[key] = (now, img.copy())
+        return img
+
+    @staticmethod
+    def clear_cache_for(thumb_url: Optional[str], size: Optional[Tuple[int, int]] = None) -> None:
+        """Remove a specific cached entry (url, size).
+
+        If *size* is None, removes the full-image entry keyed by (url, None).
+        """
+        if not thumb_url:
+            return
+        key = (thumb_url, size)
+        with ThumbnailService._cache_lock:
+            ThumbnailService._cache.pop(key, None)
+
+    @staticmethod
     def to_photoimage(img: Image.Image) -> ImageTk.PhotoImage:
         """Wrap a PIL image in a Tk ``PhotoImage``.
 

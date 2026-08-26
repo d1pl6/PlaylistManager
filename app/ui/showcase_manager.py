@@ -11,16 +11,40 @@ import logging
 import threading
 import tkinter as tk
 from pathlib import Path
+import webbrowser
+from PIL import Image
 
 from services.playlist_store import PlaylistStore
 from services.song_manager import SongManager
 from ui.tooltip import ToolTip
 from utils.icons import IconService
 from utils.scaling import px, ui_font
-from utils.thumbnail import ThumbnailService
 from utils.theme import C, btn_colors
+from plugin_loader import get_default_registry
+from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
+
+# Build a song URL using the plugin manifest's first declared host when possible.
+def _build_song_url(platform: str, track_id: str) -> str | None:
+    if not track_id:
+        return None
+    try:
+        registry = get_default_registry()
+        plugin = registry.get(platform)
+        host = (plugin.url_hosts[0] if plugin and plugin.url_hosts else None)
+    except Exception:
+        host = None
+
+    if platform == "youtube_music":
+        host = host or "music.youtube.com"
+        return f"https://{host}/watch?v={track_id}"
+    if platform == "spotify":
+        host = host or "open.spotify.com"
+        return f"https://{host}/track/{track_id}"
+    if host:
+        return f"https://{host}/{track_id}"
+    return None
 
 assets_dir = Path(__file__).resolve().parents[2] / "assets"
 playlist_cover_img_path = assets_dir / "playlist_image.png"
@@ -85,6 +109,12 @@ class ShowcaseManager:
                     logger.debug("Window closed during cover download", exc_info=True)
 
         threading.Thread(target=fetch, daemon=True).start()
+        # attach original URL for high-res open
+        try:
+            cover_label._orig_thumb_url = thumb_url
+            cover_label.bind("<Double-Button-1>", lambda e: self._open_image_window(cover_label))
+        except Exception:
+            pass
 
     def _apply_cover(self, cover_label: tk.Label, img) -> None:
         try:
@@ -121,6 +151,12 @@ class ShowcaseManager:
                     )
 
         threading.Thread(target=fetch, daemon=True).start()
+        # attach original URL for high-res open
+        try:
+            thumb_label._orig_thumb_url = thumb_url
+            thumb_label.bind("<Double-Button-1>", lambda e, t=thumb_label: self._open_image_window(t))
+        except Exception:
+            pass
 
     def _refresh_showcase(
         self, frame_idx: int, playlist_name: str, platform: str
@@ -262,11 +298,142 @@ class ShowcaseManager:
             remove_btn.grid(row=grid_row, column=2, rowspan=2, sticky="ne")
             song_artists.grid(row=grid_row + 1, column=1, sticky="nsew")
 
+            track_id = song.get("track_id") or ""
+            if track_id:
+                # Resolve platform from the card that owns this frame.
+                card = next((c for c in self._card_grid.cards if c.frame is main_frame), None)
+                platform = card.platform if card is not None else None
+                url = _build_song_url(platform, track_id) if platform else None
+                if url:
+                    song_name.bind("<Button-1>", lambda _e, u=url: webbrowser.open(u))
+
             url = song.get("thumbnail_url") or ""
+            # attach track id for YouTube maxres lookup
+            try:
+                thumb._track_id = song.get("track_id")
+            except Exception:
+                pass
             if url:
                 jobs.append((thumb, url))
 
         return showcase, jobs
+
+    def _open_image_window(self, widget: tk.Label) -> None:
+        """Open a new window showing the highest-quality image available.
+
+        Strategy:
+          - If the widget has a bound _track_id and the card's platform is
+            YouTube Music, try standard YouTube maxres/sd/hq urls.
+          - Otherwise use the attached _orig_thumb_url and fetch the full image.
+        """
+        # Resolve platform by finding the owning card for this widget.
+        # Walk up the parent chain to find the owning card.frame
+        card = None
+        try:
+            parent = widget
+            while parent is not None:
+                for c in self._card_grid.cards:
+                    if c.frame is parent:
+                        card = c
+                        break
+                if card:
+                    break
+                parent = getattr(parent, "master", None)
+        except Exception:
+            card = None
+        platform = card.platform if card is not None else None
+
+        track_id = getattr(widget, "_track_id", None)
+        orig_url = getattr(widget, "_orig_thumb_url", None)
+
+        candidates = []
+        if platform == "youtube_music" and track_id:
+            # try YouTube image candidates from best -> fallback
+            candidates = [
+                f"https://i.ytimg.com/vi/{track_id}/maxresdefault.jpg",
+                f"https://i.ytimg.com/vi/{track_id}/sddefault.jpg",
+                f"https://i.ytimg.com/vi/{track_id}/hqdefault.jpg",
+                f"https://i.ytimg.com/vi/{track_id}/mqdefault.jpg",
+                f"https://i.ytimg.com/vi/{track_id}/default.jpg",
+            ]
+        if orig_url:
+            candidates.append(orig_url)
+
+        # Try candidates until one fetches successfully.
+        def worker():
+            img = None
+            used_url = None
+            for url in candidates:
+                try:
+                    img = ThumbnailService.fetch_full_image(url)
+                except Exception:
+                    img = None
+                if img is not None:
+                    used_url = url
+                    break
+            if img is None:
+                return
+
+            def show():
+                try:
+                    win = tk.Toplevel(self.root)
+                    win.title("Image")
+                    # Fit window to image, but clamp to screen size.
+                    screen_w = win.winfo_screenwidth()
+                    screen_h = win.winfo_screenheight()
+                    img_w, img_h = img.size
+                    max_w = int(screen_w * 0.9)
+                    max_h = int(screen_h * 0.9)
+                    display = img
+                    if img_w > max_w or img_h > max_h:
+                        display = img.copy()
+                        display.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+                    photo = ThumbnailService.to_photoimage(display)
+                    lbl = tk.Label(win, image=photo)
+                    lbl.image = photo
+                    lbl.pack()
+
+                    # Cleanup function to clear the specific cached full image.
+                    def _cleanup():
+                        try:
+                            ThumbnailService.clear_cache_for(used_url, None)
+                        except Exception:
+                            logger.debug("Failed clearing cached image %r", used_url, exc_info=True)
+
+                    # Ensure cleanup runs when the window is closed/destroyed.
+                    def _on_destroy(ev):
+                        try:
+                            if ev.widget is win:
+                                _cleanup()
+                        except Exception:
+                            pass
+
+                    win.bind("<Destroy>", _on_destroy)
+                    win.protocol("WM_DELETE_WINDOW", lambda: ( _cleanup(), win.destroy() ))
+
+                    # Bind Escape and 'q'/'Q' to close the window.
+                    def _close_on_key(ev):
+                        try:
+                            if getattr(ev, "keysym", "").lower() in ("escape", "q"):
+                                _cleanup()
+                                win.destroy()
+                        except Exception:
+                            pass
+
+                    win.bind("<Key>", _close_on_key)
+                    try:
+                        win.focus_set()
+                    except Exception:
+                        pass
+                except Exception:
+                    logger.debug("Failed to show image window", exc_info=True)
+
+            try:
+                self.root.after(0, show)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _on_remove_song(
         self, main_frame: tk.Frame, song_id: int, track_id: str

@@ -31,7 +31,13 @@ from utils.logging_config import configure_logging
 def parse_args():
     p = argparse.ArgumentParser(
         prog="playlistmanager",
-        description="PlaylistManager - add the currently-playing song to your playlists.",
+        description=(
+            "  |-\\   |\\  /|  PlaylistManager -\n"
+            "  |d1|  |p\\/l|  add the\n"
+            "  |-/   |    |  currently-playing song\n"
+            "  |     |    |  to your playlists."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
         "--verbose", "-v", action="count", default=0,
