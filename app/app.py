@@ -121,7 +121,7 @@ class App:
         clobbered.
         """
         yt_integration = self.integrations.get("youtube_music")
-        if yt_integration is not None and yt_integration._auth is not None:
+        if yt_integration is not None and yt_integration.auth_manager is not None:
             try:
                 if yt_integration.authenticate():
                     user_log(logger, "YouTube Music authenticated")
@@ -145,7 +145,7 @@ class App:
                 )
 
         sp_integration = self.integrations.get("spotify")
-        sp_auth = sp_integration._auth if sp_integration is not None else None
+        sp_auth = sp_integration.auth_manager if sp_integration is not None else None
         if sp_integration is None:
             return
 

@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 class BaseIntegration:
     id: str = ""
     display_name: str = ""
+    # Public auth-manager handle, passed in via the constructor and exposed
+    # so bootstrap/auth plumbing (app.py) can reach it without reaching into
+    # a private ``_auth`` attribute.  Platforms without credentials leave
+    # it None.
+    auth_manager = None
 
     def is_authenticated(self) -> bool:
         raise NotImplementedError

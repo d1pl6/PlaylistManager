@@ -18,8 +18,7 @@ Each supported music platform lives in its own top-level package under
       "receiver_port": 5000,
       "url_hosts": ["music.youtube.com", ...],
       "playlist_url_template": "https://{host}/playlist?list={id}",
-      "song_url_template": "https://{host}/watch?v={id}",
-      "img_url_template": "https://i.ytimg.com/vi/{id}/hqdefault.jpg"
+      "song_url_template": "https://{host}/watch?v={id}"
     }
 
 Discovery scans the directory tree and reads the manifests. It never
@@ -117,7 +116,6 @@ class PluginInfo:
     # playlist_url.py (backward-compatible default).
     playlist_url_template: str = ""
     song_url_template: str = ""
-    img_url_template: str = ""
 
     def _import(self, module_name: str):
         """Import ``integrations.<dir>.<module_name>`` and cache the module.
@@ -336,7 +334,6 @@ class PluginRegistry:
             receiver_port=receiver_port,
             playlist_url_template=raw.get("playlist_url_template", ""),
             song_url_template=raw.get("song_url_template", ""),
-            img_url_template=raw.get("img_url_template", ""),
         )
 
     @property
