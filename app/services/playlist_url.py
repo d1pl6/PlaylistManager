@@ -135,7 +135,8 @@ def parse_playlist_url(
 # URL building (inverse of parsing)
 # ------------------------------------------------------------------
 
-# Per-platform URL templates.  The first path segment is the playlist
+# Per-platform URL templates — fallback for plugins that don't declare
+# their own in plugin.json.  The first path segment is the playlist
 # URL shape, the second is the song/track URL shape.  ``None`` means
 # "use the plugin host with a generic ``/<id>`` fallback".
 _PLATFORM_URL_TEMPLATES: dict[str, tuple[str | None, str | None]] = {
@@ -182,14 +183,41 @@ def build_playlist_url(
     """Build a browseable playlist URL from platform metadata.
 
     Returns ``None`` when *playlist_id* is empty or the platform is unknown.
+
+    Template resolution order:
+
+    1. Plugin-declared ``playlist_url_template`` in plugin.json
+       (new platforms declare their own URL shape).
+    2. Hardcoded ``_PLATFORM_URL_TEMPLATES`` (backward-compatible).
+    3. Generic ``https://<host>/<id>`` with the resolved host.
     """
     if not playlist_id:
         return None
-    templates = _PLATFORM_URL_TEMPLATES.get(platform)
-    if templates and templates[0]:
+
+    template = None
+
+    # 1. Try plugin-declared template.
+    try:
+        if plugin_registry is None:
+            from plugin_loader import get_default_registry
+            plugin_registry = get_default_registry()
+        plugin = plugin_registry.get(platform)
+        if plugin and plugin.playlist_url_template:
+            template = plugin.playlist_url_template
+    except Exception:
+        pass
+
+    # 2. Fall back to hardcoded template.
+    if not template:
+        templates = _PLATFORM_URL_TEMPLATES.get(platform)
+        if templates and templates[0]:
+            template = templates[0]
+
+    if template:
         host = _resolve_host(platform, plugin_registry) or ""
-        return templates[0].format(host=host, id=playlist_id)
-    # Unknown platform — try generic ``/<id>`` with the resolved host.
+        return template.format(host=host, id=playlist_id)
+
+    # 3. Unknown platform — try generic ``/<id>`` with the resolved host.
     host = _resolve_host(platform, plugin_registry)
     if host:
         return f"https://{host}/{playlist_id}"
@@ -204,13 +232,35 @@ def build_song_url(
     """Build a browseable song/track URL from platform metadata.
 
     Returns ``None`` when *track_id* is empty or the platform is unknown.
+
+    Template resolution mirrors :func:`build_playlist_url`.
     """
     if not track_id:
         return None
-    templates = _PLATFORM_URL_TEMPLATES.get(platform)
-    if templates and templates[1]:
+
+    template = None
+
+    # 1. Try plugin-declared template.
+    try:
+        if plugin_registry is None:
+            from plugin_loader import get_default_registry
+            plugin_registry = get_default_registry()
+        plugin = plugin_registry.get(platform)
+        if plugin and plugin.song_url_template:
+            template = plugin.song_url_template
+    except Exception:
+        pass
+
+    # 2. Fall back to hardcoded template.
+    if not template:
+        templates = _PLATFORM_URL_TEMPLATES.get(platform)
+        if templates and templates[1]:
+            template = templates[1]
+
+    if template:
         host = _resolve_host(platform, plugin_registry) or ""
-        return templates[1].format(host=host, id=track_id)
+        return template.format(host=host, id=track_id)
+
     host = _resolve_host(platform, plugin_registry)
     if host:
         return f"https://{host}/{track_id}"

@@ -88,7 +88,7 @@ class PlaylistStore:
                         _playlist_cache = json.load(f)
                         _cache_timestamp = now
                 except Exception as e:
-                    logger.error(f"Failed to read playlists.json: {e}")
+                    logger.error("Failed to read playlists.json: %s", e)
         return list(_playlist_cache)
 
     @staticmethod
@@ -429,7 +429,7 @@ class PlaylistStore:
                 json.dump(playlists, f, ensure_ascii=False, indent=2)
             temp.replace(playlists_json)
         except Exception as e:
-            logger.error(f"Failed to write playlists.json: {e}")
+            logger.error("Failed to write playlists.json: %s", e)
         finally:
             # Update the cache even when the write failed so the running
             # session stays consistent - the mutated list was already

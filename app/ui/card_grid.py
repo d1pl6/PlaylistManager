@@ -301,7 +301,7 @@ class CardGridManager:
                 log_artist=log_artist,
                 log_name=log_name,
                 log_status=log_status,
-                platform="youtube_music",
+                platform="",
             )
             card.position = (row, col)
 

@@ -724,7 +724,7 @@ def _run_flow(
     outcome = {"ok": None, "message": ""}
 
     def on_status(msg: str) -> None:
-        logger.debug(f"[{playlist_name}] {msg}")
+        logger.debug("[%s] %s", playlist_name, msg)
 
     def on_error(msg: str) -> None:
         outcome["ok"] = False
@@ -755,7 +755,7 @@ def _run_flow(
             playlist_id=playlist_id,
         )
     except Exception as e:
-        logger.error(f"Flow failed for '{playlist_name}': {e}", exc_info=True)
+        logger.error("Flow failed for '%s': %s", playlist_name, e, exc_info=True)
         outcome["ok"] = False
         outcome["message"] = f"Error: {e}"
     return outcome["ok"] is True, outcome["message"]

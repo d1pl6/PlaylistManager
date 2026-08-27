@@ -89,6 +89,7 @@ class MainWindow:
         self._warnings: dict[str, str] = {}
         self._connectivity_after_id: str | None = None
         self._service_after_id: str | None = None
+        self._activity_poll_after_id: str | None = None
 
         # Set by App._start_tray() once the window exists; None when no
         # tray backend is available.
@@ -214,6 +215,7 @@ class MainWindow:
             integrations=self.integrations,
             card_index_fn=self._card_index,
             search_results=self.search._search_results,
+            playlist_cover_img_path=playlist_cover_img_path,
         )
 
     def _card_index(self, card) -> int | None:
@@ -1684,8 +1686,12 @@ class MainWindow:
         self.search.dismiss()
         self.showcase.frame_img_refs.clear()
         self.card_grid.cleanup()
-        # Cancel pending connectivity / service-health timers.
-        for aid in (self._connectivity_after_id, self._service_after_id):
+        # Cancel pending connectivity / service-health / activity-poll timers.
+        for aid in (
+            self._connectivity_after_id,
+            self._service_after_id,
+            self._activity_poll_after_id,
+        ):
             if aid is not None:
                 try:
                     self.root.after_cancel(aid)
@@ -1693,6 +1699,7 @@ class MainWindow:
                     pass
         self._connectivity_after_id = None
         self._service_after_id = None
+        self._activity_poll_after_id = None
         # Release cached per-thread SQLite connections held by the UI thread.
         try:
             DatabaseManager.close_thread_connections()

@@ -27,7 +27,6 @@ from utils.thumbnail import ThumbnailService
 logger = logging.getLogger(__name__)
 
 assets_dir = Path(__file__).resolve().parents[2] / "assets"
-playlist_cover_img_path = assets_dir / "playlist_image.png"
 
 
 class ShowcaseManager:
@@ -46,10 +45,12 @@ class ShowcaseManager:
         integrations=None,
         card_index_fn=None,
         search_results=None,
+        playlist_cover_img_path=None,
     ) -> None:
         self.root = root
         self._card_grid = card_grid
         self._song_manager = song_manager
+        self._playlist_cover_img_path = playlist_cover_img_path
         self.song_placeholder_img = song_placeholder_img or self._load_song_placeholder()
         self._close_playlist_img = close_playlist_img
         self._make_keybind_callbacks = make_keybind_callbacks
@@ -77,7 +78,9 @@ class ShowcaseManager:
             logger.debug(
                 "album_img.png placeholder missing; falling back to playlist_image.png"
             )
-            return IconService.get(playlist_cover_img_path, 40)
+            if self._playlist_cover_img_path is not None:
+                return IconService.get(self._playlist_cover_img_path, 40)
+            raise
 
     def _set_playlist_cover(self, cover_label: tk.Label, thumb_url: str, *, card=None) -> None:
         def fetch() -> None:

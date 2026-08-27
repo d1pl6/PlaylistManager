@@ -257,10 +257,10 @@ class DatabaseManager:
             conn.row_factory = sqlite3.Row  # Enable column access by name
             self._init_playlist_database(conn)
             _set_pragmas(conn)
-            logger.debug(f"Connected to playlist database: {db_path}")
+            logger.debug("Connected to playlist database: %s", db_path)
             return conn
         except sqlite3.Error as e:
-            logger.error(f"Failed to connect to database {db_path}: {e}")
+            logger.error("Failed to connect to database %s: %s", db_path, e)
             raise
 
     @contextmanager
@@ -330,7 +330,7 @@ class DatabaseManager:
             conn.commit()
             logger.debug("Initialized playlist database schema")
         except sqlite3.Error as e:
-            logger.error(f"Failed to initialize database schema: {e}")
+            logger.error("Failed to initialize database schema: %s", e)
             raise
 
     @staticmethod

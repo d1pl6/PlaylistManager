@@ -15,11 +15,15 @@ Each supported music platform lives in its own top-level package under
       "flow_class": "YouTubeMusicFlow",
       "receiver_module": "youtube_music_receiver",
       "receiver_class": "URLReceiverManager",
-      "receiver_port": 5000
+      "receiver_port": 5000,
+      "url_hosts": ["music.youtube.com", ...],
+      "playlist_url_template": "https://{host}/playlist?list={id}",
+      "song_url_template": "https://{host}/watch?v={id}",
+      "img_url_template": "https://i.ytimg.com/vi/{id}/hqdefault.jpg"
     }
 
 Discovery scans the directory tree and reads the manifests. It never
-imports plugin Python code at scan time - every class reference is
+imports plugin Python code at scan time - every class reference below is
 resolved lazily on first use (see :class:`PluginInfo`), so an optional
 dependency missing from one plugin cannot break startup or the other
 plugins.
@@ -106,6 +110,14 @@ class PluginInfo:
     # TCP port the extension-type receiver binds (plugin.json
     # "receiver_port"). None = receiver module's own default applies.
     receiver_port: Optional[int] = None
+    # Optional URL templates for building browseable URLs from IDs.
+    # Uses {host} and {id} placeholders, e.g.
+    #   "https://{host}/playlist?list={id}"
+    # None/empty = fall back to the hardcoded per-platform templates in
+    # playlist_url.py (backward-compatible default).
+    playlist_url_template: str = ""
+    song_url_template: str = ""
+    img_url_template: str = ""
 
     def _import(self, module_name: str):
         """Import ``integrations.<dir>.<module_name>`` and cache the module.
@@ -322,6 +334,9 @@ class PluginRegistry:
             receiver_module=raw.get("receiver_module", ""),
             receiver_class=raw.get("receiver_class", ""),
             receiver_port=receiver_port,
+            playlist_url_template=raw.get("playlist_url_template", ""),
+            song_url_template=raw.get("song_url_template", ""),
+            img_url_template=raw.get("img_url_template", ""),
         )
 
     @property

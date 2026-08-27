@@ -138,7 +138,7 @@ class App:
                 )
             except Exception as e:
                 yt_integration.yt_client = None
-                logger.error(f"YouTube Music auth failed: {e}")
+                logger.error("YouTube Music auth failed: %s", e)
                 messagebox.showwarning(
                     "YouTube Music",
                     f"YouTube Music authentication failed:\n{e}",
@@ -157,7 +157,7 @@ class App:
                         api = sp_auth.get_api()
                         ok = True
                 except Exception as e:
-                    logger.error(f"Spotify auth failed: {e}")
+                    logger.error("Spotify auth failed: %s", e)
                 if not ok:
                     logger.warning("Spotify is not configured")
 
@@ -196,8 +196,6 @@ class App:
             try:
                 if hasattr(integration, "get_playlist_id"):
                     pid = integration.get_playlist_id(name)
-                elif hasattr(integration, "get_playlist_id_by_name"):
-                    pid = integration.get_playlist_id_by_name(name)
                 else:
                     pid = None
                 return pid or ""
@@ -236,7 +234,7 @@ class App:
         integrations = self.integrations.get_all()
         if platform is not None:
             if platform not in integrations:
-                logger.error(f"Unknown platform '{platform}' - cannot refresh")
+                logger.error("Unknown platform '%s' - cannot refresh", platform)
                 return
             targets = [integrations[platform]]
         else:
@@ -260,7 +258,7 @@ class App:
                     user_log(logger, "%s re-authenticated", integration.display_name)
                     refreshed_ids.append(integration.id)
                 else:
-                    logger.error(f"{integration.display_name} re-authentication failed")
+                    logger.error("%s re-authentication failed", integration.display_name)
 
             def _apply() -> None:
                 self.main_window.kc.update_credentials(refreshed_ids=refreshed_ids)

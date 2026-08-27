@@ -26,6 +26,7 @@ from __future__ import annotations
 import difflib
 import logging
 import unicodedata
+from collections.abc import Iterable
 from typing import List, Optional
 
 from services import duplicate_queue

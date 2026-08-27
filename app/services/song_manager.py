@@ -316,7 +316,7 @@ class SongManager:
                 return cursor.fetchone() is not None
 
         except sqlite3.Error as e:
-            logger.error(f"Error checking song by info in {playlist_name}: {e}")
+            logger.error("Error checking song by info in %s: %s", playlist_name, e)
             return False
 
     def add_song_by_info(
@@ -534,7 +534,7 @@ class SongManager:
                 return cursor.fetchone() is not None
 
         except sqlite3.Error as e:
-            logger.error(f"Error checking if song exists in {playlist_name}: {e}")
+            logger.error("Error checking if song exists in %s: %s", playlist_name, e)
             return False
 
     def get_song_by_track_id(
@@ -569,7 +569,7 @@ class SongManager:
                 return song_dict
 
         except sqlite3.Error as e:
-            logger.error(f"Error getting song from {playlist_name}: {e}")
+            logger.error("Error getting song from %s: %s", playlist_name, e)
             return None
 
     def delete_song(
@@ -597,11 +597,11 @@ class SongManager:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM songs WHERE id = ?", (song_id,))
                 conn.commit()
-                logger.info(f"Deleted song {song_id} from playlist {playlist_name}")
+                logger.info("Deleted song %s from playlist %s", song_id, playlist_name)
                 return cursor.rowcount > 0
 
         except sqlite3.Error as e:
-            logger.error(f"Error deleting song from {playlist_name}: {e}")
+            logger.error("Error deleting song from %s: %s", playlist_name, e)
             return False
 
     def get_all_songs(
@@ -635,7 +635,7 @@ class SongManager:
                 return songs
 
         except sqlite3.Error as e:
-            logger.error(f"Error getting songs from {playlist_name}: {e}")
+            logger.error("Error getting songs from %s: %s", playlist_name, e)
             return []
 
     def get_latest_song(
@@ -675,7 +675,7 @@ class SongManager:
                 }
 
         except sqlite3.Error as e:
-            logger.error(f"Error getting latest song from {playlist_name}: {e}")
+            logger.error("Error getting latest song from %s: %s", playlist_name, e)
             return None
 
     def get_latest_songs(
@@ -723,7 +723,7 @@ class SongManager:
                 return songs
 
         except sqlite3.Error as e:
-            logger.error(f"Error getting latest songs from {playlist_name}: {e}")
+            logger.error("Error getting latest songs from %s: %s", playlist_name, e)
             return []
 
     def get_song_count(
@@ -751,7 +751,7 @@ class SongManager:
                 return cursor.fetchone()[0]
 
         except sqlite3.Error as e:
-            logger.error(f"Error getting song count from {playlist_name}: {e}")
+            logger.error("Error getting song count from %s: %s", playlist_name, e)
             return 0
 
     def get_total_duration(
@@ -780,7 +780,7 @@ class SongManager:
                 return row[0] if row else 0
 
         except sqlite3.Error as e:
-            logger.error(f"Error getting total duration from {playlist_name}: {e}")
+            logger.error("Error getting total duration from %s: %s", playlist_name, e)
             return 0
 
     def search_songs(

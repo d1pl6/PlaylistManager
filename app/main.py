@@ -75,6 +75,18 @@ def parse_args():
         help="log out of a platform: delete its credentials, registry "
              "entries and local databases",
     )
+    p.add_argument(
+        "--client-id", dest="client_id", default=None,
+        help="Spotify client ID (for --login spotify)",
+    )
+    p.add_argument(
+        "--client-secret", dest="client_secret", default=None,
+        help="Spotify client secret (for --login spotify)",
+    )
+    p.add_argument(
+        "--refresh-token", dest="refresh_token", default=None,
+        help="Spotify refresh token (for --login spotify)",
+    )
     return p.parse_args()
 
 
