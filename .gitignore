@@ -20,6 +20,7 @@ cfg/
 .agents
 0.3.0/
 integrations/*
+docs/*
 
 close.png
 closeWindow.png

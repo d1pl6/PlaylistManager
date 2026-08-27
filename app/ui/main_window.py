@@ -38,7 +38,7 @@ from utils.window import center_window, resize_window
 from utils.config import get_setting, get_setting_value
 from ui.scrollable import ScrollableFrame
 from utils.theme import C, load_theme, btn_colors, hover_bg
-from utils.platform import is_wayland_session
+from utils.platform import is_wayland_session, x11_root_desktop_state
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,12 @@ class MainWindow:
         # Pending hide-to-tray after() id (cancelled if the window is
         # mapped again before the WM settles the minimize).
         self._hide_after_id: str | None = None
+        # Virtual desktop the window was last mapped on (X11
+        # ``_NET_CURRENT_DESKTOP``); None until the first map or when the
+        # property cannot be read.  Used to distinguish a desktop switch
+        # (which the WM may carry out by minimizing the windows it
+        # leaves behind) from a genuine minimize of this window.
+        self._last_desktop: int | None = None
 
         self._sync_service = PlaylistSyncService(integrations)
 
@@ -1116,6 +1122,16 @@ class MainWindow:
             if state == "iconic" or (
                 is_wayland_session() and attempts == 0 and not viewable
             ):
+                if not self._is_user_minimize():
+                    # The WM minimized this window while moving to
+                    # another virtual desktop (common when a fullscreen
+                    # game is open on the desktop being left, and in
+                    # non-composited sessions) or entered "show the
+                    # desktop" mode.  Hiding to tray would yank the
+                    # window out of the taskbar prematurely - leave it
+                    # minimized so the WM restores it like any other
+                    # window.
+                    return
                 self.root.withdraw()
             elif attempts > 0:
                 # WM hasn't settled the minimize yet - try again shortly.
@@ -1140,6 +1156,42 @@ class MainWindow:
             except tk.TclError:
                 pass
             self._hide_after_id = None
+        # Record which desktop this window came back on.  A later unmap
+        # whose desktop differs from this one is a WM desktop switch
+        # (non-composited WMs map/unmap the windows they leave behind,
+        # and some minimize them when a fullscreen game is open on the
+        # desktop), not a user minimize of this window.
+        self._last_desktop, _ = x11_root_desktop_state()
+
+    def _is_user_minimize(self) -> bool:
+        """Whether the minimize was aimed at this window (not the WM
+        switching desktops or entering show-desktop mode).
+
+        Windows get minimized for reasons unrelated to the user's intent
+        for *this* window: virtual desktop switches with a fullscreen
+        game open on the desktop being left (non-composited WMs minimize
+        the windows they abandon, KWin does this for game desktops), and
+        "show the desktop" (minimize-all).  Hiding to tray in those
+        cases would remove the app from the taskbar although the user
+        never minimized it - it must stay minimized so the WM restores
+        it when the desktop comes back.
+
+        Returns True (hide to tray) when the minimize happened while the
+        desktop stayed put and show-desktop mode is off; False (leave
+        minimized) on a desktop switch or show-desktop mode.  When the
+        X11 root properties cannot be read (non-X11 session, no
+        ``xprop``), True is returned to preserve the original behavior.
+        """
+        desktop, showing = x11_root_desktop_state()
+        if showing:
+            return False
+        if (
+            desktop is not None
+            and self._last_desktop is not None
+            and desktop != self._last_desktop
+        ):
+            return False
+        return True
 
     def set_hide_to_tray(self, enabled: bool) -> None:
         """Live-apply the hide-to-tray setting (called from Settings)."""
