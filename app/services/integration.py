@@ -19,6 +19,13 @@ logger = logging.getLogger(__name__)
 class BaseIntegration:
     id: str = ""
     display_name: str = ""
+    # Whether this platform can serve as an "add playlist" source (i.e. it
+    # can browse a library and manage playlists).  Service-only integrations
+    # (e.g. Last.fm - scrobble/like but no playlists) set this False so they
+    # are never offered as a source in the "Choose platform" picker, while
+    # staying available for their service actions (get_all still returns
+    # them; only get_active excludes them).
+    supports_playlists: bool = True
     # Public auth-manager handle, passed in via the constructor and exposed
     # so bootstrap/auth plumbing (app.py) can reach it without reaching into
     # a private ``_auth`` attribute.  Platforms without credentials leave
@@ -153,7 +160,9 @@ class IntegrationRegistry:
 
     def get_active(self) -> Dict[str, BaseIntegration]:
         return {
-            k: v for k, v in self._integrations.items() if v.is_authenticated()
+            k: v
+            for k, v in self._integrations.items()
+            if v.is_authenticated() and v.supports_playlists
         }
 
     def get(self, integration_id: str) -> Optional[BaseIntegration]:

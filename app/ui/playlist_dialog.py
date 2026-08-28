@@ -15,6 +15,7 @@ from ui.scrollable import ScrollableFrame
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
 from utils.thumbnail import ThumbnailService
+from utils.logging_config import network_log
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +163,7 @@ class PlaylistDialog:
                 return
             photo = ThumbnailService.to_photoimage(img)
         except Exception as e:
-            logger.error("Failed to create dialog thumbnail: %s", e)
+            network_log(logger, "Failed to create dialog thumbnail: %s", e)
             return
         try:
             button.configure(image=photo)

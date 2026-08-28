@@ -25,6 +25,8 @@ from typing import Dict, List, Optional, Tuple
 import requests
 from PIL import Image, ImageTk
 
+from utils.logging_config import network_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -142,10 +144,10 @@ class ThumbnailService:
                     Image.open(io.BytesIO(resp.content)), size
                 )
             except requests.RequestException as e:
-                logger.error("Network error fetching thumbnail from %s: %s", thumb_url, e)
+                network_log(logger, "Network error fetching thumbnail from %s: %s", thumb_url, e)
                 return None
             except Exception as e:
-                logger.error("Failed to fetch thumbnail from %s: %s", thumb_url, e)
+                network_log(logger, "Failed to fetch thumbnail from %s: %s", thumb_url, e)
                 return None
 
         with ThumbnailService._cache_lock:
@@ -200,10 +202,10 @@ class ThumbnailService:
                 resp.raise_for_status()
                 img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
             except requests.RequestException as e:
-                logger.error("Network error fetching full thumbnail from %s: %s", thumb_url, e)
+                network_log(logger, "Network error fetching full thumbnail from %s: %s", thumb_url, e)
                 return None
             except Exception as e:
-                logger.error("Failed to fetch full thumbnail from %s: %s", thumb_url, e)
+                network_log(logger, "Failed to fetch full thumbnail from %s: %s", thumb_url, e)
                 return None
 
         with ThumbnailService._cache_lock:
