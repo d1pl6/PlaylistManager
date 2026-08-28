@@ -10,7 +10,7 @@ log/
 db/
 auth/
 cfg/
-.vscode/*
+.vscode/
 .history/*
 .cortexkit/
 .agents
