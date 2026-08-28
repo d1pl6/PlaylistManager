@@ -6,6 +6,7 @@ Usage:
   python main.py              # launch GUI
   python main.py --debug      # verbose logging
   python main.py -a 1,2,3     # CLI: add current song to playlists #1, #2, #3
+  python main.py -s           # CLI: scrobble the currently-playing song
   python main.py -p add "URL" # CLI: register a playlist from its URL
   python main.py --list       # CLI: print numbered playlists
   python main.py --login youtube_music   # CLI: authenticate a platform

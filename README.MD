@@ -187,6 +187,19 @@ python -m app -a 1,"Chill Mix",3  # mixed numbers and names
 python -m app --list              # show the numbered playlist list
 ```
 
+Scrobble (Last.fm backend, independent of any playlist):
+
+```
+python -m app -s                   # scrobble the currently-playing song
+python -m app --scrobble           # (long form)
+```
+
+`-s` scrobbles the current song without adding it to any playlist — `api`-type
+platforms (Spotify) read the currently-playing track, `extension`-type
+platforms (YouTube Music) capture via the browser extension. It requires the
+Last.fm plugin and credentials to be configured (see the Settings dialog's
+Last.fm section); otherwise it prints an error and exits non-zero.
+
 ### Global install (for compositor shortcuts)
 `python -m app ...` only works from the repo root. To bind the command from anywhere
 (i3 / hyprland / etc), install a global `playlistmanager` command.

@@ -65,6 +65,82 @@ class BaseIntegration:
         return False
 
 
+class ScrobbleCapable:
+    """Optional capability interface for scrobbling / liking backends.
+
+    A plugin integration may implement this interface to expose shared
+    scrobble actions consumed by the core (e.g., Last.fm). Core consumers
+    use duck-typing:
+
+        scrobble_fn = getattr(integration, "scrobble", None)
+        if scrobble_fn:
+            scrobble_fn(song_data)
+
+    This keeps the scrobble backend self-contained under its plugin folder
+    while the core remains platform-agnostic.
+    """
+
+    def scrobble(self, song_data: dict) -> bool:
+        """Scrobble a song.
+
+        *song_data* is a dict with at minimum::
+
+            {
+                "title": str,
+                "artists": [str, ...],  # artist is artists[0]
+                "duration": int,  # seconds
+            }
+
+        Album and track_number (from song_data["album"], song_data["track_number"])
+        are optional but improve scrobble fidelity.
+
+        Returns True only when the backend confirmed the scrobble.
+        Failures must be logged but never block or fail the calling add-flow.
+        """
+        raise NotImplementedError
+
+    def unlove(self, artist: str, track: str) -> bool:
+        """Remove a track from the user's loved/liked list.
+
+        Returns True only when the backend confirmed the removal.
+        """
+        raise NotImplementedError
+
+    def love(self, artist: str, track: str) -> bool:
+        """Add a track to the user's loved/liked list (like a song).
+
+        This is a separate action from :meth:`scrobble`: liking must never
+        create a scrobble, and auto-scrobbling on add must never like the
+        song.  The core's like toggle calls this directly.
+
+        Returns True only when the backend confirmed the like.
+        """
+        raise NotImplementedError
+
+    def is_loved(self, artist: str, track: str) -> bool | None:
+        """Check if a track is in the user's loved/liked list.
+
+        Returns:
+            True if loved, False if not loved, None if unknown/unauthenticated.
+
+        Must return synchronously (cached value preferred to avoid network
+        round trips per-track). Load state asynchronously on display and
+        update via root.after(0, ...) from the worker thread.
+        """
+        raise NotImplementedError
+
+    def delete_scrobble(self, artist: str, track: str, timestamp: int | None = None) -> bool:
+        """Delete a scrobble entry.
+
+        *timestamp* (seconds since epoch) is optional; when omitted, deletes
+        the most recent scrobble of that track.
+
+        Returns True only when the backend confirmed the deletion.
+        Failures are best-effort; never fail or re-enqueue the calling remove.
+        """
+        raise NotImplementedError
+
+
 class IntegrationRegistry:
     def __init__(self):
         self._integrations: Dict[str, BaseIntegration] = {}

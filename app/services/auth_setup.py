@@ -174,6 +174,108 @@ def save_and_verify_spotify_credentials(
 
 
 # ---------------------------------------------------------------------------
+# Last.fm
+# ---------------------------------------------------------------------------
+
+def load_lastfm_credentials() -> Dict[str, str]:
+    """Load existing Last.fm credentials from disk.
+
+    Returns an empty dict when the credential file does not exist.
+    """
+    lastfm_file = AUTH_DIR / "lastfm.json"
+    if not lastfm_file.exists():
+        return {}
+    try:
+        return json.loads(lastfm_file.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("Failed to load Last.fm credentials: %s", e)
+        return {}
+
+
+def delete_lastfm_credentials() -> bool:
+    """Remove the Last.fm credential file.
+
+    Returns ``True`` when the file was deleted, ``False`` when it
+    did not exist.
+    """
+    lastfm_file = AUTH_DIR / "lastfm.json"
+    if lastfm_file.exists():
+        try:
+            lastfm_file.unlink()
+            user_log(logger, "Deleted Last.fm credentials")
+            return True
+        except Exception as e:
+            logger.error("Failed to delete Last.fm credentials: %s", e)
+            return False
+    return False
+
+
+def verify_lastfm_credentials(api_key: str, api_secret: str) -> Dict[str, Any]:
+    """Test if Last.fm credentials are valid by calling auth.getSession.
+
+    Delegates to :func:`integrations.lastfm.lastfm.verify_lastfm_credentials`
+    so the Last.fm client logic and session-key fetch stays in the plugin.
+
+    Returns a dict with keys:
+        - ``ok`` (bool): True if verification succeeded.
+        - ``username`` (str): Last.fm username (when ok is True).
+        - ``display_name`` (str): Display name for the user (when ok is True).
+        - ``error`` (str): Error message (when ok is False).
+    """
+    try:
+        from integrations.lastfm.lastfm import verify_lastfm_credentials as verify_impl
+        return verify_impl(api_key, api_secret)
+    except ImportError:
+        return {
+            "ok": False,
+            "error": "Last.fm plugin not found",
+        }
+    except Exception as e:
+        logger.error("Last.fm verification failed: %s", e, exc_info=True)
+        return {
+            "ok": False,
+            "error": str(e),
+        }
+
+
+def save_and_verify_lastfm_credentials(api_key: str, api_secret: str) -> Dict[str, Any]:
+    """Verify Last.fm credentials and persist them if they are valid.
+
+    Verification runs FIRST: only a successful verification round trip
+    persists the credentials (verify-first pattern, repo rule #69).
+
+    Delegates the actual save to :func:`integrations.lastfm.lastfm
+    .save_lastfm_credentials_file` so the plugin owns the write-through
+    contract.
+
+    Returns the same dict as :func:`verify_lastfm_credentials`.
+    """
+    result = verify_lastfm_credentials(api_key, api_secret)
+    if result.get("ok"):
+        try:
+            from integrations.lastfm.lastfm import save_lastfm_credentials_file
+            save_lastfm_credentials_file(
+                api_key,
+                api_secret,
+                result.get("session_key", ""),
+                result.get("username", ""),
+            )
+        except ImportError:
+            logger.error("Last.fm plugin not found; credentials not saved")
+            return {
+                "ok": False,
+                "error": "Last.fm plugin not found",
+            }
+        except Exception as e:
+            logger.error("Failed to save Last.fm credentials: %s", e, exc_info=True)
+            return {
+                "ok": False,
+                "error": f"Failed to save: {e}",
+            }
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Multi-platform credential deletion (CLI --logout)
 # ---------------------------------------------------------------------------
 
@@ -184,6 +286,7 @@ def save_and_verify_spotify_credentials(
 PLATFORM_CREDENTIAL_FILES = {
     "youtube_music": [BROWSER_FILE],
     "spotify": [SPOTIFY_FILE],
+    "lastfm": [AUTH_DIR / "lastfm.json"],
 }
 
 

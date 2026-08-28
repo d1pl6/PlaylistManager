@@ -58,6 +58,8 @@ playlist_cover_img_path = assets_dir / "playlist_image.png"
 close_playlist_img_path = assets_dir / "close_playlist.png"
 reload_database_img_path = assets_dir / "reloadCache.png"
 loading_img_path = assets_dir / "hourglass.png"
+heart_empty_img_path = assets_dir / "heart_empty.png"
+heart_full_img_path = assets_dir / "heart_full.png"
 
 
 class MainWindow:
@@ -136,6 +138,8 @@ class MainWindow:
         self.close_playlist_img = IconService.get(close_playlist_img_path, 16)
         self.reload_database_img = IconService.get(reload_database_img_path, 16)
         self.loading_img = IconService.get(loading_img_path, 32)
+        self.heart_empty_img = IconService.get(heart_empty_img_path, 16)
+        self.heart_full_img = IconService.get(heart_full_img_path, 16)
 
         self.root.grid_rowconfigure(0, weight=0)
         self.root.grid_rowconfigure(1, weight=0)   # search bar
@@ -218,6 +222,8 @@ class MainWindow:
             self.card_grid,
             self._song_manager,
             close_playlist_img=self.close_playlist_img,
+            heart_empty_img=self.heart_empty_img,
+            heart_full_img=self.heart_full_img,
             integrations=self.integrations,
             card_index_fn=self._card_index,
             search_results=self.search._search_results,
@@ -354,6 +360,8 @@ class MainWindow:
                 on_columns_change=self.set_columns,
                 on_check_updates_now=lambda on_done=None: self.ac.check_updates(force=True, on_done=on_done),
                 on_check_duplicates_now=self._run_duplicate_scan,
+                on_like_button_change=self._apply_like_button_visibility,
+                on_scrobble_keybind_change=self._register_scrobble_keybind,
             ),
         )
         ToolTip(self.btn_open_settings, "Settings")
@@ -1061,6 +1069,9 @@ class MainWindow:
 
         self.card_grid._sync_empty_state()
 
+        # Register the scrobble keybind (standalone action, not tied to a playlist)
+        self._register_scrobble_keybind()
+
         # Start periodic connectivity and service-health probes.
         self._start_background_checks()
 
@@ -1361,6 +1372,49 @@ class MainWindow:
         self.card_grid._layout_frames()
         self.card_grid._sync_empty_state()
         self._fit_window()
+
+    def _apply_like_button_visibility(self, enabled: bool) -> None:
+        """Live-apply the like button visibility setting (called from Settings).
+
+        Rebuilds every card's showcase section to show/hide the like button.
+        """
+        for frame_idx in range(len(self.card_grid.cards)):
+            try:
+                playlist_name = self.card_grid.cards[frame_idx].name_label.cget("text")
+                platform = self.card_grid.cards[frame_idx].platform
+            except (IndexError, tk.TclError):
+                continue
+            self.showcase.refresh(frame_idx, playlist_name, platform)
+        self._fit_window()
+
+    def _register_scrobble_keybind(self) -> None:
+        """Register the scrobble keybind (standalone action) if one is set.
+
+        Called once at setup and by the Settings dialog when the keybind
+        changes (Record or Clear). Re-running it replaces the prior action
+        binding: ``register`` unregisters the existing "scrobble" action
+        first, so a cleared (empty) keybind removes the live binding and a
+        changed combo replaces it.
+        """
+        keybind = get_setting_value("scrobble_keybind", "keybind") or ""
+
+        def _on_scrobble_status(msg, bg):
+            # For now, scrobble actions don't have a display widget like
+            # playlists do; they just log silently. Future: could add a
+            # small status label or activity indicator.
+            logger.debug("Scrobble action: %s", msg)
+
+        callbacks = KeybindCallbacks(
+            on_status=_on_scrobble_status,
+        )
+        self.kc.registry.register(
+            "scrobble",
+            keybind,
+            callbacks,
+            platform="",  # action bindings have no platform
+            playlist_id="",
+            kind="action",  # distinguish from playlist bindings
+        )
 
     def _auto_resize(self) -> None:
         """Resize the window to fit playlist frames."""

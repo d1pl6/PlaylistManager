@@ -60,6 +60,8 @@ def show_settings_dialog(
     on_columns_change=None,
     on_check_updates_now=None,
     on_check_duplicates_now=None,
+    on_like_button_change=None,
+    on_scrobble_keybind_change=None,
     ):
     """Show the settings dialog.
 
@@ -89,6 +91,12 @@ def show_settings_dialog(
         on_check_duplicates_now: optional callback(on_done) running a
             manual duplicate scan off-thread; *on_done* receives
             ``(found_count, error_or_None)`` on the UI thread.
+        on_like_button_change: optional callback applied live with the new
+            like-button state (bool) when the checkbox changes.
+        on_scrobble_keybind_change: optional callback fired after the
+            scrobble keybind is recorded or cleared (no args); the caller
+            re-registers/unregisters the live action keybind so the change
+            takes effect immediately instead of after a restart.
     """
     theme_win_bg = C["frame_main_bg"]
     theme_header_bg = C["frame_head_bg"]
@@ -505,7 +513,7 @@ def show_settings_dialog(
 
     tk.Button(
         appearance_section,
-        text="Theme Settings (restart to apply)",
+        text="Theme Settings",
         cursor="hand2",
         **btn_colors(C["button_main_bg"], C["button_main_fg"]),
         font=ui_font(12),
@@ -514,6 +522,113 @@ def show_settings_dialog(
         bd=0,
         command=lambda: show_theme_dialog(win, on_theme_change=on_theme_change),
     ).pack(fill="both", pady=(0,4), padx=16)
+
+    # -- Last.fm section -----------------------------------------------
+    lastfm_section = tk.Frame(content, background=theme_win_bg)
+    lastfm_section.pack(fill="both", padx=8, pady=(0, 8))
+    _section_header(lastfm_section, "Last.fm")
+
+    like_button_var = tk.BooleanVar(value=get_setting("like_button"))
+    like_button_check = tk.Checkbutton(
+        lastfm_section,
+        text="Like button (♥/♡ under remove button)",
+        variable=like_button_var,
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(11),
+    )
+    like_button_check.pack(anchor="w", padx=16, pady=4)
+
+    def on_like_button_toggle():
+        enabled = bool(like_button_var.get())
+        _toggle_setting("like_button", like_button_var)
+        if on_like_button_change:
+            try:
+                on_like_button_change(enabled)
+            except Exception as e:
+                logger.error("Failed to apply like_button change: %s", e)
+
+    like_button_check.config(command=on_like_button_toggle)
+
+    scrobble_on_add_var = tk.BooleanVar(value=get_setting("scrobble_on_add"))
+    scrobble_on_add_check = tk.Checkbutton(
+        lastfm_section,
+        text="Scrobble added songs",
+        variable=scrobble_on_add_var,
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(11),
+    )
+    scrobble_on_add_check.pack(anchor="w", padx=16, pady=4)
+    scrobble_on_add_check.config(command=lambda: _toggle_setting("scrobble_on_add", scrobble_on_add_var))
+
+    # Scrobble keybind capture row
+    scrobble_keybind_row = tk.Frame(lastfm_section, background=theme_check_bg)
+    scrobble_keybind_row.pack(fill="x", padx=16, pady=4)
+
+    tk.Label(
+        scrobble_keybind_row,
+        text="Scrobble keybind:",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(11),
+    ).pack(side="left")
+
+    scrobble_keybind_display = tk.Label(
+        scrobble_keybind_row,
+        text=get_setting_value("scrobble_keybind", "keybind") or "(none)",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(11),
+        anchor="w",
+    )
+    scrobble_keybind_display.pack(side="left", fill="x", expand=True, padx=(8, 4))
+
+    def capture_scrobble_keybind():
+        if not keybind_controller:
+            logger.warning("Keybind controller not available")
+            return
+
+        def on_combo(combo_str):
+            set_setting_value("scrobble_keybind", "keybind", combo_str)
+            scrobble_keybind_display.config(text=combo_str or "(none)")
+            if on_scrobble_keybind_change is not None:
+                try:
+                    on_scrobble_keybind_change()
+                except Exception as e:
+                    logger.error("Failed to re-register scrobble keybind: %s", e)
+
+        keybind_controller.start_recording(on_combo)
+
+    tk.Button(
+        scrobble_keybind_row,
+        text="Record",
+        cursor="hand2",
+        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        bd=0,
+        command=capture_scrobble_keybind,
+    ).pack(side="left", padx=(0, 4))
+
+    tk.Button(
+        scrobble_keybind_row,
+        text="Clear",
+        cursor="hand2",
+        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        bd=0,
+        command=lambda: (
+            set_setting_value("scrobble_keybind", "keybind", ""),
+            scrobble_keybind_display.config(text="(none)"),
+            on_scrobble_keybind_change() if on_scrobble_keybind_change is not None else None,
+        ),
+    ).pack(side="left")
 
     about_section = tk.Frame(content, background=theme_win_bg)
     about_section.pack(fill="both", padx=8, pady=(0, 8))

@@ -76,6 +76,7 @@ class KeybindRegistry:
         callbacks: KeybindCallbacks,
         platform: str,
         playlist_id: str = "",
+        kind: str = "playlist",
     ) -> Optional[Dict]:
         """Register a keybind + callbacks for *playlist_name*.
 
@@ -118,6 +119,7 @@ class KeybindRegistry:
                     "callbacks": callbacks,
                     "platform": platform,
                     "playlist_id": playlist_id,
+                    "kind": kind,
                     "_parsed": parse_keybind(keybind),
                 }
             logger.info(
@@ -182,6 +184,9 @@ class KeybindRegistry:
         "Best" means the entry whose parsed key set matches *pressed_keys*
         exactly and has the highest specificity (most keys).  This
         prevents a single-key shortcut from shadowing a multi-key combo.
+
+        The *info* dict contains 'kind' ("playlist" or "action") to
+        distinguish playlist add-flows from standalone actions like scrobble.
         """
         best = None
         with self._lock:

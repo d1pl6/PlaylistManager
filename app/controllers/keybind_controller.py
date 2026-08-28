@@ -22,6 +22,7 @@ from utils.key_mapping import (
     normalize_tk_key,
     read_global_listener_setting,
 )
+from utils.config import get_setting
 from utils.platform import is_wayland_session
 from controllers.keybind_registry import KeybindCallbacks, KeybindRegistry
 from services import duplicate_queue
@@ -337,29 +338,39 @@ class KeybindController:
         match = self.registry.match(pressed)
         if match is not None:
             _, keybind_str, info = match
-            playlist_name = info["playlist_name"]
-            callbacks = info["callbacks"]
-            # Legacy bindings predate the platform field - they were all
-            # YouTube Music entries.
-            platform = info.get("platform", "youtube_music")
-            playlist_id = info.get("playlist_id", "")
-            if self._root:
-                try:
-                    self._root.after(
-                        0,
-                        self.handle_keybind,
-                        playlist_name,
-                        callbacks,
-                        platform,
-                        playlist_id,
-                    )
-                except Exception as e:
-                    # _check_keybinds also runs on the pynput listener
-                    # thread; after() raises "main thread is not in main
-                    # loop" when a key lands outside the mainloop
-                    # (startup/shutdown window).  A stray key must not
-                    # kill the listener.
-                    logger.debug("Failed to schedule keybind dispatch: %s", e)
+            kind = info.get("kind", "playlist")
+            if kind == "action":
+                # Dispatch to the action handler (e.g., scrobble_current)
+                if self._root:
+                    try:
+                        self._root.after(0, self._handle_action_keybind, info)
+                    except Exception as e:
+                        logger.debug("Failed to schedule action keybind dispatch: %s", e)
+            else:
+                # Dispatch to the playlist add-flow handler
+                playlist_name = info["playlist_name"]
+                callbacks = info["callbacks"]
+                # Legacy bindings predate the platform field - they were all
+                # YouTube Music entries.
+                platform = info.get("platform", "youtube_music")
+                playlist_id = info.get("playlist_id", "")
+                if self._root:
+                    try:
+                        self._root.after(
+                            0,
+                            self.handle_keybind,
+                            playlist_name,
+                            callbacks,
+                            platform,
+                            playlist_id,
+                        )
+                    except Exception as e:
+                        # _check_keybinds also runs on the pynput listener
+                        # thread; after() raises "main thread is not in main
+                        # loop" when a key lands outside the mainloop
+                        # (startup/shutdown window).  A stray key must not
+                        # kill the listener.
+                        logger.debug("Failed to schedule keybind dispatch: %s", e)
 
     # ------------------------------------------------------------------
     # Flow execution
@@ -485,6 +496,24 @@ class KeybindController:
                 # skipped above: the song data did not change.
                 if status == "added":
                     callbacks.on_song_added()
+                    # Scrobble the song if auto-scrobble is enabled and a ScrobbleCapable
+                    # integration is available.
+                    if get_setting("scrobble_on_add"):
+                        song_data = result.get("song", {})
+                        if song_data and self.integrations:
+                            def scrobble_async():
+                                try:
+                                    scrobble_integ = next(
+                                        (integ for integ in self.integrations.get_all().values()
+                                         if getattr(integ, "scrobble", None) is not None),
+                                        None,
+                                    )
+                                    if scrobble_integ is not None:
+                                        scrobble_integ.scrobble(song_data)
+                                except Exception as e:
+                                    logger.debug("Failed to scrobble song: %s", e)
+
+                            threading.Thread(target=scrobble_async, daemon=True).start()
 
             if self._root is not None:
                 _schedule_ui(_apply)
@@ -525,6 +554,77 @@ class KeybindController:
         if not self._ensure_initialized(platform_id, KeybindCallbacks()):
             return None
         return self._flows.get(platform_id)
+
+    def _handle_action_keybind(self, info: dict) -> None:
+        """Dispatch an action-type keybind (e.g., scrobble).
+
+        Unlike playlist keybinds which drive add-flows, action keybinds
+        trigger standalone operations. Currently supports scrobble-only.
+        """
+        action = info.get("playlist_name", "")  # action name stored as playlist_name
+        if action == "scrobble":
+            self._scrobble_current_action()
+        else:
+            logger.warning("Unknown action keybind: %s", action)
+
+    def _scrobble_current_action(self) -> None:
+        """Scrobble the currently-playing song without adding to any playlist.
+
+        Captures the current song via the platform's existing capture path
+        (exactly as add-flow would), then scrobbles it if Last.fm is available.
+        Runs on a worker thread to avoid blocking the UI during capture.
+        """
+        def work() -> None:
+            try:
+                scrobble_integ = next(
+                    (integ for integ in self.integrations.get_all().values()
+                     if getattr(integ, "scrobble", None) is not None),
+                    None,
+                )
+                if scrobble_integ is None:
+                    logger.info("Last.fm integration not available for scrobble")
+                    return
+
+                # Try each authenticated platform's capture path until one succeeds
+                for platform_id, integration in self.integrations.get_all().items():
+                    if not integration.is_authenticated():
+                        continue
+                    
+                    plugin = self.plugin_registry.get(platform_id)
+                    if plugin is None or not plugin.flow_class:
+                        continue
+
+                    try:
+                        # Ensure flow is initialized for this platform
+                        if not self._ensure_initialized(platform_id, KeybindCallbacks()):
+                            continue
+
+                        flow = self._flows.get(platform_id)
+                        if flow is None:
+                            continue
+
+                        # Capture the current song using the flow's capture path
+                        url, song_data, error = flow.capture(30)  # 30s timeout
+
+                        if song_data:
+                            # Found a currently-playing song, scrobble it
+                            result = scrobble_integ.scrobble(song_data)
+                            if result:
+                                logger.info("Scrobbled: %s", song_data.get("title", ""))
+                            else:
+                                logger.debug("Failed to scrobble: %s", song_data.get("title", ""))
+                            return
+                        else:
+                            logger.debug("No song playing on %s: %s", platform_id, error)
+                    except Exception as e:
+                        logger.debug("Failed to scrobble from %s: %s", platform_id, e)
+                        continue
+
+                logger.info("No currently-playing song found")
+            except Exception as e:
+                logger.error("Scrobble action failed: %s", e, exc_info=True)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _ensure_initialized(
         self, platform_id: str, callbacks: KeybindCallbacks

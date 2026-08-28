@@ -24,6 +24,7 @@ from cli import (
     run_login,
     run_logout,
     run_refresh,
+    run_scrobble,
 )
 from utils.logging_config import configure_logging
 
@@ -54,6 +55,11 @@ def parse_args():
     p.add_argument(
         "--add-song", "-a", dest="add_song_targets", metavar="PLAYLISTS",
         help='add the currently-playing song to playlist(s), e.g. "1,2,3", "1-3"',
+    )
+    p.add_argument(
+        "--scrobble", "-s", dest="scrobble_only", action="store_true",
+        help="scrobble the currently-playing song to Last.fm, without "
+             "adding it to any playlist",
     )
     p.add_argument(
         "--playlist", "-p", dest="playlist_args",
@@ -132,6 +138,8 @@ def main():
         sys.exit(run_logout(args.logout_platform))
     if args.add_song_targets is not None:
         sys.exit(run_add(args.add_song_targets))
+    if args.scrobble_only:
+        sys.exit(run_scrobble())
     if args.playlist_args is not None:
         verb = args.playlist_args[0].lower()
         rest = ",".join(args.playlist_args[1:])

@@ -5,6 +5,7 @@ playlist registry from the terminal.
 Entry points (all equivalent):
     python -m app -a 1,2,3
     python -m app --add-song "Chill Mix"
+    python -m app -s                    # scrobble the currently-playing song
     python -m app -p add "https://music.youtube.com/playlist?list=PL..."
     python -m app -p del 1,"Chill Mix"
     python -m app -p ref 1,"Chill Mix"
@@ -42,6 +43,7 @@ from services.playlist_store import PlaylistStore
 from services.playlist_sync import PlaylistSyncService
 from services.playlist_url import parse_playlist_url
 from services.song_manager import SongManager
+from utils.config import get_setting
 from utils.logging_config import user_log
 from utils.thumbnail import ThumbnailService
 
@@ -312,6 +314,7 @@ def run_add(spec: str) -> int:
 
     plugin_registry = get_default_registry()
     song_manager = SongManager()
+    integrations = _build_integrations()
 
     # Legacy registry entries predate the "platform" field - default them
     # to YouTube Music, matching PlaylistStore.
@@ -366,7 +369,7 @@ def run_add(spec: str) -> int:
         else:
             ok, message = _run_flow(
                 ctx["flow"], name, url=ctx["url"], song_data=ctx["song_data"],
-                playlist_id=entry.get("playlist_id") or None,
+                playlist_id=entry.get("playlist_id") or None, integrations=integrations,
             )
 
         line = f'#{number} "{name}" ({platform}): {message}'
@@ -555,6 +558,73 @@ def run_refresh(spec: str) -> int:
     return 0 if failures == 0 else 1
 
 
+def run_scrobble() -> int:
+    """Scrobble the currently-playing song without adding to any playlist.
+
+    For ``api``-type platforms (Spotify), reads the currently-playing track
+    directly.  For ``extension``-type platforms (YouTube Music), captures
+    once via the browser extension (30 s wait).  Requires a
+    ``ScrobbleCapable`` integration (Last.fm) to be loaded and
+    authenticated.
+
+    Composable with compositor shortcuts:
+        playlistmanager -s
+    """
+    plugin_registry = get_default_registry()
+    song_manager = SongManager()
+    integrations = _build_integrations()
+
+    # Find the ScrobbleCapable backend (Last.fm).
+    scrobble_integ = next(
+        (
+            integ
+            for integ in integrations.get_all().values()
+            if getattr(integ, "scrobble", None) is not None
+        ),
+        None,
+    )
+    if scrobble_integ is None:
+        print("error: no scrobble backend available (is Last.fm configured?)",
+              file=sys.stderr)
+        return 1
+
+    # Try each authenticated platform's capture path until one produces a
+    # song — mirrors keybind_controller._scrobble_current_action.
+    for platform_id, integration in integrations.get_all().items():
+        if not integration.is_authenticated():
+            continue
+
+        plugin = plugin_registry.get(platform_id)
+        if plugin is None or not plugin.flow_class:
+            continue
+
+        try:
+            flow_cls = plugin.import_flow()
+            if plugin.flow_type == "extension":
+                flow = flow_cls(integration, song_manager, plugin.build_receiver())
+            else:
+                flow = flow_cls(integration, song_manager)
+
+            _url, song_data, error = flow.capture(URL_WAIT_TIMEOUT)
+            if song_data:
+                if scrobble_integ.scrobble(song_data):
+                    title = song_data.get("title", "unknown")
+                    artist = (song_data.get("artists") or ["unknown"])[0]
+                    print(f"Scrobbled: {artist} - {title}", flush=True)
+                    return 0
+                print(f"error: scrobble failed for "
+                      f"{song_data.get('title', 'unknown')}", file=sys.stderr)
+                return 1
+            # Nothing playing on this platform — try the next.
+            logger.debug("No song playing on %s: %s", platform_id, error)
+        except Exception as e:
+            logger.debug("Capture failed on %s: %s", platform_id, e)
+            continue
+
+    print("error: no currently-playing song found", file=sys.stderr)
+    return 1
+
+
 def _stored_refresh_token() -> Optional[str]:
     """Read the refresh token from the saved spotify.json, if any.
 
@@ -637,6 +707,18 @@ def run_login(
         )
         return 0
 
+    if platform == "lastfm":
+        # Last.fm auth needs the browser-authorization + auth.getSession
+        # flow that only the GUI login dialog drives (api key + secret, then
+        # approve in the browser).  No useful non-interactive path.
+        print(
+            "lastfm: GUI-only at the moment - open the app's Settings -> "
+            "Login/Accounts -> Last.fm, enter your API key + secret, and "
+            "approve the browser authorization",
+            file=sys.stderr,
+        )
+        return 2
+
     # Spotify.  Flags override; missing values are prompted interactively
     # (hidden input for the secret and the token, like sudo).
     if not client_id:
@@ -718,7 +800,7 @@ def run_logout(platform: str) -> int:
 
 
 def _run_flow(
-    flow, playlist_name: str, url=None, song_data=None, playlist_id=None
+    flow, playlist_name: str, url=None, song_data=None, playlist_id=None, integrations=None
 ) -> Tuple[bool, str]:
     """Run one add-flow; returns (ok, message) - message is the line tail."""
     outcome = {"ok": None, "message": ""}
@@ -743,6 +825,22 @@ def _run_flow(
             )
         else:
             outcome["message"] = result.get("message", "Added")
+
+        # Scrobble the song if auto-scrobble is enabled and a ScrobbleCapable
+        # integration is available.
+        if status == "added" and get_setting("scrobble_on_add"):
+            song_data = result.get("song", {})
+            if song_data and integrations:
+                try:
+                    scrobble_integ = next(
+                        (integ for integ in integrations.get_all().values()
+                         if getattr(integ, "scrobble", None) is not None),
+                        None,
+                    )
+                    if scrobble_integ is not None:
+                        scrobble_integ.scrobble(song_data)
+                except Exception as e:
+                    logger.debug("Failed to scrobble song: %s", e)
 
     try:
         flow.execute_flow(

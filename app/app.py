@@ -144,6 +144,19 @@ class App:
                     f"YouTube Music authentication failed:\n{e}",
                 )
 
+        lf_integration = self.integrations.get("lastfm")
+        if lf_integration is not None:
+            # Last.fm authenticate() reads lastfm.json from disk only - no
+            # network round trip - so it can run synchronously here (same as
+            # YouTube Music).  An unconfigured plugin returns False quietly.
+            try:
+                if lf_integration.authenticate():
+                    user_log(logger, "Last.fm authenticated")
+                else:
+                    logger.debug("Last.fm not configured (no lastfm.json)")
+            except Exception as e:
+                logger.error("Last.fm auth failed: %s", e)
+
         sp_integration = self.integrations.get("spotify")
         sp_auth = sp_integration.auth_manager if sp_integration is not None else None
         if sp_integration is None:

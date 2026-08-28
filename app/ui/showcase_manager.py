@@ -19,6 +19,7 @@ from services.playlist_store import PlaylistStore
 from services.playlist_url import build_song_url
 from services.song_manager import SongManager
 from ui.tooltip import ToolTip
+from utils.config import get_setting
 from utils.icons import IconService
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
@@ -38,6 +39,8 @@ class ShowcaseManager:
         *,
         song_placeholder_img=None,
         close_playlist_img=None,
+        heart_empty_img=None,
+        heart_full_img=None,
         make_keybind_callbacks=None,
         on_reload_requested=None,
         get_search_results_height=None,
@@ -53,6 +56,8 @@ class ShowcaseManager:
         self._playlist_cover_img_path = playlist_cover_img_path
         self.song_placeholder_img = song_placeholder_img or self._load_song_placeholder()
         self._close_playlist_img = close_playlist_img
+        self._heart_empty_img = heart_empty_img
+        self._heart_full_img = heart_full_img
         self._make_keybind_callbacks = make_keybind_callbacks
         self._on_reload_requested = on_reload_requested
         self._get_search_results_height = get_search_results_height
@@ -277,8 +282,9 @@ class ShowcaseManager:
                 **remove_cols,
                 highlightthickness=0,
                 relief="raised",
-                command=lambda f=main_frame, sid=song.get("id"), tid=song.get("track_id"): (
-                    self._on_remove_song(f, sid, tid)
+                command=lambda f=main_frame, sid=song.get("id"), tid=song.get("track_id"),
+                         title=song.get("title"), artists=song.get("artists"): (
+                    self._on_remove_song(f, sid, tid, title, artists)
                 ),
             )
             ToolTip(remove_btn, "Remove from playlist")
@@ -288,8 +294,55 @@ class ShowcaseManager:
                 padx=(0, 2), pady=(2, 0),
             )
             song_name.grid(row=grid_row, column=1, sticky="nsew")
-            remove_btn.grid(row=grid_row, column=2, rowspan=2, sticky="ne")
+            remove_btn.grid(row=grid_row, column=2, sticky="ne")
             song_artists.grid(row=grid_row + 1, column=1, sticky="nsew")
+
+            # Like button (♥/♡) — shown only if like_button setting is enabled
+            if get_setting("like_button"):
+                like_btn = tk.Button(
+                    showcase,
+                    image=self._heart_empty_img,
+                    cursor="hand2",
+                    **btn_colors(C["button_playlist_bg"], C["button_playlist_fg"]),
+                    highlightthickness=0,
+                    relief="raised",
+                )
+                # Command set AFTER construction: the default arg ``b=like_btn``
+                # is evaluated eagerly (at lambda creation), so referencing
+                # ``like_btn`` inside the constructor would read an unbound
+                # variable (UnboundLocalError).  Doing it here captures the
+                # per-iteration value in the loop.
+                like_btn.config(
+                    command=lambda t=song.get("title"), a=song.get("artists", []), b=like_btn: (
+                        self._on_like_toggle(t, a, b)
+                    )
+                )
+                ToolTip(like_btn, "Like on Last.fm")
+                like_btn.grid(row=grid_row + 1, column=2, sticky="ne")
+
+                # Load like state asynchronously
+                artist = song.get("artists", [])[0] if song.get("artists") else ""
+                title = song.get("title", "")
+                if artist and title:
+                    def load_like_state(btn=like_btn, a=artist, t=title):
+                        scrobble_cap = next(
+                            (
+                                getattr(integ, "is_loved", None)
+                                for integ in (self.integrations.get_all().values() if self.integrations else [])
+                                if getattr(integ, "is_loved", None) is not None
+                            ),
+                            None,
+                        )
+                        if scrobble_cap is None:
+                            return
+                        is_loved = scrobble_cap(a, t)
+                        if is_loved is not None:
+                            try:
+                                self.root.after(0, lambda: btn.config(image=self._heart_full_img if is_loved else self._heart_empty_img))
+                            except Exception:
+                                logger.debug("Window closed while loading like state", exc_info=True)
+
+                    threading.Thread(target=load_like_state, daemon=True).start()
 
             track_id = song.get("track_id") or ""
             if track_id and platform:
@@ -425,8 +478,10 @@ class ShowcaseManager:
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_remove_song(
-        self, main_frame: tk.Frame, song_id: int, track_id: str
+        self, main_frame: tk.Frame, song_id: int, track_id: str, title: str = "", artists: list = None
     ) -> None:
+        if artists is None:
+            artists = []
         card = next((c for c in self._card_grid.cards if c.frame is main_frame), None)
         if card is None:
             return
@@ -481,6 +536,19 @@ class ShowcaseManager:
                         platform=platform,
                         playlist_id=playlist_id,
                     )
+                    # Delete scrobble if Last.fm integration is available and auto-scrobble is on
+                    if get_setting("scrobble_on_add"):
+                        scrobble_integ = next(
+                            (integ for integ in (self.integrations.get_all().values() if self.integrations else [])
+                             if getattr(integ, "delete_scrobble", None) is not None),
+                            None,
+                        )
+                        if scrobble_integ is not None and title and artists:
+                            artist = artists[0] if isinstance(artists, list) else str(artists)
+                            try:
+                                scrobble_integ.delete_scrobble(artist, title)
+                            except Exception as e:
+                                logger.debug("Failed to delete scrobble for %s: %s", title, e)
 
             def done() -> None:
                 card.removing = False
@@ -517,6 +585,67 @@ class ShowcaseManager:
                 )
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _on_like_toggle(
+        self, title: str, artists: list, like_btn: tk.Button | None = None
+    ) -> None:
+        """Toggle the like status of a song on Last.fm.
+
+        The love/unlove round trip runs in a daemon thread (it is a Last.fm
+        API call).  When *like_btn* is given, its glyph is flipped on the
+        main thread to match the new loved state once the API confirms.
+        """
+        if not artists or not title:
+            return
+
+        # Find a ScrobbleCapable integration
+        scrobble_integ = next(
+            (integ for integ in (self.integrations.get_all().values() if self.integrations else [])
+             if getattr(integ, "unlove", None) is not None and getattr(integ, "is_loved", None) is not None),
+            None,
+        )
+        if scrobble_integ is None:
+            return
+
+        artist = artists[0] if isinstance(artists, list) else str(artists)
+
+        def work() -> None:
+            try:
+                is_loved = scrobble_integ.is_loved(artist, title)
+                new_state = None  # leave the glyph alone on uncertainty
+                if is_loved is True:
+                    scrobble_integ.unlove(artist, title)
+                    new_state = False
+                elif is_loved is False:
+                    scrobble_integ.love(artist, title)
+                    new_state = True
+                if like_btn is not None and new_state is not None:
+                    self._apply_like_glyph(like_btn, new_state)
+            except Exception as e:
+                logger.debug("Failed to toggle like for %s: %s", title, e)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_like_glyph(self, like_btn: tk.Button, loved: bool) -> None:
+        """Flip a like button's glyph on the main thread (guarded).
+
+        Called from a worker thread, so the update must be marshalled to the
+        tkinter main thread via ``after`` and guarded in case the window was
+        destroyed or the button no longer exists.
+        """
+        try:
+            self.root.after(
+                0,
+                lambda: (
+                    like_btn.config(
+                        image=self._heart_full_img if loved else self._heart_empty_img
+                    )
+                    if like_btn.winfo_exists()
+                    else None
+                ),
+            )
+        except Exception:
+            logger.debug("Window closed while updating like glyph", exc_info=True)
 
     @staticmethod
     def _frame_buttons(main_frame: tk.Frame) -> list:
