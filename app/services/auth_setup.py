@@ -279,10 +279,11 @@ def save_and_verify_lastfm_credentials(api_key: str, api_secret: str) -> Dict[st
 # Multi-platform credential deletion (CLI --logout)
 # ---------------------------------------------------------------------------
 
-# platform id -> primary credential file(s) deleted on logout.
-# Deliberately only the auth-dir file - NOT the repo fallback browser.json
-# copies (song cli.md 15.12.2: CLI and GUI logins are never used
-# simultaneously, so a stale fallback copy is not a practical concern).
+# platform id -> credential file(s) deleted on logout, used as the
+# fallback when the manifest cannot be read (plugin dir missing or a
+# broken plugin.json).  The primary source is the plugin manifest: the
+# auth-dir file declared via ``auth_file`` plus any ``auth_file_fallbacks``
+# (legacy repo-root copies), resolved by PluginInfo.auth_paths.
 PLATFORM_CREDENTIAL_FILES = {
     "youtube_music": [BROWSER_FILE],
     "spotify": [SPOTIFY_FILE],
@@ -290,34 +291,42 @@ PLATFORM_CREDENTIAL_FILES = {
 }
 
 
-def build_credential_files(plugin_registry) -> Dict[str, List[Path]]:
-    """Build the platform -> credential-files mapping from the manifests.
+def _credential_paths(plugin_registry, platform: str) -> List[Path]:
+    """Every file that may hold *platform*'s credentials.
 
-    The Step 1 replacement for the hardcoded :data:`PLATFORM_CREDENTIAL_FILES`
-    once every platform declares ``auth_file`` in its plugin.json - see
-    0.3.0/step1.md.
+    Manifest-declared paths (``PluginInfo.auth_paths``: auth-dir file +
+    declared repo-root fallbacks) first, then the hardcoded map entries
+    for the known platforms as defense in depth.  Deleting all of them
+    is what makes logout / uninstall complete - a surviving fallback
+    browser.json would otherwise re-authenticate the platform on the
+    next login.
     """
-    out: Dict[str, List[Path]] = {}
-    for pid, plugin in plugin_registry.get_all().items():
-        if plugin.auth_file:
-            out[pid] = [AUTH_DIR / plugin.auth_file]
-    return out
+    paths: List[Path] = list(PLATFORM_CREDENTIAL_FILES.get(platform, []))
+    if plugin_registry is not None:
+        plugin = plugin_registry.get(platform)
+        if plugin is not None:
+            for manifest_path in plugin.auth_paths:
+                if manifest_path not in paths:
+                    paths.append(manifest_path)
+    return paths
 
 
-def delete_platform_credentials(platform: str) -> Tuple[List[Path], List[Path]]:
+def delete_platform_credentials(
+    platform: str, plugin_registry=None
+) -> Tuple[List[Path], List[Path]]:
     """Delete every credential file listed for *platform*.
 
     Returns ``(deleted, missing)`` - the files that were removed and the
     ones that did not exist.  Raises ``OSError`` on the first failed
     unlink so callers can report the error.
 
-    Adding a future platform: declare ``auth_file`` in its plugin.json
-    (and switch :data:`PLATFORM_CREDENTIAL_FILES` over to
-    :func:`build_credential_files`).
+    *plugin_registry*, when given, supplies the manifest-declared paths
+    (auth-dir file + ``auth_file_fallbacks``); without it the hardcoded
+    :data:`PLATFORM_CREDENTIAL_FILES` map applies.
     """
     deleted: List[Path] = []
     missing: List[Path] = []
-    for path in PLATFORM_CREDENTIAL_FILES.get(platform, []):
+    for path in _credential_paths(plugin_registry, platform):
         if path.exists():
             path.unlink()
             user_log(logger, "Deleted credentials: %s", path)

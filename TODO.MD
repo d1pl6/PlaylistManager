@@ -21,3 +21,7 @@ album img	| artists
 [ ] Deezer integration
 
 [ ] SoundCloud integration
+
+[ ] Docs & Contribution
+
+[ ] Executable

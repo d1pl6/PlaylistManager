@@ -20,11 +20,13 @@ from cli import (
     run_add,
     run_add_url,
     run_del,
+    run_install,
     run_list,
     run_login,
     run_logout,
     run_refresh,
     run_scrobble,
+    run_uninstall,
 )
 from utils.logging_config import configure_logging
 
@@ -82,6 +84,16 @@ def parse_args():
              "entries and local databases",
     )
     p.add_argument(
+        "--install", dest="install_platform", metavar="PLATFORM",
+        help='install (download) a platform plugin, e.g. "spotify"; '
+             'use "all" to install every supported platform',
+    )
+    p.add_argument(
+        "--uninstall", dest="uninstall_platform", metavar="PLATFORM",
+        help='remove a platform plugin and its local data, e.g. "spotify"; '
+             'use "all" to uninstall every installed platform',
+    )
+    p.add_argument(
         "--client-id", dest="client_id", default=None,
         help="Spotify client ID (for --login spotify)",
     )
@@ -136,6 +148,10 @@ def main():
         )
     if args.logout_platform is not None:
         sys.exit(run_logout(args.logout_platform))
+    if args.install_platform is not None:
+        sys.exit(run_install(args.install_platform))
+    if args.uninstall_platform is not None:
+        sys.exit(run_uninstall(args.uninstall_platform))
     if args.add_song_targets is not None:
         sys.exit(run_add(args.add_song_targets))
     if args.scrobble_only:

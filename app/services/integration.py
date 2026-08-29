@@ -168,6 +168,19 @@ class IntegrationRegistry:
     def get(self, integration_id: str) -> Optional[BaseIntegration]:
         return self._integrations.get(integration_id)
 
+    def unregister(self, platform_id: str) -> None:
+        """Drop one integration (Manage dialog uninstall path).
+
+        Consumers iterate ``get_all()`` / ``get_active()``, so the id
+        simply disappears from every derived view.  An in-flight flow
+        that already captured the object keeps running to completion -
+        its platform-first write path fails loudly the same way any API
+        error does.
+        """
+        removed = self._integrations.pop(platform_id, None)
+        if removed is not None:
+            logger.info("Unregistered integration '%s'", platform_id)
+
 
 class BaseFlowController:
     """Protocol for platform-specific flow controllers.

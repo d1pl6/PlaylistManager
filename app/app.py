@@ -6,7 +6,7 @@ from tkinter import messagebox
 
 from controllers.app_controller import AppController
 from controllers.keybind_controller import KeybindController
-from plugin_loader import PluginRegistry
+from plugin_loader import PluginInfo, PluginRegistry
 from services.integration import IntegrationRegistry
 from services.playlist_store import PlaylistStore
 from services.tray import TrayService
@@ -45,42 +45,7 @@ class App:
 
         self.integrations = IntegrationRegistry()
         for pid, plugin in self.plugin_registry.get_all().items():
-            try:
-                integration_cls = plugin.import_integration()
-            except ImportError as e:
-                # Optional dependency of this plugin is missing - degrade
-                # gracefully exactly like the pre-plugin code did.
-                user_log(
-                    logger,
-                    "%s integration unavailable (%s)",
-                    plugin.display_name,
-                    e,
-                )
-                continue
-            except Exception as e:
-                logger.warning("Plugin %s failed to load: %s", pid, e)
-                continue
-
-            auth_manager = None
-            if plugin.auth_module:
-                try:
-                    auth_manager = plugin.import_auth_attr()
-                except ImportError as e:
-                    user_log(
-                        logger,
-                        "%s integration unavailable (%s)",
-                        plugin.display_name,
-                        e,
-                    )
-                    continue
-                except Exception as e:
-                    logger.warning(
-                        "Plugin %s: auth manager unavailable (%s)", pid, e
-                    )
-                    continue
-
-            integration = integration_cls(auth_manager=auth_manager)
-            self.integrations.register(integration)
+            self._register_plugin(plugin)
 
         self._bootstrap_auth()
 
@@ -99,11 +64,92 @@ class App:
             integrations=self.integrations,
             keybind_controller=keybind_controller,
             app_controller=app_controller,
+            plugin_registry=self.plugin_registry,
         )
 
         PlaylistStore.ensure_playlists_file()
         if get_setting("center_windows", True):
             center_window(self.root)
+
+    def _register_plugin(self, plugin: PluginInfo) -> bool:
+        """Load one plugin's integration into the live registry.
+
+        Returns True on success.  Each step is guarded: a broken plugin
+        (or a missing optional dependency) is reported and skipped
+        instead of taking down startup or the other platforms.
+        """
+        try:
+            integration_cls = plugin.import_integration()
+        except ImportError as e:
+            # Optional dependency of this plugin is missing - degrade
+            # gracefully exactly like the pre-plugin code did.
+            user_log(
+                logger,
+                "%s integration unavailable (%s)",
+                plugin.display_name,
+                e,
+            )
+            return False
+        except Exception as e:
+            logger.warning("Plugin %s failed to load: %s", plugin.id, e)
+            return False
+
+        auth_manager = None
+        if plugin.auth_module:
+            try:
+                auth_manager = plugin.import_auth_attr()
+            except ImportError as e:
+                user_log(
+                    logger,
+                    "%s integration unavailable (%s)",
+                    plugin.display_name,
+                    e,
+                )
+                return False
+            except Exception as e:
+                logger.warning(
+                    "Plugin %s: auth manager unavailable (%s)", plugin.id, e
+                )
+                return False
+
+        try:
+            integration = integration_cls(auth_manager=auth_manager)
+        except Exception as e:
+            logger.warning("Plugin %s failed to instantiate: %s", plugin.id, e)
+            return False
+        self.integrations.register(integration)
+        return True
+
+    def reload_plugins(self) -> None:
+        """Re-scan integrations/ and load integrations new since startup.
+
+        Called by the Manage dialog's ``on_plugins_changed`` after a
+        download or uninstall so the change applies without a restart:
+
+        * the plugin registry object is shared with KeybindController and
+          MainWindow - re-discovering it makes removed plugins vanish
+          (their flows already stopped) and freshly downloaded ones
+          immediately keybind-/login-capable;
+        * the shared IntegrationRegistry is mutated by registering new
+          integrations; already-registered ids are left untouched so
+          in-flight flows never lose their integration object.
+        """
+        self.plugin_registry.discover()
+        # Keep the process-wide get_default_registry() singleton (the
+        # fallback used by build_playlist_url / build_song_url and the CLI)
+        # in lockstep with the live registry - otherwise post-uninstall URL
+        # building for a removed platform resolves through a stale copy.
+        try:
+            from plugin_loader import get_default_registry
+
+            get_default_registry().discover()
+        except Exception:
+            logger.exception("Failed to refresh the default plugin registry")
+        for pid, plugin in self.plugin_registry.get_all().items():
+            if pid in self.integrations.get_all():
+                continue
+            if self._register_plugin(plugin):
+                user_log(logger, "%s integration loaded", plugin.display_name)
 
     def _bootstrap_auth(self) -> None:
         """Initial authentication for every registered integration.

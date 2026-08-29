@@ -228,7 +228,7 @@ def get_song(pair_key: str) -> Optional[dict]:
 
 
 def set_song(pair_key: str, song: str) -> None:
-    if song not in VALID_songS:
+    if song not in VALID_SONGS:
         raise ValueError(f"Unknown duplicate-check song {song!r}")
     with _lock:
         data = _load()
@@ -300,6 +300,42 @@ def clear_errors() -> int:
             data["errors"] = []
             _write(data)
         return n
+
+
+def purge_platform(platform: str) -> Tuple[int, int, int]:
+    """Drop every record referencing *platform* (uninstall cleanup).
+
+    Removes pending duplicate records, pair-memory entries (keys start
+    with ``<platform>|`` - see :func:`make_pair_key`) and error-log
+    entries for the platform.  Returns the removed counts as
+    ``(pending, songs, errors)``.
+    """
+    with _lock:
+        data = _load()
+        pending = list(data.get("pending", []))
+        songs = dict(data.get("songs", {}))
+        errors = list(data.get("errors", []))
+
+        kept_pending = [r for r in pending if r.get("platform") != platform]
+        kept_songs = {
+            k: v for k, v in songs.items() if not k.startswith(platform + "|")
+        }
+        kept_errors = [e for e in errors if e.get("platform") != platform]
+
+        if (
+            len(kept_pending) != len(pending)
+            or len(kept_songs) != len(songs)
+            or len(kept_errors) != len(errors)
+        ):
+            data["pending"] = kept_pending
+            data["songs"] = kept_songs
+            data["errors"] = kept_errors
+            _write(data)
+        return (
+            len(pending) - len(kept_pending),
+            len(songs) - len(kept_songs),
+            len(errors) - len(kept_errors),
+        )
 
 
 # ----------------------------------------------------------------------

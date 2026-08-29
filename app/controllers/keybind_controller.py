@@ -454,10 +454,19 @@ class KeybindController:
             logger.error("Keybind flow error: %s", error_msg)
             # Persist for the activity window's Errors tab - the red card
             # status alone is gone at the next keybind.
-            try:
-                duplicate_queue.record_error(playlist_name, platform, error_msg)
-            except Exception:
-                logger.debug("Could not log flow error to extra.json", exc_info=True)
+            if self.integrations.get(platform) is None:
+                # The platform was uninstalled mid-flow (Manage dialog):
+                # its purge already ran, so recording an error now would
+                # resurrect a dead platform in the Errors tab forever.
+                logger.debug(
+                    "Platform '%s' no longer registered - skipping error record",
+                    platform,
+                )
+            else:
+                try:
+                    duplicate_queue.record_error(playlist_name, platform, error_msg)
+                except Exception:
+                    logger.debug("Could not log flow error to extra.json", exc_info=True)
             _schedule_ui(
                 lambda: (
                     callbacks.on_reset("readonly"),
@@ -573,8 +582,19 @@ class KeybindController:
         Captures the current song via the platform's existing capture path
         (exactly as add-flow would), then scrobbles it if Last.fm is available.
         Runs on a worker thread to avoid blocking the UI during capture.
+
+        Holds ``_flow_busy`` for the capture + scrobble so a standalone
+        scrobble action does not run its receiver concurrently with an
+        add-flow's receiver wait (both are extension-capture on the same
+        local port) and double-handle the same command.
         """
         def work() -> None:
+            # Non-blocking: if an add-flow is mid-capture, skip the scrobble
+            # rather than queue behind it (a stale/duplicate command is
+            # worse than no-op).
+            if not self._flow_busy.acquire(blocking=False):
+                logger.warning("Flow already in progress, ignoring scrobble action")
+                return
             try:
                 scrobble_integ = next(
                     (integ for integ in self.integrations.get_all().values()
@@ -595,7 +615,11 @@ class KeybindController:
                         continue
 
                     try:
-                        # Ensure flow is initialized for this platform
+                        # Ensure flow is initialized for this platform.  The
+                        # KeybindCallbacks is a throwaway: it is only used on
+                        # the LazyInit path, and that path is skipped (early
+                        # return) when the flow is already in ``self._flows``,
+                        # so the real add-flow callbacks are never displaced.
                         if not self._ensure_initialized(platform_id, KeybindCallbacks()):
                             continue
 
@@ -623,6 +647,8 @@ class KeybindController:
                 logger.info("No currently-playing song found")
             except Exception as e:
                 logger.error("Scrobble action failed: %s", e, exc_info=True)
+            finally:
+                self._flow_busy.release()
 
         threading.Thread(target=work, daemon=True).start()
 

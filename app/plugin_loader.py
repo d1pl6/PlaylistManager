@@ -9,6 +9,7 @@ Each supported music platform lives in its own top-level package under
       "id": "youtube_music",
       "display_name": "YouTube Music",
       "auth_file": "browser.json",
+      "auth_file_fallbacks": ["browser.json"],
       "integration_class": "YouTubeMusicIntegration",
       "flow_type": "extension",
       "flow_module": "flow",
@@ -20,6 +21,12 @@ Each supported music platform lives in its own top-level package under
       "playlist_url_template": "https://{host}/playlist?list={id}",
       "song_url_template": "https://{host}/watch?v={id}"
     }
+
+``auth_file_fallbacks`` (optional) lists additional lookup locations for
+the credential file, each relative to the repo root (legacy fallbacks
+outside the platformdirs auth dir).  ``PluginInfo.auth_paths`` returns the
+auth-dir file plus all fallbacks, so logout / uninstall can delete every
+path that could hold the credentials.
 
 Discovery scans the directory tree and reads the manifests. It never
 imports plugin Python code at scan time - every class reference below is
@@ -90,6 +97,11 @@ class PluginInfo:
     directory: Path
     # Credential filename inside {platformdirs}/auth/ ("spotify.json").
     auth_file: str = ""
+    # Additional lookup locations for the credential file, each relative to
+    # the repo root (legacy fallbacks outside the platformdirs auth dir).
+    # Deleted on logout/uninstall alongside auth_file so a stale fallback
+    # copy cannot resurrect auth after the platform is removed.
+    auth_file_fallbacks: List[str] = field(default_factory=list)
     # Hostnames this plugin handles for playlist URL parsing.
     url_hosts: List[str] = field(default_factory=list)
     # "extension" = add-flow needs a browser-extension URL receiver,
@@ -106,6 +118,15 @@ class PluginInfo:
     flow_class: str = ""
     receiver_module: str = ""
     receiver_class: str = ""
+    # Optional login-dialog tile: a callable ``(parent, on_success)`` invoked
+    # when the user clicks the platform's tile in the login dialog.  Declares
+    # a module + attribute like the other lazy class refs.  When omitted the
+    # login dialog falls back to its built-in handlers (the three bundled
+    # platforms).
+    login_module: str = ""
+    login_class: str = ""
+    # Optional logo for the login tile, relative to the plugin directory.
+    login_logo: str = ""
     # TCP port the extension-type receiver binds (plugin.json
     # "receiver_port"). None = receiver module's own default applies.
     receiver_port: Optional[int] = None
@@ -165,6 +186,32 @@ class PluginInfo:
         """Lazily import and return the URL-receiver class."""
         return self._class("receiver_module", "receiver_class")
 
+    def import_login(self):
+        """Lazily import and return the login-dialog handler callable.
+
+        The handler is invoked as ``handler(parent, on_success)`` from the
+        login dialog when the user clicks the platform's tile.
+        """
+        return self._class("login_module", "login_class")
+
+    @property
+    def login_logo_path(self) -> Optional[Path]:
+        """Login-tile logo resolved against the plugin directory (if set).
+
+        None when no ``login_logo`` is declared or the declared path
+        escapes the plugin directory (refused with a warning).
+        """
+        if not self.login_logo:
+            return None
+        candidate = (self.directory / self.login_logo).resolve()
+        if not candidate.is_relative_to(self.directory.resolve()):
+            logger.warning(
+                "plugin '%s': login_logo %r escapes the plugin directory",
+                self.id, self.login_logo,
+            )
+            return None
+        return candidate
+
     def build_receiver(self, **kwargs):
         """Construct a fresh receiver with the manifest-declared port.
 
@@ -198,6 +245,32 @@ class PluginInfo:
         except ImportError:  # pragma: no cover - platformdirs is a hard dep
             return None
         return Path(user_config_dir("playlistmanager")) / "auth" / name
+
+    @property
+    def auth_paths(self) -> List[Path]:
+        """Every path that may hold this plugin's credentials.
+
+        ``auth_path`` (the platformdirs auth dir) plus each
+        ``auth_file_fallbacks`` entry resolved against the repo root.
+        Deliberately defensive: the fallbacks are resolved even when
+        ``auth_path`` came back None (badly declared auth_file), so a
+        credential cleanup cannot silently miss declared paths.
+        """
+        paths: List[Path] = []
+        if self.auth_path is not None:
+            paths.append(self.auth_path)
+        root = _repo_root()
+        for rel in self.auth_file_fallbacks:
+            candidate = (root / rel).resolve()
+            if not candidate.is_relative_to(root) or candidate == root:
+                logger.warning(
+                    "plugin '%s': auth_file_fallbacks entry %r escapes the "
+                    "repo root - skipping credential cleanup for it",
+                    self.id, rel,
+                )
+                continue
+            paths.append(candidate)
+        return paths
 
     def __str__(self) -> str:  # pragma: no cover - debug aid
         return f"<Plugin {self.id} ({self.display_name})>"
@@ -274,6 +347,7 @@ class PluginRegistry:
             ("auth_module", "auth_attr"),
             ("flow_module", "flow_class"),
             ("receiver_module", "receiver_class"),
+            ("login_module", "login_class"),
         )
         for module_key, class_key in pairs:
             if bool(raw.get(module_key)) != bool(raw.get(class_key)):
@@ -321,6 +395,7 @@ class PluginRegistry:
             display_name=raw["display_name"],
             directory=manifest_path.parent,
             auth_file=raw.get("auth_file", ""),
+            auth_file_fallbacks=self._validate_fallback_paths(plugin_id, raw.get("auth_file_fallbacks", [])),
             url_hosts=list(raw.get("url_hosts", [])),
             flow_type=flow_type,
             integration_module=raw.get("integration_module") or "integration",
@@ -331,10 +406,49 @@ class PluginRegistry:
             flow_class=raw.get("flow_class", ""),
             receiver_module=raw.get("receiver_module", ""),
             receiver_class=raw.get("receiver_class", ""),
+            login_module=raw.get("login_module", ""),
+            login_class=raw.get("login_class", ""),
+            login_logo=raw.get("login_logo", ""),
             receiver_port=receiver_port,
             playlist_url_template=raw.get("playlist_url_template", ""),
             song_url_template=raw.get("song_url_template", ""),
         )
+
+    def _validate_fallback_paths(self, plugin_id: str, raw: object) -> List[str]:
+        """Sanitize the auth_file_fallbacks manifest value.
+
+        Entries are repo-root-relative paths: must be plain strings, not
+        absolute and without any ``..`` components.  A malformed entry is
+        dropped with a warning instead of failing the whole plugin (the
+        plugin-dir fallback copy is deleted anyway with the directory).
+        """
+        if not isinstance(raw, list):
+            if raw:
+                logger.warning(
+                    "Plugin '%s': auth_file_fallbacks must be a list of "
+                    "repo-root-relative paths - ignoring", plugin_id,
+                )
+            return []
+        from pathlib import PurePosixPath  # local import: only needed here
+
+        out: List[str] = []
+        for entry in raw:
+            if not isinstance(entry, str) or not entry:
+                logger.warning(
+                    "Plugin '%s': ignoring non-string auth_file_fallbacks "
+                    "entry %r", plugin_id, entry,
+                )
+                continue
+            p = PurePosixPath(entry)
+            if p.is_absolute() or ".." in p.parts:
+                logger.warning(
+                    "Plugin '%s': auth_file_fallbacks entry %r must be a "
+                    "relative path without '..' components - ignoring",
+                    plugin_id, entry,
+                )
+                continue
+            out.append(entry)
+        return out
 
     @property
     def base_dir(self) -> Path:
@@ -349,6 +463,33 @@ class PluginRegistry:
 
     def get_platform_ids(self) -> List[str]:
         return list(self._plugins.keys())
+
+    def unregister(self, plugin_id: str) -> None:
+        """Drop one plugin from the registry (Manage dialog uninstall path).
+
+        Also evicts the plugin's modules from ``sys.modules`` so a later
+        re-download re-imports the fresh code from disk instead of
+        resurrecting the old module objects through the import cache.
+        Only the plugin's own submodules are purged (``integrations.<dir>.``
+        prefix); the package itself stays importable so sibling plugins or
+        lazy importers that hold a reference keep working.
+        """
+        info = self._plugins.pop(plugin_id, None)
+        if info is None:
+            return
+        prefix = f"integrations.{info.directory.name}."
+        for module_name in [m for m in sys.modules if m.startswith(prefix)]:
+            try:
+                del sys.modules[module_name]
+            except KeyError:
+                pass
+        # Drop the lazy-import caches on the PluginInfo too, so a caller
+        # that kept a reference cannot re-lift the old classes.
+        for key in [k for k in info.__dict__ if k.startswith("_module_")]:
+            info.__dict__.pop(key, None)
+        logger.info(
+            "Unregistered plugin '%s' (%s)", plugin_id, info.display_name
+        )
 
     def __iter__(self):
         return iter(sorted(self._plugins.values(), key=lambda p: p.id))

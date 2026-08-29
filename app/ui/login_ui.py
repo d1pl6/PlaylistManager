@@ -35,15 +35,34 @@ LOGOS_DIR = ASSETS_DIR / "logos"
 # ======================================================================
 
 
-def show_login_dialog(parent, on_success=None, integrations=None):
+def show_login_dialog(
+    parent,
+    on_success=None,
+    integrations=None,
+    integration_registry=None,
+    keybind_controller=None,
+    plugin_registry=None,
+    on_uninstall=None,
+    on_plugins_changed=None,
+):
     """Show the platform-picker login dialog.
 
-    *integrations* is an iterable of loaded integration objects (anything
+    *integrations* is the set of loaded integration objects (anything
     with ``.id`` / ``.display_name`` - normally
     ``IntegrationRegistry.get_all().values()``).  Only platforms whose
     integration actually loaded get a tile: with the plugin directory
     removed or its optional dependency missing there is no working flow
-    behind the login, so offering it would only end in errors.
+    behind the login, so offering it would only end in errors.  When an
+    ``IntegrationRegistry`` is passed (either as *integrations* or as
+    *integration_registry*) the tile list is re-read from it whenever the
+    dialog rebuilds, so the Manage flow's download/uninstall shows up
+    without reopening the dialog.
+
+    The "Manage" button opens the integration manager dialog
+    (:mod:`ui.manage_integrations_ui`) - download / uninstall plugins.
+    *integration_registry*, *keybind_controller*, *plugin_registry*,
+    *on_uninstall* and *on_plugins_changed* are forwarded to it (see that
+    module's docstring).
     """
     frame_main_bg = C["frame_main_bg"]
     frame_header_bg = C["frame_head_bg"]
@@ -53,23 +72,22 @@ def show_login_dialog(parent, on_success=None, integrations=None):
     # platform id -> (login handler, logo file).  The handlers are the
     # platform-specific UI flows below; a loaded integration without a
     # flow entry is skipped with a warning instead of rendering a dead
-    # tile.
+    # tile.  A plugin whose manifest declares ``login_module`` /
+    # ``login_class`` (and optionally ``login_logo``) supersedes this
+    # built-in table - see rebuild_tiles.
     flows = {
         "youtube_music": (_on_youtube_music, LOGOS_DIR / "youtube-music.png"),
         "spotify": (_on_spotify, LOGOS_DIR / "spotify.png"),
         "lastfm": (_on_lastfm, LOGOS_DIR / "lastfm.png"),
     }
 
-    available = []
-    for integration in integrations or []:
-        flow = flows.get(integration.id)
-        if flow is None:
-            logger.warning(
-                "No login flow for platform '%s' - hiding its login option",
-                integration.id,
-            )
-            continue
-        available.append((integration.display_name, *flow))
+    def _current_integrations() -> list:
+        """Live integration objects - the registry when we have one."""
+        if integration_registry is not None:
+            return list(integration_registry.get_all().values())
+        if hasattr(integrations, "get_all"):
+            return list(integrations.get_all().values())
+        return list(integrations or [])
 
     win = tk.Toplevel(parent)
     win.title("Login")
@@ -89,27 +107,115 @@ def show_login_dialog(parent, on_success=None, integrations=None):
         font=ui_font(14),
     ).pack(fill="both", pady=5, padx=5)
 
-    if not available:
-        tk.Label(
+    body = tk.Frame(win, background=label_bg)
+    body.pack(pady=20, padx=20)
+
+    def _login_tile(integration) -> Optional[tuple]:
+        """``(handler, logo_path)`` for one integration, or None.
+
+        A plugin that declares ``login_module``/``login_class`` in its
+        plugin.json supplies its own handler (a callable
+        ``(parent, on_success)``) - that is how a downloaded third-party
+        plugin gets a login tile without any core change.  The manifest-
+        declared logo (``login_logo``) or a generic placeholder is used
+        with it.  Otherwise the built-in ``flows`` table covers the three
+        bundled platforms.
+        """
+        plugin = (
+            plugin_registry.get(integration.id)
+            if plugin_registry is not None
+            else None
+        )
+        if plugin is not None and plugin.login_class:
+            try:
+                handler = plugin.import_login()
+            except Exception as e:
+                logger.warning(
+                    "Login handler for '%s' failed to load: %s",
+                    integration.id, e,
+                )
+                handler = None
+            if handler is not None:
+                return (
+                    handler,
+                    plugin.login_logo_path or ASSETS_DIR / "login.png",
+                )
+        return flows.get(integration.id)
+
+    def rebuild_tiles() -> None:
+        """Re-render the platform tiles from the current integration set.
+
+        Runs at open time and again after the Manage dialog closes: a
+        download or uninstall changes the plugin set, and the tiles must
+        reflect it without reopening the dialog.
+        """
+        for widget in body.winfo_children():
+            widget.destroy()
+
+        available = []
+        for integration in _current_integrations():
+            flow = _login_tile(integration)
+            if flow is None:
+                logger.warning(
+                    "No login flow for platform '%s' - hiding its login option",
+                    integration.id,
+                )
+                continue
+            available.append((integration.display_name, *flow))
+
+        if not available:
+            tk.Label(
+                body,
+                text="No music services installed",
+                background=label_bg,
+                foreground=label_fg,
+                font=ui_font(10),
+            ).pack(pady=20, padx=40)
+            return
+
+        for display_name, handler, icon_path in available:
+            _create_platform_button(
+                body,
+                display_name,
+                icon_path,
+                lambda h=handler: h(win, on_success),
+            ).pack(side="left", padx=20)
+
+    rebuild_tiles()
+
+    def _open_manage() -> None:
+        from ui.manage_integrations_ui import show_manage_dialog
+
+        manage = show_manage_dialog(
             win,
-            text="No music services installed",
-            background=label_bg,
-            foreground=label_fg,
-            font=ui_font(10),
-        ).pack(pady=20, padx=40)
+            plugin_registry=plugin_registry,
+            integration_registry=integration_registry,
+            keybind_controller=keybind_controller,
+            on_uninstall=on_uninstall,
+            on_plugins_changed=on_plugins_changed,
+        )
+        if manage is not None:
+            win.wait_window(manage)
+        # Restore the modal grab (the manage dialog superseded it) and
+        # re-render the tiles - the plugin set may have changed.
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
+        rebuild_tiles()
         center_window(win)
-        return
 
-    platforms_frame = tk.Frame(win, background=label_bg)
-    platforms_frame.pack(pady=20, padx=20)
-
-    for display_name, handler, icon_path in available:
-        _create_platform_button(
-            platforms_frame,
-            display_name,
-            icon_path,
-            lambda h=handler: h(win, on_success),
-        ).pack(side="left", padx=20)
+    btn_manage = tk.Button(
+        win,
+        text="Manage",
+        cursor="hand2",
+        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+        highlightthickness=0,
+        relief="raised",
+        font=ui_font(10),
+        command=_open_manage,
+    )
+    btn_manage.pack(pady=(0, 10))
 
     center_window(win)
 

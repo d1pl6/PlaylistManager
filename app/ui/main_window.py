@@ -70,11 +70,16 @@ class MainWindow:
         integrations,
         keybind_controller,
         app_controller,
+        plugin_registry=None,
     ) -> None:
         self.root = root
         self.integrations = integrations
         self.kc = keybind_controller
         self.ac = app_controller
+        # The live PluginRegistry (shared with App / KeybindController);
+        # None in legacy/test call sites - flows keep working, only the
+        # Manage dialog's integration-set display needs it.
+        self.plugin_registry = plugin_registry
 
         self._recording_frame_idx: int | None = None
 
@@ -317,6 +322,11 @@ class MainWindow:
                 self.root,
                 on_success=self.ac.refresh_auth,
                 integrations=list(self.integrations.get_all().values()),
+                integration_registry=self.integrations,
+                keybind_controller=self.kc,
+                plugin_registry=self.plugin_registry,
+                on_uninstall=self._on_uninstall_integration,
+                on_plugins_changed=self._on_plugins_changed,
             ),
         )
         ToolTip(self.btn_login, "Log in to music services")
@@ -497,6 +507,55 @@ class MainWindow:
 
     def _show_integration_error(self) -> None:
         messagebox.showerror("Integration Error", INTEGRATION_ERROR_MSG)
+
+    def _on_uninstall_integration(self, platform_id: str) -> None:
+        """Close every playlist card for *platform_id* (uninstall path).
+
+        Invoked by the Manage dialog BEFORE its disk cleanup: home
+        ``close_main_frame`` is the canonical per-playlist teardown
+        (keybind unregister, registry entry, song DB, widget destroy +
+        grid renumber), so cards of a removed platform never linger
+        showing dead data once the plugin directory is gone.
+
+        Best-effort per card: one card failing to close (e.g. a DROP
+        fighting a locked DB) must not leave the rest of the platform's
+        cards open - the disk cleanup that follows would then delete the
+        db files out from under their widgets.
+        """
+        failure: Optional[str] = None
+        for card in list(self.card_grid.cards):
+            platform = (getattr(card, "platform", None) or "").strip()
+            if platform and platform == platform_id:
+                try:
+                    self.card_grid.close_main_frame(card, delete_db=True)
+                except Exception:
+                    logger.exception(
+                        "Failed to close card for '%s' during uninstall of %s",
+                        getattr(card, "name_label", None) and card.name_label.cget("text"),
+                        platform_id,
+                    )
+                    if failure is None:
+                        failure = "one or more playlist cards could not be closed"
+        if failure:
+            user_log(
+                logger,
+                "Uninstalling %s: %s - their keybinds/databases may remain",
+                platform_id, failure,
+            )
+
+    def _on_plugins_changed(self) -> None:
+        """Re-scan integrations/ after a Manage dialog download/uninstall.
+
+        Re-discovering the live registry lets a freshly downloaded plugin
+        be used (login tiles, keybinds, URL parsing) without a restart;
+        uninstalled plugins simply stop existing.  The plugin registry is
+        shared with App and KeybindController, and
+        ``App.reload_plugins`` re-registers new integrations into the
+        shared IntegrationRegistry.
+        """
+        app = getattr(self.ac, "app", None)
+        if app is not None and hasattr(app, "reload_plugins"):
+            app.reload_plugins()
 
     def _on_dialog_cancel(self) -> None:
         """Restore UI after playlist dialog is cancelled."""

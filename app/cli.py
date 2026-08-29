@@ -15,6 +15,10 @@ Entry points (all equivalent):
     python -m app --login spotify --client-id X --client-secret Y --refresh-token Z
     python -m app --logout youtube_music
     python -m app --logout spotify
+    python -m app --install spotify            # download/install a platform plugin
+    python -m app --install all                # install every supported platform
+    python -m app --uninstall spotify          # remove a platform + all its local data
+    python -m app --uninstall all              # remove every installed platform
 
 Designed for compositor-owned shortcuts (i3 / sway / hyprland / KDE / GNOME
 binds) - the Wayland-safe replacement for pynput global keybinds (plan.md W1,
@@ -36,7 +40,7 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 from plugin_loader import PluginRegistry, get_default_registry
-from services import auth_setup
+from services import auth_setup, integration_manager
 from services.database import DatabaseManager
 from services.integration import IntegrationRegistry
 from services.playlist_store import PlaylistStore
@@ -773,7 +777,9 @@ def run_logout(platform: str) -> int:
         return 2
 
     try:
-        deleted, _missing = auth_setup.delete_platform_credentials(platform)
+        deleted, _missing = auth_setup.delete_platform_credentials(
+            platform, plugin_registry=get_default_registry()
+        )
     except OSError as e:
         print(
             f"error: failed to delete {platform} credentials: {e}",
@@ -796,6 +802,117 @@ def run_logout(platform: str) -> int:
     n_dbs = DatabaseManager.delete_platform_databases(platform)
     if n_dbs:
         print(f"{platform}: deleted {n_dbs} local database file(s)")
+    return 0
+
+
+def _resolve_platform_arg(platform: str) -> List[str]:
+    """Expand a --install/--uninstall argument into platform ids.
+
+    ``all`` expands to every catalog platform (downloadable); otherwise the
+    id is validated against the catalog.  Returns the ids or raises
+    ``UsageError`` (mapped to exit code 2).
+    """
+    catalog = integration_manager.installable_ids()
+    if platform == "all":
+        return catalog
+    if platform not in catalog:
+        raise UsageError(
+            f"unknown platform '{platform}' (use {', '.join(catalog)})"
+        )
+    return [platform]
+
+
+def run_install(platform: str) -> int:
+    """Download and install one (or ``all``) platform plugin(s).
+
+    Writes only the plugin directory under ``integrations/``; it does not
+    authenticate (see ``--login``) or register any playlists.  Idempotent
+    with respect to already-installed platforms - an existing install is
+    replaced with a fresh copy.
+    """
+    try:
+        targets = _resolve_platform_arg(platform)
+    except UsageError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    failures: List[str] = []
+    for pid in targets:
+        display = integration_manager.INTEGRATION_REPOS[pid].display_name
+        missing = PluginRegistry().base_dir / pid
+        already = missing.is_dir()
+        try:
+            integration_manager.download_integration(pid)
+            print(
+                f"{pid}: {'updated' if already else 'installed'} ({display})",
+                flush=True,
+            )
+        except Exception as e:
+            logger.exception("Install failed for %s", pid)
+            print(f"error: failed to install {pid}: {e}", file=sys.stderr)
+            failures.append(pid)
+
+    if failures:
+        return 1
+    return 0
+
+
+def run_uninstall(platform: str) -> int:
+    """Remove one (or ``all``) platform plugin(s) and all their local data.
+
+    Like the GUI's per-platform uninstall: deletes credentials, playlist
+    registry entries, song databases, duplicate-queue records and the
+    plugin directory itself - the online playlists are untouched.  The
+    CLI has no running app (no receiver/listener to stop), so only the
+    disk-level uninstall step applies.  Idempotent: a platform that is not
+    installed is reported as such and not an error.
+    """
+    catalog = integration_manager.installable_ids()
+    if platform == "all":
+        registry = get_default_registry()
+        targets = [
+            pid for pid in catalog
+            if (PluginRegistry().base_dir / pid).is_dir()
+            or registry.get(pid) is not None
+        ]
+    else:
+        if platform not in catalog:
+            print(
+                f"error: unknown platform '{platform}' "
+                f"(use {', '.join(catalog)})",
+                file=sys.stderr,
+            )
+            return 2
+        targets = [platform]
+
+    failures: List[str] = []
+    for pid in targets:
+        registry = get_default_registry()
+        plugin = registry.get(pid)
+        if plugin is None and not (PluginRegistry().base_dir / pid).is_dir():
+            print(f"{pid}: not installed (nothing to uninstall)")
+            continue
+        try:
+            report = integration_manager.uninstall_platform_data(
+                pid, plugin=plugin
+            )
+            parts = [
+                f"{report['credentials']} credential(s)",
+                f"{report['playlists']} playlist(s)",
+                f"{report['databases']} DB(s)",
+                f"{report['plugin_dirs']} folder(s)",
+            ]
+            print(
+                f"{pid}: uninstalled ({', '.join(parts)})",
+                flush=True,
+            )
+        except Exception as e:
+            logger.exception("Uninstall failed for %s", pid)
+            print(f"error: failed to uninstall {pid}: {e}", file=sys.stderr)
+            failures.append(pid)
+
+    if failures:
+        return 1
     return 0
 
 

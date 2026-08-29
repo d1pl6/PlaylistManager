@@ -29,6 +29,25 @@ python -m app --logout spotify            # delete spotify.json + registry entri
   your screen during login.
 - Unknown platform names exit with code 2.
 
+Plugins (`--install` / `--uninstall`) - install or remove a platform's plugin package:
+
+```
+python -m app --install spotify            # download + install the Spotify plugin
+python -m app --install all                # install every supported platform
+python -m app --uninstall spotify          # remove the plugin + all its local data
+python -m app --uninstall all              # remove every installed platform
+```
+
+- `--install <platform>` downloads the plugin into `integrations/<platform>/` (catalog-driven,
+  the plugin_manager sources). It does **not** authenticate or register playlists - do that with
+  `--login` / `-p add`. Re-running on an installed platform reports "updated" (idempotent).
+- `--uninstall <platform>` is the CLI mirror of the Manage dialog's Uninstall: it deletes the
+  plugin's credential files (including manifest fallback copies), its playlist registry entries,
+  its local song databases under `db/<platform>/`, its duplicate-queue records, and the plugin
+  folder itself. Nothing is revoked on the platform. A platform that is not installed prints
+  "not installed" and is not an error.
+- Both accept `all` to act on every supported platform. Unknown platform names exit with code 2.
+
 Playlist management (`-p` / `--playlist`, verbs: `add`, `del`/`delete`, `ref`/`refresh`):
 
 ```
