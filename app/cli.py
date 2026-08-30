@@ -869,14 +869,24 @@ def run_uninstall(platform: str) -> int:
     """
     catalog = integration_manager.installable_ids()
     if platform == "all":
+        # Every installed plugin - catalog or third-party - plus catalog
+        # platforms whose directory is on disk but whose manifest failed
+        # to load (the registry cannot see those).
         registry = get_default_registry()
-        targets = [
-            pid for pid in catalog
-            if (PluginRegistry().base_dir / pid).is_dir()
-            or registry.get(pid) is not None
-        ]
+        targets = sorted(
+            set(registry.get_all())
+            | {
+                pid
+                for pid in catalog
+                if (PluginRegistry().base_dir / pid).is_dir()
+            }
+        )
     else:
-        if platform not in catalog:
+        # Accept ids that are installed but not in the catalog (they were
+        # downloaded by hand or by the GUI) - uninstalling them by id is
+        # the only CLI path to remove them.
+        registry = get_default_registry()
+        if platform not in catalog and registry.get(platform) is None:
             print(
                 f"error: unknown platform '{platform}' "
                 f"(use {', '.join(catalog)})",

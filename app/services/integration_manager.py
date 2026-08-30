@@ -132,8 +132,14 @@ def download_integration(platform_id: str) -> List[Path]:
     Runs on the calling thread (intended: a worker thread).  Downloads
     the repo tarball to a temp dir, extracts it safely (no path
     traversal, no symlinks), validates the plugin manifest inside, then
-    copies each mapped directory into ``integrations/`` via a temp-sibling
-    swap so a mid-copy failure never leaves a half-written plugin dir.
+    stages **every** mapped directory before swapping a single byte:
+    all copies are copied into a per-platform staging root under
+    ``integrations/`` first, and only after every copy validated and
+    staged are they renamed into place.  A content error (missing dir,
+    bad or missing manifest, oversized archive) therefore never leaves a
+    half-installed platform, and the youtube_music browser-extension
+    copy stays safe even though it installs *inside* the plugin
+    directory's own destination.
 
     Raises ``ValueError`` for unknown platforms / manifest mismatches and
     ``OSError``/``urllib`` errors for network or filesystem failures.
@@ -162,27 +168,67 @@ def download_integration(platform_id: str) -> List[Path]:
             if len(entries) == 1 and entries[0].is_dir():
                 stage = entries[0]
 
+            # Per-platform staging root.  Sits in integrations/ (not inside
+            # a destination that is itself about to be swapped) and is
+            # atomically self-contained: a leftover from a crashed run is
+            # simply replaced on the next attempt.
+            staging_root = base / f".{platform_id}.install_tmp"
+            if staging_root.exists():
+                shutil.rmtree(staging_root, ignore_errors=True)
+            staging_root.mkdir()
+
             installed: List[Path] = []
-            for src_rel, dst_rel in repo.copies:
-                src = stage.joinpath(*src_rel.split("/"))
-                dst = base.joinpath(*dst_rel.split("/"))
-                _validate_install_target(dst, base_resolved)
-                if not src.is_dir():
-                    raise FileNotFoundError(
-                        f"Repository {repo.repo} is missing '{src_rel}' - "
-                        f"cannot install '{platform_id}'"
+            try:
+                prepared: List[Tuple[Path, Path]] = []
+                for copy_idx, (src_rel, dst_rel) in enumerate(repo.copies):
+                    src = stage.joinpath(*src_rel.split("/"))
+                    dst = base.joinpath(*dst_rel.split("/"))
+                    _validate_install_target(dst, base_resolved)
+                    if not src.is_dir():
+                        raise FileNotFoundError(
+                            f"Repository {repo.repo} is missing '{src_rel}' - "
+                            f"cannot install '{platform_id}'"
+                        )
+                    # Only the plugin package itself carries the manifest;
+                    # verify it exists and declares the expected id so a
+                    # re-purposed repo can never install under a foreign
+                    # platform id.  Other copies (e.g. the browser
+                    # extension) carry none and are skipped.
+                    if src_rel.split("/")[-1] == platform_id:
+                        manifest = src / "plugin.json"
+                        if not manifest.is_file():
+                            raise FileNotFoundError(
+                                f"Repository {repo.repo} is missing "
+                                f"'{src_rel}/plugin.json' - refusing to "
+                                f"install '{platform_id}'"
+                            )
+                        _validate_plugin_manifest(manifest, platform_id)
+                    staging = staging_root / f"copy{copy_idx}"
+                    shutil.copytree(
+                        src,
+                        staging,
+                        ignore=shutil.ignore_patterns(
+                            "__pycache__", "*.pyc", ".git*"
+                        ),
                     )
-                # Only the plugin package itself carries the manifest;
-                # verify its id matches so a re-purposed repo can never
-                # install under a foreign platform id.
-                manifest = src / "plugin.json"
-                if src_rel.split("/")[-1] == platform_id and manifest.is_file():
-                    _validate_plugin_manifest(manifest, platform_id)
-                _replace_dir(src, dst)
-                installed.append(dst)
-                logger.info(
-                    "Installed %s integration files into %s", platform_id, dst
-                )
+                    prepared.append((staging, dst))
+
+                # All copies validated and staged - swap them in.  Nothing
+                # below can fail on content (only on filesystem errors).
+                for staging, dst in prepared:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    if dst.exists():
+                        shutil.rmtree(dst, ignore_errors=True)
+                    staging.rename(dst)
+                    installed.append(dst)
+                    logger.info(
+                        "Installed %s integration files into %s",
+                        platform_id, dst,
+                    )
+            finally:
+                # Empty after a successful run; cleaned up on failure too.
+                if staging_root.exists():
+                    shutil.rmtree(staging_root, ignore_errors=True)
             return installed
 
 
@@ -250,22 +296,6 @@ def _validate_plugin_manifest(manifest: Path, expected_id: str) -> None:
             f"Download does not contain the '{expected_id}' plugin "
             f"(manifest declares id {declared!r}) - refusing to install"
         )
-
-
-def _replace_dir(src: Path, dst: Path) -> None:
-    """Copy *src* onto *dst* atomically-ish (temp sibling + rename)."""
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    staging = dst.parent / f".{dst.name}.install_tmp"
-    if staging.exists():
-        shutil.rmtree(staging, ignore_errors=True)
-    shutil.copytree(
-        src,
-        staging,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git*"),
-    )
-    if dst.exists():
-        shutil.rmtree(dst, ignore_errors=True)
-    staging.rename(dst)
 
 
 # ---------------------------------------------------------------------------

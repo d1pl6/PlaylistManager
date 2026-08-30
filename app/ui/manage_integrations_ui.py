@@ -278,21 +278,33 @@ def show_manage_dialog(
     # Download
     # ------------------------------------------------------------------
 
-    def _after_main(fn) -> None:
-        """Marshal *fn* to the main thread via the parent (login) window.
+    # Dispatch target for worker completions: the Tk root, which outlives
+    # both this dialog and the login dialog that hosts it.  A download or
+    # uninstall finishing after the dialogs are closed must still deliver
+    # its completion callback (including the app-level refresh); the login
+    # window does not survive to do that - see _after_main.
+    try:
+        top = parent.winfo_toplevel()
+        _dispatch_root = top.master if top.master is not None else top
+    except Exception:
+        _dispatch_root = parent
 
-        The manage dialog can be closed while a download or uninstall
-        worker is running; ``win.after`` on the destroyed Toplevel raises
-        ``TclError`` and would silently drop the completion callback -
-        including the ``on_plugins_changed`` that makes the change apply
-        to the running app.  The parent outlives this dialog, so it is a
-        safe dispatch target; if the whole login flow is gone the app is
-        quitting and the refresh is skipped (picked up on next launch).
+    def _after_main(fn) -> None:
+        """Marshal *fn* to the main thread via the Tk root.
+
+        The manage dialog (and the login dialog hosting it) can be closed
+        while a download or uninstall worker is running; ``win.after`` on
+        a destroyed Toplevel raises ``TclError`` and would silently drop
+        the completion callback - including the ``on_plugins_changed``
+        that makes the change apply to the running app.  The root
+        outlives both dialogs, so it is the safe dispatch target; only
+        when the whole app is quitting is the refresh skipped (picked up
+        on next launch).
         """
         try:
-            parent.after(0, fn)
+            _dispatch_root.after(0, fn)
         except Exception:
-            logger.debug("Login dialog closed - download/uninstall applied lazily")
+            logger.debug("App is shutting down - download/uninstall applied lazily")
 
     def _start_download(pid: str, row: tk.Frame, status_lbl: tk.Label) -> None:
         if pid in _busy or _bulk_busy[0]:
@@ -407,24 +419,35 @@ def show_manage_dialog(
 
             def _apply() -> None:
                 _busy.discard(pid)
-                if error is None and on_plugins_changed is not None:
+                # App-level refresh no matter the outcome: on success it
+                # drops the removed plugin; when the disk cleanup failed
+                # (e.g. the plugin folder could not be removed) it
+                # discovers the still-present plugin again and re-registers
+                # the integration, so the platform is not lost from the
+                # running session - the user can retry from its row.
+                reload_failed: Optional[str] = None
+                if on_plugins_changed is not None:
                     try:
                         on_plugins_changed()
                     except Exception as e:
                         logger.exception("Plugin rescan failed after uninstall")
-                        teardown_errors.append("plugin rescan")
-                        error = str(e)
+                        reload_failed = str(e)
                 try:
                     dialog_open = bool(win.winfo_exists())
                 except tk.TclError:
                     dialog_open = False
                 if not dialog_open:
                     return
-                if error is not None:
-                    _refresh_rows()
-                    _set_footer(f"Uninstall failed: {error}", error=True)
-                    return
                 _refresh_rows()
+                if error is not None:
+                    text = f"Uninstall failed: {error}"
+                    if plugin_registry.get(pid) is not None:
+                        text += (" - the integration is still installed; "
+                                 "retry from its row")
+                    if reload_failed:
+                        text += f" (reload: {reload_failed})"
+                    _set_footer(text, error=True)
+                    return
                 name = _display_name(plugin, pid)
                 parts = [
                     f"{report['credentials']} credential file(s)",
@@ -438,9 +461,15 @@ def show_manage_dialog(
                 text = f"{name} uninstalled ({', '.join(parts)})"
                 if report["plugin_dirs"] == 0:
                     text += " - plugin folder(s) not removed"
+                    if plugin_registry.get(pid) is not None:
+                        text += " (integration still installed; retry from its row)"
+                    if reload_failed:
+                        text += f" (reload: {reload_failed})"
                     _set_footer(text, error=True)
                     return
-                if teardown_errors:
+                if teardown_errors or reload_failed:
+                    if reload_failed:
+                        teardown_errors.append(f"reload ({reload_failed})")
                     _set_footer(
                         text + f" - with warnings ({', '.join(teardown_errors)})",
                         ok=True,
@@ -467,12 +496,30 @@ def show_manage_dialog(
         plugin = plugin_registry.get(pid)
         name = _display_name(plugin, pid)
 
+        # Describe the files the cleanup will actually touch - the
+        # manifest-declared credential paths (auth-dir file + declared
+        # fallbacks) and the real plugin directory, which may differ from
+        # the naive "auth/<pid>" / "integrations/<pid>/" guesses for
+        # third-party plugins.
+        if plugin is not None and plugin.auth_paths:
+            cred_names = sorted({p.name for p in plugin.auth_paths})
+            cred_desc = ", ".join(cred_names)
+            if len({p.parent for p in plugin.auth_paths}) > 1:
+                cred_desc += " (auth dir + fallback locations)"
+        else:
+            cred_desc = f"auth/{pid} files"
+        dir_desc = (
+            str(plugin.directory)
+            if plugin is not None
+            else f"integrations/{pid}/"
+        )
+
         if not messagebox.askyesno(
             "Uninstall integration",
             f"Uninstall {name}?\n\n"
             "This deletes locally:\n"
-            f"  \u2022 credentials (auth/{pid} files)\n"
-            f"  \u2022 the plugin folder (integrations/{pid}/)\n"
+            f"  \u2022 credentials ({cred_desc})\n"
+            f"  \u2022 the plugin folder ({dir_desc})\n"
             f"  \u2022 its playlists from the registry\n"
             f"  \u2022 the song databases (db/{pid}/)\n"
             "  \u2022 pending duplicate and error records\n\n"
@@ -516,7 +563,9 @@ def show_manage_dialog(
 
             def _apply() -> None:
                 _bulk_busy[0] = False
-                if not failures and on_plugins_changed is not None:
+                # Rescan even when some downloads failed: the successful
+                # ones must become visible without reopening the dialog.
+                if on_plugins_changed is not None:
                     try:
                         on_plugins_changed()
                     except Exception as e:
@@ -598,13 +647,16 @@ def show_manage_dialog(
 
             def _apply() -> None:
                 _bulk_busy[0] = False
-                if not failures and on_plugins_changed is not None:
+                # Rescan regardless of outcome so platforms whose folder the
+                # cleanup could not remove are re-registered instead of
+                # vanishing from the session (see per-platform _apply).
+                reload_failed: Optional[str] = None
+                if on_plugins_changed is not None:
                     try:
                         on_plugins_changed()
                     except Exception as e:
                         logger.exception("Plugin rescan failed after uninstall-all")
-                        teardown_errors.append("plugin rescan")
-                        failures.append(str(e))
+                        reload_failed = str(e)
                 try:
                     dialog_open = bool(win.winfo_exists())
                 except tk.TclError:
@@ -612,15 +664,19 @@ def show_manage_dialog(
                 if not dialog_open:
                     return
                 _refresh_rows()
-                ok = len(targets) - len(failures)
                 if failures:
-                    _set_footer(
-                        f"Uninstall all: {ok}/{len(targets)} done ({len(failures)} failed)",
-                        error=True,
+                    text = (
+                        f"Uninstall all: {len(targets) - len(failures)}/{len(targets)} "
+                        f"done ({len(failures)} failed)"
                     )
+                    if reload_failed:
+                        text += f" (reload: {reload_failed})"
+                    _set_footer(text, error=True)
                 else:
                     text = f"Uninstalled all integrations ({len(targets)})"
-                    if teardown_errors:
+                    if teardown_errors or reload_failed:
+                        if reload_failed:
+                            teardown_errors.append(f"reload ({reload_failed})")
                         _set_footer(
                             text + f" - with warnings ({', '.join(sorted(set(teardown_errors)))})",
                             ok=True,
