@@ -65,7 +65,7 @@ def parse_args():
     )
     p.add_argument(
         "--playlist", "-p", dest="playlist_args",
-        metavar="ACTION <PLAYLIST>",
+        metavar="ACTION <PLAYLIST>", nargs="+",
         help='options: "add <URL>", "del <TARGETS>", "ref <TARGETS>" '
              '(add/delete/refresh accept numbers, names and playlist URLs;'
              '`del/ref all` targets every playlist)',

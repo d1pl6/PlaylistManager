@@ -735,8 +735,12 @@ def _on_lastfm(parent, on_success):
         status_label.config(text="Testing...", foreground=label_fg)
         _set_busy(True)
 
+        # Test validates the key/secret pair ONLY (a signed auth.getToken
+        # round trip - fast, no browser).  Running the full web-auth flow
+        # here would open a browser and poll up to 120 s for a token the
+        # user would then have to authorize AGAIN on Save.
         def run():
-            result = auth_setup.verify_lastfm_credentials(**creds)
+            result = auth_setup.validate_lastfm_credentials(**creds)
             try:
                 win.after(0, _test_done, result)
             except Exception:
@@ -753,7 +757,7 @@ def _on_lastfm(parent, on_success):
         _set_busy(False)
         if result.get("ok"):
             status_label.config(
-                text=f"OK: {result.get('username', 'Last.fm')}",
+                text="OK: credentials valid - press Save to authorize",
                 foreground=C["label_playlist_good_fg"],
             )
         else:

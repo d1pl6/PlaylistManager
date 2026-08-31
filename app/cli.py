@@ -40,12 +40,13 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 from plugin_loader import PluginRegistry, get_default_registry
-from services import auth_setup, integration_manager
+from services import auth_setup, duplicate_queue, integration_manager
 from services.database import DatabaseManager
 from services.integration import IntegrationRegistry
 from services.playlist_store import PlaylistStore
 from services.playlist_sync import PlaylistSyncService
 from services.playlist_url import parse_playlist_url
+from services import scrobble_log
 from services.song_manager import SongManager
 from utils.config import get_setting
 from utils.logging_config import user_log
@@ -105,9 +106,9 @@ def resolve_targets(
     kept.
 
     *allow_urls* enables URL tokens, resolved against the registry by
-    (platform, playlist_id) - used by the del/ref commands. The song-add path
-    leaves it False so a URL there falls through to name lookup and fails
-    with "not found".
+    (platform, playlist_id). Used by the add/del/ref commands: the del/ref
+    path always allows them, and the song-add path enables them so ``-a
+    <URL>`` targets a registered playlist by its link.
 
     Raises UsageError on malformed, out-of-range, unknown or ambiguous input.
     """
@@ -279,6 +280,25 @@ def _build_integrations():
     return registry
 
 
+def _scrobble_backend():
+    """Return the single ScrobbleCapable integration, or ``None``.
+
+    Built lazily (and only on demand - the caller gates on auto-scrobble
+    being enabled) so an add that is not going to scrobble never pays the
+    full-registry authenticate() cost of every installed platform.  ``None``
+    when no scrobble-capable backend is installed/configured.
+    """
+    integrations = _build_integrations()
+    return next(
+        (
+            integ
+            for integ in integrations.get_all().values()
+            if getattr(integ, "scrobble", None) is not None
+        ),
+        None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -300,7 +320,13 @@ def run_list() -> int:
 
 
 def run_add(spec: str) -> int:
-    """Add the currently-playing song to the requested playlists."""
+    """Add the currently-playing song to the requested playlists.
+
+    Targets can be order numbers ("1,2,3"), ranges ("1-3"), names
+    ("Chill Mix"), or a playlist URL ("-a <URL>") resolving to a registered
+    playlist by (platform, playlist_id). URLs must already be in the
+    registry - add them first with ``-p add <URL>``.
+    """
     playlists = PlaylistStore.load_playlists()
     if not playlists:
         print(
@@ -311,14 +337,20 @@ def run_add(spec: str) -> int:
         return 2
 
     try:
-        targets = resolve_targets(spec, playlists)
+        targets = resolve_targets(spec, playlists, allow_urls=True)
     except UsageError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
     plugin_registry = get_default_registry()
     song_manager = SongManager()
-    integrations = _build_integrations()
+
+    # Read the auto-scrobble gate ONCE (not per target - get_setting hits
+    # the settings INI) and, only when it is enabled, resolve the
+    # ScrobbleCapable backend once.  When it's off (default) we never
+    # authenticate unrelated platforms just to find a scrobble backend.
+    auto_scrobble = get_setting("scrobble_on_add")
+    scrobble_integ = _scrobble_backend() if auto_scrobble else None
 
     # Legacy registry entries predate the "platform" field - default them
     # to YouTube Music, matching PlaylistStore.
@@ -373,7 +405,9 @@ def run_add(spec: str) -> int:
         else:
             ok, message = _run_flow(
                 ctx["flow"], name, url=ctx["url"], song_data=ctx["song_data"],
-                playlist_id=entry.get("playlist_id") or None, integrations=integrations,
+                playlist_id=entry.get("playlist_id") or None,
+                scrobble_integ=scrobble_integ,
+                platform=platform,
             )
 
         line = f'#{number} "{name}" ({platform}): {message}'
@@ -503,14 +537,12 @@ def run_del(spec: str) -> int:
         # Legacy entries may lack the platform field - default to YT like
         # PlaylistStore does, so delete_playlist_db never sees None.
         platform = entry.get("platform") or "youtube_music"
+        playlist_id = entry.get("playlist_id", "")
         PlaylistStore.delete_playlist(
-            name, platform=platform, playlist_id=entry.get("playlist_id", "")
+            name, platform=platform, playlist_id=playlist_id
         )
-        DatabaseManager.delete_playlist_db(
-            name,
-            platform,
-            playlist_id=entry.get("playlist_id", ""),
-        )
+        DatabaseManager.delete_playlist_db(name, platform, playlist_id=playlist_id)
+        scrobble_log.remove_playlist_entries(platform, playlist_id)
         print(f'#{number} "{name}" ({platform}): deleted', flush=True)
     return 0
 
@@ -694,12 +726,14 @@ def run_login(
 
     if platform == "youtube_music":
         result = auth_setup.setup_ytmusic_auth()
-        if result.get("manual"):
+        if not result.get("ok"):
+            # Terminal could not be launched - fall back to manual steps.
             print(
                 f"youtube_music: no terminal emulator found - manually run:\n"
-                f"  cd {result['auth_dir']}\n"
+                f"  cd {result.get('auth_dir', auth_setup.AUTH_DIR)}\n"
                 f"  ytmusicapi browser\n"
-                f"and place the generated browser.json in {result['auth_dir']}",
+                f"and place the generated browser.json in "
+                f"{result.get('auth_dir', auth_setup.AUTH_DIR)}",
                 file=sys.stderr,
             )
             return 0
@@ -762,8 +796,9 @@ def run_login(
 
 
 def run_logout(platform: str) -> int:
-    """Log out of a platform: delete its credentials, registry entries and
-    local databases. Local-only - never touches the platform itself.
+    """Log out of a platform: delete its credentials, registry entries,
+    local databases, duplicate-queue records and scrobble-ledger entries.
+    Local-only - never touches the platform itself.
 
     Idempotent: a second run with nothing left prints "no credentials
     found" and still exits 0.
@@ -802,6 +837,17 @@ def run_logout(platform: str) -> int:
     n_dbs = DatabaseManager.delete_platform_databases(platform)
     if n_dbs:
         print(f"{platform}: deleted {n_dbs} local database file(s)")
+
+    # Drop the platform's pending duplicate-decisions and scrobble-ledger
+    # records (matching integration_manager.uninstall_platform_data), so a
+    # later login can't resurface stale decisions / unscrobbles for it.
+    n_pending, n_songs, n_errors = duplicate_queue.purge_platform(platform)
+    if n_pending or n_songs or n_errors:
+        print(
+            f"{platform}: purged {n_pending} pending duplicate decision(s), "
+            f"{n_songs} remembered song(s), {n_errors} error(s)"
+        )
+    scrobble_log.remove_platform_entries(platform)
     return 0
 
 
@@ -839,8 +885,8 @@ def run_install(platform: str) -> int:
     failures: List[str] = []
     for pid in targets:
         display = integration_manager.INTEGRATION_REPOS[pid].display_name
-        missing = PluginRegistry().base_dir / pid
-        already = missing.is_dir()
+        target_dir = PluginRegistry().base_dir / pid
+        already = target_dir.is_dir()
         try:
             integration_manager.download_integration(pid)
             print(
@@ -927,9 +973,17 @@ def run_uninstall(platform: str) -> int:
 
 
 def _run_flow(
-    flow, playlist_name: str, url=None, song_data=None, playlist_id=None, integrations=None
+    flow, playlist_name: str, url=None, song_data=None, playlist_id=None,
+    scrobble_integ=None, platform: str = "",
 ) -> Tuple[bool, str]:
-    """Run one add-flow; returns (ok, message) - message is the line tail."""
+    """Run one add-flow; returns (ok, message) - message is the line tail.
+
+    *scrobble_integ* is the pre-resolved ScrobbleCapable backend (or
+    ``None``), resolved once by the caller when auto-scrobble is enabled.
+    """
+    # Flows declare their platform id (PLATFORM class attr); the caller
+    # passes it where the platform is already resolved to be explicit.
+    platform = platform or getattr(flow, "PLATFORM", "")
     outcome = {"ok": None, "message": ""}
 
     def on_status(msg: str) -> None:
@@ -954,18 +1008,19 @@ def _run_flow(
             outcome["message"] = result.get("message", "Added")
 
         # Scrobble the song if auto-scrobble is enabled and a ScrobbleCapable
-        # integration is available.
-        if status == "added" and get_setting("scrobble_on_add"):
+        # integration was resolved.  An accepted scrobble is recorded in
+        # the scrobble ledger so the remove-song path can later delete
+        # THIS exact scrobble (not the track's most recent one).
+        if status == "added" and scrobble_integ is not None:
             song_data = result.get("song", {})
-            if song_data and integrations:
+            if song_data:
                 try:
-                    scrobble_integ = next(
-                        (integ for integ in integrations.get_all().values()
-                         if getattr(integ, "scrobble", None) is not None),
-                        None,
-                    )
-                    if scrobble_integ is not None:
-                        scrobble_integ.scrobble(song_data)
+                    ts = scrobble_integ.scrobble(song_data)
+                    song_id = result.get("song_id")
+                    if ts is not None and song_id is not None:
+                        scrobble_log.record_scrobble(
+                            platform, playlist_id or "", song_id, ts
+                        )
                 except Exception as e:
                     logger.debug("Failed to scrobble song: %s", e)
 

@@ -25,7 +25,11 @@ DEFAULT_SETTINGS = {
     "duplicate_check": {"is_true": "no", "title_threshold": "0.85", "duration_tolerance": "5"},
     # Last.fm integration settings (service plugin, optional)
     "like_button": {"is_true": "no"},  # show the ♥/♡ button under "remove from playlist"
-    "scrobble_on_add": {"is_true": "yes"},  # scrobble a song when an add-flow succeeds
+    # Scrobble a song when an add-flow succeeds.  Defaults to no like the
+    # other Last.fm side effects: scrobbling is a privacy/audit-relevant
+    # action and must be opted into, not silently switched on the moment
+    # the plugin is configured.
+    "scrobble_on_add": {"is_true": "no"},
     "scrobble_keybind": {"keybind": ""},  # standalone "scrobble current song, without adding it" combo
 }
 

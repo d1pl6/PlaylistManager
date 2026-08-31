@@ -87,7 +87,7 @@ class ScrobbleCapable:
     while the core remains platform-agnostic.
     """
 
-    def scrobble(self, song_data: dict) -> bool:
+    def scrobble(self, song_data: dict) -> Optional[int]:
         """Scrobble a song.
 
         *song_data* is a dict with at minimum::
@@ -101,8 +101,12 @@ class ScrobbleCapable:
         Album and track_number (from song_data["album"], song_data["track_number"])
         are optional but improve scrobble fidelity.
 
-        Returns True only when the backend confirmed the scrobble.
-        Failures must be logged but never block or fail the calling add-flow.
+        Returns the scrobble's Unix timestamp (seconds) only when the
+        backend CONFIRMED the scrobble was accepted; ``None`` when it was
+        rejected (e.g. last.fm ignored it) or the round trip failed.  The
+        returned timestamp is also the evidence the remove path uses to
+        delete exactly this scrobble (see ``delete_scrobble``).  Failures
+        must be logged but never block or fail the calling add-flow.
         """
         raise NotImplementedError
 
@@ -140,7 +144,11 @@ class ScrobbleCapable:
         """Delete a scrobble entry.
 
         *timestamp* (seconds since epoch) is optional; when omitted, deletes
-        the most recent scrobble of that track.
+        the most recent scrobble of that track.  Omission is a LAST RESORT:
+        the core's remove-song path only calls this with the exact timestamp
+        that the add-flow's ``scrobble`` returned (persisted in the scrobble
+        ledger) - a timestamp-less delete can silently erase a legitimate
+        earlier scrobble the user actually listened to.
 
         Returns True only when the backend confirmed the deletion.
         Failures are best-effort; never fail or re-enqueue the calling remove.

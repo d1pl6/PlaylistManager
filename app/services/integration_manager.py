@@ -28,6 +28,7 @@ from typing import Dict, List, Tuple
 
 from plugin_loader import PluginRegistry
 from services import auth_setup, duplicate_queue
+from services import scrobble_log
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
 
@@ -369,6 +370,11 @@ def uninstall_platform_data(
         n_songs,
         n_errors,
     )
+
+    # Scrobble-ledger records for the dead platform's playlists are
+    # meaningless once the playlists + DBs are gone - and must not
+    # resurrect the platform in a later search.
+    scrobble_log.remove_platform_entries(platform_id)
 
     report["plugin_dirs"] = _remove_plugin_directories(platform_id)
     return report

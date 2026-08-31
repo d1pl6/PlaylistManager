@@ -17,6 +17,7 @@ from PIL import Image
 
 from services.playlist_store import PlaylistStore
 from services.playlist_url import build_song_url
+from services import scrobble_log
 from services.song_manager import SongManager
 from ui.tooltip import ToolTip
 from utils.config import get_setting
@@ -248,6 +249,11 @@ class ShowcaseManager:
         platform = card.platform if card is not None else None
 
         jobs = []
+        # (like_btn, artist, title) rows whose heart glyph needs loading -
+        # populated while building rows, then resolved with ONE batched
+        # loved-list fetch (Last.fm rate-limits ~1 req/s; per-row fetches
+        # hammer it).
+        pending_likes: list = []
         for row_idx, song in enumerate(songs):
             grid_row = row_idx * 2
 
@@ -321,29 +327,13 @@ class ShowcaseManager:
                 ToolTip(like_btn, "Like on Last.fm")
                 like_btn.grid(row=grid_row + 1, column=2, sticky="ne")
 
-                # Load like state asynchronously
+                # Load like state asynchronously - deferred to a single
+                # batched loved-list fetch after the loop (see
+                # _load_like_states).
                 artist = song.get("artists", [])[0] if song.get("artists") else ""
                 title = song.get("title", "")
                 if artist and title:
-                    def load_like_state(btn=like_btn, a=artist, t=title):
-                        scrobble_cap = next(
-                            (
-                                getattr(integ, "is_loved", None)
-                                for integ in (self.integrations.get_all().values() if self.integrations else [])
-                                if getattr(integ, "is_loved", None) is not None
-                            ),
-                            None,
-                        )
-                        if scrobble_cap is None:
-                            return
-                        is_loved = scrobble_cap(a, t)
-                        if is_loved is not None:
-                            try:
-                                self.root.after(0, lambda: btn.config(image=self._heart_full_img if is_loved else self._heart_empty_img))
-                            except Exception:
-                                logger.debug("Window closed while loading like state", exc_info=True)
-
-                    threading.Thread(target=load_like_state, daemon=True).start()
+                    pending_likes.append((like_btn, artist, title))
 
             track_id = song.get("track_id") or ""
             if track_id and platform:
@@ -365,6 +355,9 @@ class ShowcaseManager:
             thumb_url = song.get("thumbnail_url") or ""
             if thumb_url:
                 jobs.append((thumb, thumb_url))
+
+        if pending_likes:
+            self._load_like_states(pending_likes)
 
         return showcase, jobs
 
@@ -537,19 +530,36 @@ class ShowcaseManager:
                         platform=platform,
                         playlist_id=playlist_id,
                     )
-                    # Delete scrobble if Last.fm integration is available and auto-scrobble is on
-                    if get_setting("scrobble_on_add"):
+                    # Delete the EXACT scrobble this row's add-flow created.  The
+                    # timestamp was recorded in the scrobble ledger when
+                    # the auto-scrobble was accepted at add time; without
+                    # a record (auto-scrobble was off then, the row was
+                    # re-imported by a reload, or the record was pruned)
+                    # the remove path leaves the song's scrobble history
+                    # alone - a timestamp-less delete would remove the
+                    # track's MOST RECENT scrobble, which may be a
+                    # legitimate one the user actually listened to.
+                    if title and artists:
                         scrobble_integ = next(
                             (integ for integ in (self.integrations.get_all().values() if self.integrations else [])
                              if getattr(integ, "delete_scrobble", None) is not None),
                             None,
                         )
-                        if scrobble_integ is not None and title and artists:
+                        if scrobble_integ is not None:
                             artist = artists[0] if isinstance(artists, list) else str(artists)
-                            try:
-                                scrobble_integ.delete_scrobble(artist, title)
-                            except Exception as e:
-                                logger.debug("Failed to delete scrobble for %s: %s", title, e)
+                            ts = scrobble_log.lookup_scrobble(
+                                platform, playlist_id, song_id
+                            )
+                            if ts is not None:
+                                try:
+                                    if scrobble_integ.delete_scrobble(artist, title, ts):
+                                        scrobble_log.clear_scrobble(
+                                            platform, playlist_id, song_id
+                                        )
+                                except Exception as e:
+                                    logger.debug(
+                                        "Failed to delete scrobble for %s: %s", title, e
+                                    )
 
             def done() -> None:
                 card.removing = False
@@ -586,6 +596,77 @@ class ShowcaseManager:
                 )
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _load_like_states(self, pending_likes: list) -> None:
+        """Set the heart glyphs for a batch of showcase rows with ONE
+        batched loved-list fetch instead of one ``track.getInfo`` network
+        call per row (Last.fm rate-limits free apps to ~1 req/s).
+
+        Rows whose loved state is unknown keep their default empty-heart
+        glyph; only loved tracks flip to the full heart.  Runs on a worker
+        thread and marshals the glyph updates to the tkinter main thread.
+        """
+        scrobble_integ = next(
+            (
+                integ
+                for integ in (self.integrations.get_all().values() if self.integrations else [])
+                if getattr(integ, "get_loved_set", None) is not None
+            ),
+            None,
+        )
+        if scrobble_integ is None:
+            # Fallback for capability implementations without a batch
+            # fetch: per-track lookups.
+            for btn, artist, title in pending_likes:
+                threading.Thread(
+                    target=self._load_like_state_one,
+                    args=(btn, artist, title),
+                    daemon=True,
+                ).start()
+            return
+
+        def fetch() -> None:
+            try:
+                loved = scrobble_integ.get_loved_set() or {}
+            except Exception as e:
+                logger.debug("Failed to fetch loved set: %s", e)
+                return
+
+            def apply() -> None:
+                for btn, artist, title in pending_likes:
+                    if (artist.strip().lower(), title.strip().lower()) in loved:
+                        try:
+                            if btn.winfo_exists():
+                                btn.config(image=self._heart_full_img)
+                        except Exception:
+                            continue
+
+            try:
+                self.root.after(0, apply)
+            except Exception:
+                logger.debug("Window closed while loading like states", exc_info=True)
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _load_like_state_one(self, like_btn: tk.Button, artist: str, title: str) -> None:
+        """Per-track fallback (no batched :meth:`get_loved_set` available)."""
+        scrobble_cap = next(
+            (
+                getattr(integ, "is_loved", None)
+                for integ in (self.integrations.get_all().values() if self.integrations else [])
+                if getattr(integ, "is_loved", None) is not None
+            ),
+            None,
+        )
+        if scrobble_cap is None:
+            return
+        try:
+            is_loved = scrobble_cap(artist, title)
+        except Exception as e:
+            logger.debug("Failed to load like state for %s: %s", title, e)
+            return
+        if is_loved is not None:
+            self._apply_like_glyph(like_btn, is_loved)
 
     def _on_like_toggle(
         self, title: str, artists: list, like_btn: tk.Button | None = None

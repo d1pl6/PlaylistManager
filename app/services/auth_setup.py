@@ -180,16 +180,41 @@ def save_and_verify_spotify_credentials(
 def load_lastfm_credentials() -> Dict[str, str]:
     """Load existing Last.fm credentials from disk.
 
-    Returns an empty dict when the credential file does not exist.
+    Delegates to :func:`integrations.lastfm.lastfm.load_lastfm_credentials`
+    so the plugin owns the read contract (single-writer lives in the
+    plugin; the app keeps only the static delete path here).  Returns an
+    empty dict when the plugin is missing or the file does not exist.
     """
-    lastfm_file = AUTH_DIR / "lastfm.json"
-    if not lastfm_file.exists():
-        return {}
     try:
-        return json.loads(lastfm_file.read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.warning("Failed to load Last.fm credentials: %s", e)
+        from integrations.lastfm.lastfm import load_lastfm_credentials as load_impl
+        return load_impl()
+    except ImportError:
+        logger.warning("Last.fm plugin not found - cannot load credentials")
         return {}
+
+
+def validate_lastfm_credentials(api_key: str, api_secret: str) -> Dict[str, Any]:
+    """Validate Last.fm api_key/secret WITHOUT opening a browser or waiting
+    for authorization.
+
+    Delegates to :func:`integrations.lastfm.lastfm.validate_api_credentials`
+    (a signed ``auth.getToken`` round trip - a bad key or secret fails
+    fast).  Used by the login dialog's Test button; Save runs the full
+    web-auth flow (:func:`verify_lastfm_credentials`).
+
+    Returns ``{"ok": True}`` or ``{"ok": False, "error": ...}``.
+    """
+    try:
+        from integrations.lastfm.lastfm import validate_api_credentials as validate_impl
+        return validate_impl(api_key, api_secret)
+    except ImportError:
+        return {
+            "ok": False,
+            "error": "Last.fm plugin not found",
+        }
+    except Exception as e:
+        logger.error("Last.fm credential validation failed: %s", e, exc_info=True)
+        return {"ok": False, "error": str(e)}
 
 
 def delete_lastfm_credentials() -> bool:

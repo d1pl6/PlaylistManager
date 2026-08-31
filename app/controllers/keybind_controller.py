@@ -26,6 +26,7 @@ from utils.config import get_setting
 from utils.platform import is_wayland_session
 from controllers.keybind_registry import KeybindCallbacks, KeybindRegistry
 from services import duplicate_queue
+from services import scrobble_log
 from services.playlist_store import PlaylistStore
 from services.song_manager import SongManager
 from utils.theme import C
@@ -506,10 +507,16 @@ class KeybindController:
                 if status == "added":
                     callbacks.on_song_added()
                     # Scrobble the song if auto-scrobble is enabled and a ScrobbleCapable
-                    # integration is available.
+                    # integration is available.  An accepted scrobble is
+                    # recorded in the scrobble ledger so the remove-song
+                    # path can later delete THIS exact scrobble (not the
+                    # track's most recent one).
                     if get_setting("scrobble_on_add"):
                         song_data = result.get("song", {})
                         if song_data and self.integrations:
+                            song_id = result.get("song_id")
+                            playlist_id = stored_playlist_id or ""
+
                             def scrobble_async():
                                 try:
                                     scrobble_integ = next(
@@ -518,7 +525,11 @@ class KeybindController:
                                         None,
                                     )
                                     if scrobble_integ is not None:
-                                        scrobble_integ.scrobble(song_data)
+                                        ts = scrobble_integ.scrobble(song_data)
+                                        if ts is not None and song_id is not None:
+                                            scrobble_log.record_scrobble(
+                                                platform, playlist_id, song_id, ts
+                                            )
                                 except Exception as e:
                                     logger.debug("Failed to scrobble song: %s", e)
 
