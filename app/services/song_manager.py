@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Callable
 # service stays importable without the loader.
 PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 PLATFORM_SPOTIFY = "spotify"
+PLATFORM_SOUNDCLOUD = "soundcloud"
 from services.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -116,11 +117,38 @@ def _extract_spotify_track(track: dict) -> Optional[tuple]:
     return (title, artists, duration, track_id, thumbnail_url)
 
 
+def _extract_soundcloud_track(track: dict) -> Optional[tuple]:
+    """Extract fields from a SoundCloud track dict.
+
+    Returns (title, artists, duration_seconds, track_urn, thumbnail_url)
+    or None if the track has no usable id/urn.  Tracks carry a ``urn``
+    (``soundcloud:tracks:NNNN``); the numeric ``id`` is the fallback key.
+    """
+    urn = track.get("urn")
+    tid = track.get("id")
+    if not urn and tid is None:
+        return None
+    track_id = urn if urn else f"soundcloud:tracks:{tid}"
+
+    title = track.get("title", "Unknown")
+    user = track.get("user") or {}
+    username = user.get("username")
+    artists = [username] if username else ["Unknown Artist"]
+
+    # SoundCloud duration is milliseconds.
+    duration_ms = track.get("duration", 0) or 0
+    duration = duration_ms // 1000 if duration_ms else 0
+
+    thumbnail_url = track.get("artwork_url")
+    return (title, artists, duration, track_id, thumbnail_url)
+
+
 # Maps platform name → extractor callable.  Extractor signature:
 #   (track: dict) -> (title, artists, duration, track_id, thumbnail_url) | None
 _TRACK_EXTRACTORS: dict[str, Callable[[dict], Optional[tuple]]] = {
     PLATFORM_YOUTUBE_MUSIC: _extract_youtube_track,
     PLATFORM_SPOTIFY: _extract_spotify_track,
+    PLATFORM_SOUNDCLOUD: _extract_soundcloud_track,
 }
 
 # ------------------------------------------------------------------

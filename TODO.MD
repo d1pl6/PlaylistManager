@@ -20,7 +20,9 @@ album img	| artists
 
 [ ] Deezer integration
 
-[ ] SoundCloud integration
+[x] SoundCloud integration
+
+[ ] profiles (settings, playlists)
 
 [ ] Docs & Contribution
 

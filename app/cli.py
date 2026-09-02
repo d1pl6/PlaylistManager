@@ -668,10 +668,14 @@ def _stored_refresh_token() -> Optional[str]:
     prompt - pressing Enter re-logs-in with the stored token (e.g. when
     only the client credentials changed).
     """
+    return _stored_refresh_token_for(get_default_registry().get("spotify"))
+
+
+def _stored_refresh_token_for(plugin) -> Optional[str]:
+    """Read the refresh token from a plugin's saved auth file, if any."""
+    if plugin is None or not plugin.auth_path:
+        return None
     try:
-        plugin = get_default_registry().get("spotify")
-        if plugin is None or not plugin.auth_path:
-            return None
         data = json.loads(plugin.auth_path.read_text(encoding="utf-8"))
         return data.get("refresh_token") or None
     except (OSError, ValueError):
@@ -692,6 +696,77 @@ def _prompt(label: str, hidden: bool = False) -> Optional[str]:
         return None
 
 
+def _run_soundcloud_login(
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    refresh_token: Optional[str] = None,
+) -> int:
+    """CLI SoundCloud login: prompts for credentials, verifies FIRST.
+
+    Mirrors the Spotify login: the SoundCloud OAuth config
+    (client id / client secret / refresh token) is verified against the
+    live ``/me`` round-trip and only persisted on success - a typo can
+    never destroy previously working auth.
+    """
+    plugin = get_default_registry().get("soundcloud")
+    if plugin is None:
+        print("error: SoundCloud plugin not found", file=sys.stderr)
+        return 2
+
+    if not client_id:
+        client_id = _prompt("Client id: ")
+    if not client_secret:
+        client_secret = _prompt("Client secret: ", hidden=True)
+    if not refresh_token:
+        stored = _stored_refresh_token_for(plugin)
+        prompt_value = _prompt("Refresh token (leave empty to reuse stored): ", hidden=True)
+        refresh_token = prompt_value or stored
+    if not client_id or not client_secret or not refresh_token:
+        print(
+            "error: client id, client secret and a refresh token are all "
+            "required (from your SoundCloud app's dashboard)",
+            file=sys.stderr,
+        )
+        return 2
+
+    result = _soundcloud_save_and_verify(client_id, client_secret, refresh_token)
+    if result.get("ok"):
+        print(f"soundcloud: logged in as {result.get('display_name')}", flush=True)
+        return 0
+
+    print(
+        f"error: soundcloud login failed: {result.get('error')} "
+        "(existing credentials left untouched)",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _soundcloud_save_and_verify(client_id, client_secret, refresh_token) -> dict:
+    """Call the SoundCloud plugin's own verify-first save helper.
+
+    The plugin declares no core auth_setup functions (login is
+    self-contained in the plugin via ``login_module``/``login_class``), so
+    the CLI resolves the plugin's soundcloud module directly rather than
+    hard-coding a path into app/services/auth_setup.py.
+    """
+    try:
+        soundcloud_mod = __import__(
+            f"integrations.{_soundcloud_dir_name()}.soundcloud",
+            fromlist=["save_and_verify_soundcloud_credentials"],
+        )
+        return soundcloud_mod.save_and_verify_soundcloud_credentials(
+            client_id, client_secret, refresh_token
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"SoundCloud plugin error: {e}"}
+
+
+def _soundcloud_dir_name() -> str:
+    """Directory name of the SoundCloud plugin (``integrations.<dir>``)."""
+    return "soundcloud"
+
+
 def run_login(
     platform: str,
     client_id: Optional[str] = None,
@@ -702,7 +777,7 @@ def run_login(
 
     youtube_music: mirrors the GUI tile - opens the auth folder and a
     terminal running ``ytmusicapi browser`` (manual instructions instead
-    when no terminal emulator is installed).
+    when no terminal emulator is available).
 
     spotify: ``--login spotify`` alone prompts interactively (client id,
     client secret, refresh token - secret/token hidden like sudo).  The
@@ -756,6 +831,9 @@ def run_login(
             file=sys.stderr,
         )
         return 2
+
+    if platform == "soundcloud":
+        return _run_soundcloud_login(client_id, client_secret, refresh_token)
 
     # Spotify.  Flags override; missing values are prompted interactively
     # (hidden input for the secret and the token, like sudo).

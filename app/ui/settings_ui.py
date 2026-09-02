@@ -630,10 +630,64 @@ def show_settings_dialog(
         ),
     ).pack(side="left")
 
+    # -- SoundCloud section ---------------------------------------------
+    soundcloud_section = tk.Frame(content, background=theme_win_bg)
+    soundcloud_section.pack(fill="both", padx=8, pady=(0, 8))
+    _section_header(soundcloud_section, "SoundCloud")
+
+    scmode_row = tk.Frame(soundcloud_section, background=theme_win_bg)
+    scmode_row.pack(fill="both", pady=(0, 5), padx=16)
+    tk.Label(
+        scmode_row,
+        text="Capture current song via:",
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0, 5))
+
+    scmode_var = tk.StringVar(
+        value=get_setting_value("soundcloud", "capture_mode", "hybrid")
+    )
+    scmode_combo = ttk.Combobox(
+        scmode_row,
+        textvariable=scmode_var,
+        cursor="hand2",
+        values=("hybrid", "api", "extension"),
+        state="readonly",
+        width=11,
+        font=ui_font(12),
+    )
+    scmode_combo.pack(side="left", pady=(0, 5))
+
+    def _on_soundcloud_mode_change(mode: str) -> None:
+        try:
+            set_setting_value("soundcloud", "capture_mode", mode)
+        except Exception:
+            logger.error("Failed to write SoundCloud capture mode", exc_info=True)
+        # Applied on the next flow build; keybind flows read it at
+        # construction (KeybindController refresh rebuilds the flow).
+
+    scmode_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_soundcloud_mode_change(scmode_var.get()),
+    )
+    tk.Label(
+        soundcloud_section,
+        text=(
+            "hybrid: prefers the browser extension (exact URL + play/pause),\n"
+            "falls back to recently-played on a receiver miss\n"
+            "api: reads the last played track from SoundCloud's API\n"
+            "extension: extension only (no API fallback)"
+        ),
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        justify="left",
+        font=ui_font(9),
+    ).pack(anchor="w", padx=16, pady=(0, 6))
+
     about_section = tk.Frame(content, background=theme_win_bg)
     about_section.pack(fill="both", padx=8, pady=(0, 8))
     _section_header(about_section, "About")
-
     tk.Label(
         about_section,
         text="Author: d1pl",

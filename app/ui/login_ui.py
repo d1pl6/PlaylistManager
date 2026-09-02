@@ -79,6 +79,7 @@ def show_login_dialog(
         "youtube_music": (_on_youtube_music, LOGOS_DIR / "youtube-music.png"),
         "spotify": (_on_spotify, LOGOS_DIR / "spotify.png"),
         "lastfm": (_on_lastfm, LOGOS_DIR / "lastfm.png"),
+        "soundcloud": (_on_soundcloud, LOGOS_DIR / "soundcloud.png"),
     }
 
     def _current_integrations() -> list:
@@ -795,6 +796,247 @@ def _on_lastfm(parent, on_success):
             )
             if on_success:
                 on_success("lastfm")
+        else:
+            status_label.config(text=result.get("error", "Error"), foreground="red")
+
+    # ---- layout ----
+    btn_delete = tk.Button(
+        btn_frame,
+        text="Delete",
+        cursor="hand2",
+        **button_close_btn,
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        command=delete_credentials,
+    )
+    btn_delete.pack(side="left")
+
+    btn_test = tk.Button(
+        btn_frame,
+        text="Test",
+        cursor="hand2",
+        **btn_test_btn,
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        command=test_credentials,
+    )
+    btn_test.pack(side="left", padx=5)
+
+    btn_save = tk.Button(
+        btn_frame,
+        text="Save",
+        cursor="hand2",
+        **button_save_btn,
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        command=save_credentials,
+    )
+    btn_save.pack(side="right")
+
+    def _set_busy(busy: bool) -> None:
+        """Disable/enable every credential button while a verify round trip
+        is in flight."""
+        state = "disabled" if busy else "normal"
+        cursor = "arrow" if busy else "hand2"
+        btn_test.config(state=state, cursor=cursor)
+        btn_save.config(state=state, cursor=cursor)
+        btn_delete.config(state=state, cursor=cursor)
+
+    center_window(win)
+
+
+def _on_soundcloud(parent, on_success):
+    """Show the SoundCloud login dialog (client id + secret + refresh token).
+
+    Mirrors the Spotify tile: paste client id / client secret / refresh
+    token, verify-first Test and Save, Delete.  The actual credential
+    i/o and /me verification live in the plugin (via auth_setup), which
+    owns the single-writer contract.
+    """
+    win = tk.Toplevel(parent)
+    win.title("SoundCloud Login")
+    win.configure(background=C["frame_main_bg"])
+    win.transient(parent)
+    win.update_idletasks()
+    win.grab_set()
+
+    # ---------- theme colours ----------
+    header_bg = C["frame_head_bg"]
+    label_fg = C["label_def_fg"]
+    entry_bg = C["entry_default_bg"]
+    entry_fg = C["entry_default_fg"]
+    button_close_bg = C["button_close_bg"]
+    button_close_fg = C["button_close_fg"]
+    button_close_btn = btn_colors(button_close_bg, button_close_fg)
+    btn_test_bg = C["button_main_bg"]
+    btn_test_fg = C["button_main_fg"]
+    btn_test_btn = btn_colors(btn_test_bg, btn_test_fg)
+    button_save_bg = C["button_save_bg"]
+    button_save_fg = C["button_save_fg"]
+    button_save_btn = btn_colors(button_save_bg, button_save_fg)
+    frame_bg = C["frame_main_bg"]
+
+    existing = auth_setup.load_soundcloud_credentials()
+
+    header = tk.Frame(win, background=header_bg)
+    header.pack(fill="x", padx=10, pady=10)
+
+    tk.Label(
+        header,
+        text="SoundCloud Credentials",
+        background=header_bg,
+        foreground=label_fg,
+        font=ui_font(14),
+    ).pack(fill="both", pady=5, padx=5)
+
+    # ---------- fields ----------
+    fields_frame = tk.Frame(win, background=frame_bg)
+    fields_frame.pack(fill="x", padx=20, pady=10)
+
+    client_id_var = tk.StringVar(value=existing.get("client_id", ""))
+    client_secret_var = tk.StringVar(value=existing.get("client_secret", ""))
+    refresh_token_var = tk.StringVar(value=existing.get("refresh_token", ""))
+
+    fields = [
+        ("Client ID", client_id_var),
+        ("Client Secret", client_secret_var),
+        ("Refresh Token", refresh_token_var),
+    ]
+
+    for i, (label_text, var) in enumerate(fields):
+        tk.Label(
+            fields_frame,
+            text=label_text,
+            background=frame_bg,
+            foreground=label_fg,
+            font=ui_font(10),
+        ).grid(row=i, column=0, sticky="w", pady=5)
+
+        entry = tk.Entry(
+            fields_frame,
+            textvariable=var,
+            background=entry_bg,
+            foreground=entry_fg,
+            insertbackground=entry_fg,
+            font=ui_font(10),
+            width=40,
+            show="*",
+        )
+        entry.grid(row=i, column=1, sticky="ew", pady=5, padx=(10, 0))
+
+    fields_frame.columnconfigure(1, weight=1)
+
+    # ---------- status ----------
+    status_label = tk.Label(
+        win,
+        text="",
+        background=frame_bg,
+        foreground=label_fg,
+        font=ui_font(10),
+    )
+    status_label.pack(padx=20, pady=5)
+
+    # ---------- buttons ----------
+    btn_frame = tk.Frame(win, background=frame_bg)
+    btn_frame.pack(fill="x", padx=20, pady=10)
+
+    def _get_creds():
+        return {
+            "client_id": client_id_var.get().strip(),
+            "client_secret": client_secret_var.get().strip(),
+            "refresh_token": refresh_token_var.get().strip(),
+        }
+
+    def _all_filled(creds) -> bool:
+        return all(v for v in creds.values())
+
+    # ---- Delete ----
+    def delete_credentials():
+        try:
+            deleted = auth_setup.delete_soundcloud_credentials()
+            if deleted:
+                client_id_var.set("")
+                client_secret_var.set("")
+                refresh_token_var.set("")
+                status_label.config(
+                    text="Credentials deleted",
+                    foreground=C["label_playlist_good_fg"],
+                )
+                if on_success:
+                    on_success("soundcloud")
+            else:
+                status_label.config(text="No credentials file found", foreground="red")
+        except Exception as e:
+            status_label.config(text=f"Delete failed: {e}", foreground="red")
+
+    # ---- Test ----
+    def test_credentials():
+        creds = _get_creds()
+        if not _all_filled(creds):
+            status_label.config(text="All fields are required", foreground="red")
+            return
+        status_label.config(text="Testing...", foreground=label_fg)
+        _set_busy(True)
+
+        def run():
+            result = auth_setup.verify_soundcloud_credentials(**creds)
+            try:
+                win.after(0, _test_done, result)
+            except Exception:
+                logger.debug("Login dialog closed during verification", exc_info=True)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _test_done(result):
+        try:
+            if not win.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        _set_busy(False)
+        if result.get("ok"):
+            status_label.config(
+                text=f"OK: {result['display_name']}",
+                foreground=C["label_playlist_good_fg"],
+            )
+        else:
+            status_label.config(text=result.get("error", "Error"), foreground="red")
+
+    # ---- Save ----
+    def save_credentials():
+        creds = _get_creds()
+        if not _all_filled(creds):
+            status_label.config(text="All fields are required", foreground="red")
+            return
+        status_label.config(text="Verifying...", foreground=label_fg)
+        _set_busy(True)
+
+        def run():
+            result = auth_setup.save_and_verify_soundcloud_credentials(**creds)
+            try:
+                win.after(0, _save_done, result)
+            except Exception:
+                logger.debug("Login dialog closed during verification", exc_info=True)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _save_done(result):
+        try:
+            if not win.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        _set_busy(False)
+        if result.get("ok"):
+            status_label.config(
+                text=f"OK: {result.get('display_name', 'SoundCloud')}",
+                foreground=C["label_playlist_good_fg"],
+            )
+            if on_success:
+                on_success("soundcloud")
         else:
             status_label.config(text=result.get("error", "Error"), foreground="red")
 

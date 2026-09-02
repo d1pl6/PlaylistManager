@@ -704,10 +704,33 @@ class KeybindController:
         try:
             flow_cls = plugin.import_flow()
 
-            if plugin.flow_type == "extension":
-                receiver = plugin.build_receiver()
-                self._receivers[platform_id] = receiver
+            receiver = None
+            if plugin.receiver_class:
+                # A plugin that declares a receiver_class gets its receiver
+                # built and passed to the flow regardless of flow_type.  For
+                # extension-type platforms this is the receiver they need; for
+                # api/hybrid platforms (e.g. SoundCloud) the flow decides
+                # whether to consult it, so a browser-extension capture path
+                # can be wired in without the manifest being "extension".
+                try:
+                    receiver = plugin.build_receiver()
+                    self._receivers[platform_id] = receiver
+                except Exception as e:
+                    logger.error(
+                        "Failed to build receiver for %s: %s", platform_id, e
+                    )
+
+            if receiver is not None:
                 flow = flow_cls(integration, self.song_manager, receiver)
+            elif plugin.flow_type == "extension":
+                logger.error(
+                    "Extension-type plugin %s declares no receiver_class",
+                    platform_id,
+                )
+                raise RuntimeError(
+                    f"Extension-type plugin '{plugin.display_name}' is missing "
+                    "its receiver_class"
+                )
             else:
                 # "api" type - reads the platform directly, no receiver.
                 flow = flow_cls(integration, self.song_manager)

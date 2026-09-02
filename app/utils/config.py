@@ -31,6 +31,12 @@ DEFAULT_SETTINGS = {
     # the plugin is configured.
     "scrobble_on_add": {"is_true": "no"},
     "scrobble_keybind": {"keybind": ""},  # standalone "scrobble current song, without adding it" combo
+    # SoundCloud capture mode: how the add-flow acquires the current song.
+    # "api" reads /me/recently-played/tracks[0]; "hybrid" prefers the browser
+    # extension (exact URL + play/pause state) and falls back to the api path
+    # on a receiver miss; "extension" is receiver-only.  Read by
+    # integrations/soundcloud/flow.py.
+    "soundcloud": {"capture_mode": "hybrid"},
 }
 
 THEME_PATH = Path(__file__).resolve().parents[2] / "cfg" / "theme.ini"

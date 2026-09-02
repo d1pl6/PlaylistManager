@@ -301,6 +301,96 @@ def save_and_verify_lastfm_credentials(api_key: str, api_secret: str) -> Dict[st
 
 
 # ---------------------------------------------------------------------------
+# SoundCloud
+# ---------------------------------------------------------------------------
+
+
+def load_soundcloud_credentials() -> Dict[str, str]:
+    """Load existing SoundCloud credentials from disk.
+
+    Delegates to :func:`integrations.soundcloud.soundcloud
+    .load_soundcloud_credentials` so the plugin owns the read contract.
+    Returns an empty dict when the plugin is missing or the file does
+    not exist.
+    """
+    try:
+        from integrations.soundcloud.soundcloud import (
+            load_soundcloud_credentials as load_impl,
+        )
+        result = load_impl()
+        return result if result else {}
+    except ImportError:
+        logger.warning("SoundCloud plugin not found - cannot load credentials")
+        return {}
+
+
+def delete_soundcloud_credentials() -> bool:
+    """Remove the SoundCloud credential file.
+
+    Returns ``True`` when the file was deleted, ``False`` when it
+    did not exist.
+    """
+    try:
+        from integrations.soundcloud.soundcloud import (
+            delete_soundcloud_credentials as delete_impl,
+        )
+        return delete_impl()
+    except ImportError:
+        logger.warning("SoundCloud plugin not found - cannot delete credentials")
+        return False
+
+
+def verify_soundcloud_credentials(
+    client_id: str, client_secret: str, refresh_token: str
+) -> Dict[str, Any]:
+    """Test if SoundCloud credentials are valid by calling ``/me``.
+
+    Delegates to the plugin's ``verify_soundcloud_credentials`` so the
+    API client logic lives in the plugin.
+
+    Returns a dict with keys ``ok`` (bool) and either ``display_name``
+    or ``error``.
+    """
+    try:
+        from integrations.soundcloud.soundcloud import (
+            verify_soundcloud_credentials as verify_impl,
+        )
+        me, api = verify_impl(client_id, client_secret, refresh_token)
+        if me:
+            name = me.get("username") or me.get("full_name") or me.get("id") or ""
+            return {"ok": True, "display_name": str(name)}
+        return {"ok": False, "error": "Authentication failed"}
+    except ImportError:
+        return {"ok": False, "error": "SoundCloud plugin not found"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def save_and_verify_soundcloud_credentials(
+    client_id: str, client_secret: str, refresh_token: str
+) -> Dict[str, Any]:
+    """Verify SoundCloud credentials and persist them if they are valid.
+
+    Verification runs FIRST: only a successful ``/me`` round trip
+    persists the credentials (verify-first pattern, repo rule #69).
+
+    Delegates the actual save to the plugin's
+    ``save_and_verify_soundcloud_credentials``.
+
+    Returns the same dict as :func:`verify_soundcloud_credentials`.
+    """
+    try:
+        from integrations.soundcloud.soundcloud import (
+            save_and_verify_soundcloud_credentials as save_impl,
+        )
+        return save_impl(client_id, client_secret, refresh_token)
+    except ImportError:
+        return {"ok": False, "error": "SoundCloud plugin not found"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
 # Multi-platform credential deletion (CLI --logout)
 # ---------------------------------------------------------------------------
 
@@ -313,6 +403,7 @@ PLATFORM_CREDENTIAL_FILES = {
     "youtube_music": [BROWSER_FILE],
     "spotify": [SPOTIFY_FILE],
     "lastfm": [AUTH_DIR / "lastfm.json"],
+    "soundcloud": [AUTH_DIR / "soundcloud.json"],
 }
 
 

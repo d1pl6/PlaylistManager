@@ -16,6 +16,7 @@ from tkinter import ttk, messagebox
 # plugin.json); these local constants mirror the built-in ids.
 PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 PLATFORM_SPOTIFY = "spotify"
+PLATFORM_SOUNDCLOUD = "soundcloud"
 from controllers.keybind_registry import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
 from services import duplicate_queue
@@ -51,6 +52,7 @@ INTEGRATION_ERROR_MSG = (
 _PLATFORM_API_TARGETS: dict[str, tuple[str, int]] = {
     PLATFORM_YOUTUBE_MUSIC: ("music.youtube.com", 443),
     PLATFORM_SPOTIFY: ("api.spotify.com", 443),
+    PLATFORM_SOUNDCLOUD: ("api.soundcloud.com", 443),
 }
 
 assets_dir = Path(__file__).resolve().parents[2] / "assets"

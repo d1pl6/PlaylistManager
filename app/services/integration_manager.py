@@ -98,11 +98,21 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
     ),
     "spotify": IntegrationRepo(
         platform_id="spotify",
-        display_name="Spotify",
+        display_name="Spotify (not tested)",
         owner="d1pl6",
         repo="spotify-integration",
         copies=(
             ("integrations/spotify", "spotify"),
+        ),
+    ),
+    "soundcloud": IntegrationRepo(
+        platform_id="soundcloud",
+        display_name="SoundCloud (not tested)",
+        owner="d1pl6",
+        repo="soundcloud-integration",
+        copies=(
+            ("integration/soundcloud", "soundcloud"),
+            ("soundcloud-extension", "soundcloud/soundcloud-extension")
         ),
     ),
     "lastfm": IntegrationRepo(

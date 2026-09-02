@@ -264,7 +264,7 @@ def show_manage_dialog(
                     highlightthickness=0,
                     relief="raised",
                     font=ui_font(9),
-                    command=lambda p=pid: _start_download(p, row, status_lbl),
+                    command=lambda p=pid, r=row, l=status_lbl: _start_download(p, r, l),
                 )
             else:
                 continue  # custom plugin present but no repo: nothing to do
@@ -328,6 +328,7 @@ def show_manage_dialog(
                 error = str(e)
 
             def _apply() -> None:
+                nonlocal error
                 _busy.discard(pid)
                 # The app-level refresh must run even when the dialog was
                 # closed mid-download - without it the installed plugin
