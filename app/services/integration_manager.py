@@ -24,7 +24,7 @@ import threading
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from plugin_loader import PluginRegistry
 from services import auth_setup, duplicate_queue
@@ -307,6 +307,45 @@ def _validate_plugin_manifest(manifest: Path, expected_id: str) -> None:
             f"Download does not contain the '{expected_id}' plugin "
             f"(manifest declares id {declared!r}) - refusing to install"
         )
+
+
+# ---------------------------------------------------------------------------
+# Version checking (GitHub releases)
+# ---------------------------------------------------------------------------
+
+_GITHUB_API_TIMEOUT = 10
+
+
+def check_latest_version(platform_id: str) -> Optional[int]:
+    """Fetch the latest release tag number from GitHub for *platform_id*.
+
+    Returns the release number (e.g. ``5`` from tag ``"5"``) or ``None``
+    when the platform has no download source, no local version, or the
+    API call fails.  The tag is expected to be a plain integer per the
+    project's release convention.
+    """
+    import requests  # local import: only needed here
+
+    repo = INTEGRATION_REPOS.get(platform_id)
+    if repo is None:
+        return None
+    url = (
+        f"https://api.github.com/repos/{repo.owner}/{repo.repo}"
+        "/releases/latest"
+    )
+    try:
+        resp = requests.get(url, timeout=_GITHUB_API_TIMEOUT)
+        resp.raise_for_status()
+        tag = resp.json().get("tag_name", "")
+        # Strip an optional "v" prefix then parse as integer.
+        tag_clean = tag.lstrip("vV").strip()
+        return int(tag_clean)
+    except Exception:
+        logger.debug(
+            "Could not fetch latest release for %s from %s",
+            platform_id, url,
+        )
+        return None
 
 
 # ---------------------------------------------------------------------------

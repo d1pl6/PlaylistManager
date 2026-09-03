@@ -123,6 +123,19 @@ def show_manage_dialog(
     )
     btn_uninstall_all.pack(side="left", padx=(8, 0))
 
+    btn_update_all = tk.Button(
+        actions,
+        text="Update all",
+        cursor="hand2",
+        **btn_colors(C["button_save_bg"], C["button_save_fg"]),
+        highlightthickness=0,
+        relief="raised",
+        font=ui_font(9),
+        state="disabled",
+        command=lambda: _bulk_update_all(),
+    )
+    btn_update_all.pack(side="left", padx=(8, 0))
+
     sf = ScrollableFrame(
         win,
         bg=content_bg,
@@ -160,6 +173,31 @@ def show_manage_dialog(
     # op is in flight, and disables the bulk buttons (mutating the set
     # under a running bulk worker would be racy).
     _bulk_busy: list = [False]
+    # Cached latest GitHub release numbers per platform id (populated by
+    # _has_update on first access, invalidated on download/update/refresh).
+    _update_cache: dict = {}
+
+    def _has_update(pid: str) -> bool:
+        """Return True if the installed plugin is behind the latest release.
+
+        Caches the remote version per platform so the GitHub API is hit at
+        most once per platform per dialog session.  Caches are cleared on
+        download/update completion and on the initial _refresh_rows call
+        that follows them.
+        """
+        if pid in _update_cache:
+            return _update_cache[pid]
+        plugin = plugin_registry.get(pid)
+        if plugin is None or plugin.version is None:
+            _update_cache[pid] = False
+            return False
+        remote = integration_manager.check_latest_version(pid)
+        if remote is None:
+            _update_cache[pid] = False
+            return False
+        has = remote > plugin.version
+        _update_cache[pid] = has
+        return has
 
     def _update_bulk_buttons() -> None:
         """Refresh bulk-button enabled state from the installed set + busy."""
@@ -170,12 +208,22 @@ def show_manage_dialog(
             if pid not in installed and pid not in _busy
         )
         has_uninstallable = any(pid in installed for pid in ids)
+        has_updatable = any(
+            pid in installed
+            and pid in integration_manager.INTEGRATION_REPOS
+            and pid not in _busy
+            and _has_update(pid)
+            for pid in ids
+        )
         try:
             btn_download_all.config(
                 state="normal" if has_downloadable and not _bulk_busy[0] else "disabled"
             )
             btn_uninstall_all.config(
                 state="normal" if has_uninstallable and not _bulk_busy[0] else "disabled"
+            )
+            btn_update_all.config(
+                state="normal" if has_updatable and not _bulk_busy[0] else "disabled"
             )
         except tk.TclError:
             pass  # bulk bar destroyed with the dialog
@@ -244,6 +292,8 @@ def show_manage_dialog(
                     foreground=label_fg,
                 )
                 continue
+            btn = None
+            update_btn = None
             if is_installed:
                 btn = tk.Button(
                     row,
@@ -255,6 +305,17 @@ def show_manage_dialog(
                     font=ui_font(9),
                     command=lambda p=pid: _confirm_uninstall(p),
                 )
+                if catalog_repo is not None and _has_update(pid):
+                    update_btn = tk.Button(
+                        row,
+                        text="Update",
+                        cursor="hand2",
+                        **btn_colors(C["button_save_bg"], C["button_save_fg"]),
+                        highlightthickness=0,
+                        relief="raised",
+                        font=ui_font(9),
+                        command=lambda p=pid, r=row, l=status_lbl: _start_update(p, r, l),
+                    )
             elif catalog_repo is not None:
                 btn = tk.Button(
                     row,
@@ -269,7 +330,10 @@ def show_manage_dialog(
             else:
                 continue  # custom plugin present but no repo: nothing to do
 
-            btn.pack(side="right")
+            if btn is not None:
+                btn.pack(side="right")
+            if update_btn is not None:
+                update_btn.pack(side="right", padx=(4, 0))
 
         sf.update_scrollregion()
         _update_bulk_buttons()
@@ -534,7 +598,59 @@ def show_manage_dialog(
         _uninstall_platform(pid, plugin, teardown_errors)
 
     # ------------------------------------------------------------------
-    # Download all / Uninstall all
+    # Update (per-platform) — re-download replaces the plugin in-place
+    # ------------------------------------------------------------------
+
+    def _start_update(pid: str, row: tk.Frame, status_lbl: tk.Label) -> None:
+        if pid in _busy or _bulk_busy[0]:
+            return
+        _busy.add(pid)
+        catalog_repo = integration_manager.INTEGRATION_REPOS[pid]
+        # Disable both buttons (Uninstall + Update) while updating.
+        for w in row.winfo_children():
+            if isinstance(w, tk.Button):
+                w.config(state="disabled", text="Updating…")
+        status_lbl.config(text="Updating…", foreground=label_fg)
+        _update_cache.pop(pid, None)
+
+        def _worker() -> None:
+            error: Optional[str] = None
+            try:
+                integration_manager.download_integration(pid)
+            except Exception as e:
+                logger.exception("Update failed for %s", pid)
+                error = str(e)
+
+            def _apply() -> None:
+                nonlocal error
+                _busy.discard(pid)
+                if error is None and on_plugins_changed is not None:
+                    try:
+                        on_plugins_changed()
+                    except Exception as e:
+                        logger.exception("Plugin rescan failed after update")
+                        error = f"Updated, but reload failed: {e}"
+                try:
+                    dialog_open = bool(win.winfo_exists())
+                except tk.TclError:
+                    dialog_open = False
+                if not dialog_open:
+                    return
+                _refresh_rows()
+                if error is not None:
+                    _set_footer(f"Update failed: {error}", error=True)
+                else:
+                    _set_footer(
+                        f"{catalog_repo.display_name} updated",
+                        ok=True,
+                    )
+
+            _after_main(_apply)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Download all / Uninstall all / Update all
     # ------------------------------------------------------------------
 
     def _bulk_download_all() -> None:
@@ -684,6 +800,87 @@ def show_manage_dialog(
                         )
                     else:
                         _set_footer(text, ok=True)
+
+            _after_main(_apply)
+
+        threading.Thread(target=_worker, daemon=True).start()
+        _refresh_rows()
+
+    # ------------------------------------------------------------------
+    # Update all
+    # ------------------------------------------------------------------
+
+    def _bulk_update_all() -> None:
+        """Re-download every installed catalog platform that has an update."""
+        if _bulk_busy[0]:
+            return
+        installed = plugin_registry.get_all()
+        targets = [
+            pid
+            for pid in installed
+            if pid in integration_manager.INTEGRATION_REPOS
+            and pid not in _busy
+            and _has_update(pid)
+        ]
+        if not targets:
+            return
+
+        names = ", ".join(_display_name(installed[pid], pid) for pid in targets)
+        if not messagebox.askyesno(
+            "Update all integrations",
+            f"Update {len(targets)} integration(s)?\n\n"
+            f"{names}\n\n"
+            "Each plugin will be replaced with the latest version from "
+            "GitHub.  Credentials, playlists and databases are kept.",
+            parent=win,
+        ):
+            return
+
+        _bulk_busy[0] = True
+        for pid in targets:
+            _update_cache.pop(pid, None)
+
+        def _worker() -> None:
+            failures: List[str] = []
+            for pid in targets:
+                _busy.add(pid)
+                try:
+                    integration_manager.download_integration(pid)
+                except Exception as e:
+                    logger.exception("Update failed for %s", pid)
+                    failures.append(f"{_display_name(installed[pid], pid)}: {e}")
+                finally:
+                    _busy.discard(pid)
+
+            def _apply() -> None:
+                _bulk_busy[0] = False
+                reload_failed: Optional[str] = None
+                if on_plugins_changed is not None:
+                    try:
+                        on_plugins_changed()
+                    except Exception as e:
+                        logger.exception("Plugin rescan failed after update-all")
+                        reload_failed = str(e)
+                try:
+                    dialog_open = bool(win.winfo_exists())
+                except tk.TclError:
+                    dialog_open = False
+                if not dialog_open:
+                    return
+                _refresh_rows()
+                if failures:
+                    text = (
+                        f"Update all: {len(targets) - len(failures)}/{len(targets)} "
+                        f"done ({len(failures)} failed)"
+                    )
+                    if reload_failed:
+                        text += f" (reload: {reload_failed})"
+                    _set_footer(text, error=True)
+                else:
+                    text = f"Updated all integrations ({len(targets)})"
+                    if reload_failed:
+                        text += f" - reload failed: {reload_failed}"
+                    _set_footer(text, ok=True)
 
             _after_main(_apply)
 

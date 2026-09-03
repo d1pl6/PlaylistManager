@@ -137,6 +137,10 @@ class PluginInfo:
     # playlist_url.py (backward-compatible default).
     playlist_url_template: str = ""
     song_url_template: str = ""
+    # Plugin version (integer) from plugin.json.  Compared against GitHub
+    # releases to decide whether an update is available.  None when the
+    # manifest omits the field (no update checking for that plugin).
+    version: Optional[int] = None
 
     def _import(self, module_name: str):
         """Import ``integrations.<dir>.<module_name>`` and cache the module.
@@ -390,6 +394,20 @@ class PluginRegistry:
             )
             return None
 
+        # Version: optional integer in plugin.json, compared against
+        # GitHub releases to detect available updates.
+        version = raw.get("version", None)
+        if version is not None and (
+            isinstance(version, bool)
+            or not isinstance(version, int)
+            or version < 0
+        ):
+            logger.warning(
+                "Plugin '%s': version must be a non-negative integer "
+                "(got %r) - ignoring", plugin_id, version,
+            )
+            version = None
+
         return PluginInfo(
             id=plugin_id,
             display_name=raw["display_name"],
@@ -412,6 +430,7 @@ class PluginRegistry:
             receiver_port=receiver_port,
             playlist_url_template=raw.get("playlist_url_template", ""),
             song_url_template=raw.get("song_url_template", ""),
+            version=version,
         )
 
     def _validate_fallback_paths(self, plugin_id: str, raw: object) -> List[str]:
