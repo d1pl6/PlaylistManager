@@ -12,14 +12,14 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from platformdirs import user_config_dir
+from services import profile_store as _profile_store
 
 from utils.logging_config import user_log
 from utils.platform import get_terminal_command, open_directory
 
 logger = logging.getLogger(__name__)
 
-AUTH_DIR = Path(user_config_dir("playlistmanager")) / "auth"
+AUTH_DIR = _profile_store.auth_dir()
 SPOTIFY_FILE = AUTH_DIR / "spotify.json"
 BROWSER_FILE = AUTH_DIR / "browser.json"
 

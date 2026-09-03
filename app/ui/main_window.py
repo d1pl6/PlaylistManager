@@ -374,6 +374,8 @@ class MainWindow:
                 on_check_duplicates_now=self._run_duplicate_scan,
                 on_like_button_change=self._apply_like_button_visibility,
                 on_scrobble_keybind_change=self._register_scrobble_keybind,
+                on_restart_app=self.ac.restart_app,
+                plugin_availability=set(self.integrations.get_all()),
             ),
         )
         ToolTip(self.btn_open_settings, "Settings")

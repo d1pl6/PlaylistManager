@@ -6,7 +6,16 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-SETTINGS_PATH = Path(__file__).resolve().parents[2] / "cfg" / "settings.ini"
+# ---------------------------------------------------------------------------
+# Profile-aware paths: imported early to initialise the active profile
+# before any module-level path constant is bound.  profile_store has no
+# app imports (stdlib only), so this import is cheap and cycle-free.
+# ---------------------------------------------------------------------------
+from services import profile_store as _profile_store
+
+_profile_store.initialize()
+
+SETTINGS_PATH = _profile_store.cfg_dir() / "settings.ini"
 
 DEFAULT_SETTINGS = {
     "update_check": {"is_true": "yes"},
@@ -39,7 +48,7 @@ DEFAULT_SETTINGS = {
     "soundcloud": {"capture_mode": "hybrid"},
 }
 
-THEME_PATH = Path(__file__).resolve().parents[2] / "cfg" / "theme.ini"
+THEME_PATH = _profile_store.cfg_dir() / "theme.ini"
 
 DEFAULT_THEME = {
     "root_background": {"background": "#1A1A1A"},

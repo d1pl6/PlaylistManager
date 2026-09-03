@@ -232,7 +232,7 @@ class PluginInfo:
 
     @property
     def auth_path(self) -> Optional[Path]:
-        """Full path of *auth_file* inside the shared auth dir, if declared."""
+        """Full path of *auth_file* inside the profile-aware auth dir, if declared."""
         if not self.auth_file:
             return None
         from pathlib import PurePosixPath  # local import: only needed here
@@ -244,11 +244,8 @@ class PluginInfo:
                 self.id, self.auth_file,
             )
             return None
-        try:
-            from platformdirs import user_config_dir
-        except ImportError:  # pragma: no cover - platformdirs is a hard dep
-            return None
-        return Path(user_config_dir("playlistmanager")) / "auth" / name
+        from services import profile_store
+        return profile_store.auth_dir() / name
 
     @property
     def auth_paths(self) -> List[Path]:

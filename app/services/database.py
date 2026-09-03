@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from services import profile_store as _profile_store
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class DatabaseManager:
     @staticmethod
     def _get_db_directory(platform: str) -> Path:
         """Get the database directory path for a given platform."""
-        return Path(__file__).resolve().parents[2] / "db" / platform
+        return _profile_store.db_dir() / platform
 
     @staticmethod
     def get_playlist_db_path_static(

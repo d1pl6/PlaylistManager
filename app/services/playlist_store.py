@@ -19,7 +19,9 @@ PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 
 logger = logging.getLogger(__name__)
 
-playlists_json = Path(__file__).resolve().parents[2] / "db" / "playlists.json"
+from services import profile_store as _profile_store
+
+playlists_json = _profile_store.db_dir() / "playlists.json"
 
 # In-memory cache so we don't re-read the file on every operation.
 _playlist_cache: list[dict] | None = None

@@ -40,7 +40,9 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-extra_json = Path(__file__).resolve().parents[2] / "db" / "extra.json"
+from services import profile_store as _profile_store
+
+extra_json = _profile_store.db_dir() / "extra.json"
 
 # Serialise all read/write access across flow threads and the UI thread.
 _lock = threading.RLock()

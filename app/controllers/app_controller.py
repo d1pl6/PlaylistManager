@@ -71,6 +71,58 @@ class AppController:
         """Proxy for App._check_updates - keeps the controller boundary."""
         self.app._check_updates(force=force, on_done=on_done)
 
+    def restart_app(self) -> None:
+        """Cleanly quit and re-launch the app.
+
+        Used by the profile switch flow: the new active profile is read
+        at import time, so a profile change only takes effect after a
+        full restart.  This reloads everything against the new profile's
+        paths (settings, theme, playlists, auth).
+
+        Re-launch mirrors how the user started the app: ``sys.executable
+        main.py`` when they ran it directly, otherwise the global
+        ``playlistmanager`` command.  A restart failure (the helper
+        process raises) leaves the app stopped rather than silently
+        half-closed.
+        """
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        # Run teardown first (pynput listener, receiver, thread-cached
+        # SQLite conns) so nothing from the old profile survives.
+        try:
+            self.app.cleanup()
+        except Exception:
+            logger.exception("Cleanup failed during restart")
+        try:
+            self.app.root.update_idletasks()
+        except Exception:
+            pass
+
+        root_path = Path(__file__).resolve().parents[2]
+        main_py = root_path / "main.py"
+        if main_py.exists():
+            cmd = [sys.executable, str(main_py)]
+        else:
+            # Fall back to the user-installed global command.
+            cmd = ["playlistmanager"]
+
+        try:
+            self.app.root.destroy()
+        except Exception:
+            pass
+
+        try:
+            subprocess.Popen(
+                cmd,
+                cwd=str(root_path),
+                start_new_session=True,
+            )
+        except OSError as e:
+            logger.error("Failed to restart the app: %s", e)
+
     def refresh_auth(
         self,
         platform: Optional[str] = None,

@@ -123,6 +123,15 @@ class KeybindController:
     def set_global_listener(self, enabled: bool):
         if self._global_mode == enabled:
             return
+        if enabled and is_wayland_session():
+            # Global keybinds are impossible on native Wayland - the
+            # compositor owns input and pynput's X11 listener never sees
+            # keys.  Refuse the switch and keep local key bindings.
+            logger.warning(
+                "Global key listener is not available on Wayland - "
+                "falling back to local key bindings"
+            )
+            return
         self._global_mode = enabled
         if enabled:
             self._unbind_local_keys()
@@ -134,6 +143,20 @@ class KeybindController:
             logger.info("Switched to local key listener")
 
     def _start_global_listener(self):
+        if is_wayland_session():
+            # Never start the (X11-only) pynput listener on a native
+            # Wayland session - it would sit idle and give the user a
+            # false "listener started" impression.
+            logger.warning(
+                "Wayland session detected - not starting the global "
+                "keybinds listener (it cannot capture keys on native "
+                "Wayland). Bind compositor shortcuts to "
+                "'playlistmanager add N' for reliable global keybinds "
+                "(see cli.md)."
+            )
+            self._global_mode = False
+            self._bind_local_keys()
+            return
         with self._listener_lock:
             if self._listener is not None:
                 return
@@ -145,15 +168,6 @@ class KeybindController:
                 self._listener.daemon = True
                 self._listener.start()
                 logger.info("Global keybind listener started")
-                if is_wayland_session():
-                    logger.warning(
-                        "Wayland session detected - the global keybinds "
-                        "listener only captures keys while an XWayland "
-                        "client has focus; native Wayland apps never "
-                        "route keys through it. Bind compositor "
-                        "shortcuts to 'playlistmanager add N' for "
-                        "reliable global keybinds (see cli.md)."
-                    )
             except Exception as e:
                 logger.error("Failed to start keybind listener: %s", e)
                 self._listener = None

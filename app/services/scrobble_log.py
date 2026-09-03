@@ -33,7 +33,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-scrobbles_json = Path(__file__).resolve().parents[2] / "db" / "scrobbles.json"
+from services import profile_store as _profile_store
+
+scrobbles_json = _profile_store.db_dir() / "scrobbles.json"
 
 # Serialise all read/write access across flow threads and the UI thread.
 _lock = threading.RLock()
