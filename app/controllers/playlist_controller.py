@@ -11,7 +11,6 @@ import logging
 import threading
 from typing import Callable, Optional
 
-from constants import PLATFORM_YOUTUBE_MUSIC
 from services.playlist_store import PlaylistStore
 
 logger = logging.getLogger(__name__)
@@ -196,7 +195,7 @@ class PlaylistController:
     def _on_playlist_selected(
         self,
         playlist_name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str = "youtube_music",
         playlist_id: str = "",
         thumb_url: Optional[str] = None,
         follower_count: int = 0,

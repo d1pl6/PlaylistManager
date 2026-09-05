@@ -10,7 +10,6 @@ import logging
 import threading
 from typing import Callable, Optional
 
-from constants import PLATFORM_YOUTUBE_MUSIC
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
 from services.song_manager import SongManager
@@ -141,6 +140,12 @@ class PlaylistSyncService:
         tracks = integration.get_playlist_tracks(playlist_id)
         if not tracks:
             return 0, "No tracks"
+        # The platform may have been uninstalled while the fetch was in
+        # flight - a Manage-dialog uninstall deletes db/<platform>/ and this
+        # call would otherwise silently recreate it.  Abort like a dead
+        # integration (RuntimeError) instead of resurrecting the database.
+        if self.integrations.get(platform) is None:
+            raise RuntimeError(f"no integration for platform '{platform}'")
         sm = SongManager()
         inserted = sm.add_songs_bulk(
             playlist_name, tracks, platform=platform, playlist_id=playlist_id
@@ -200,6 +205,12 @@ class PlaylistSyncService:
         # already-fetched list, so nothing is fetched twice.
         tracks = integration.get_playlist_tracks(playlist_id)
 
+        # Platform uninstalled while the fetch was in flight: abort before
+        # deleting/recreating the local DB - the uninstall cleanup must
+        # not be undone from a stale worker (see import_tracks_sync).
+        if self.integrations.get(platform) is None:
+            raise RuntimeError(f"no integration for platform '{platform}'")
+
         DatabaseManager.delete_playlist_db(playlist_name, platform, playlist_id)
         logger.info("Deleted database for '%s'", playlist_name)
 
@@ -233,7 +244,7 @@ class PlaylistSyncService:
         wins over the details header.  Other platforms return *details_thumb*
         unchanged.
         """
-        if platform != PLATFORM_YOUTUBE_MUSIC:
+        if platform != "youtube_music":
             return details_thumb
         try:
             for p in integration.get_library_playlists():

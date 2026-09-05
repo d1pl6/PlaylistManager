@@ -5,6 +5,7 @@ playlist registry from the terminal.
 Entry points (all equivalent):
     python -m app -a 1,2,3
     python -m app --add-song "Chill Mix"
+    python -m app -s                    # scrobble the currently-playing song
     python -m app -p add "https://music.youtube.com/playlist?list=PL..."
     python -m app -p del 1,"Chill Mix"
     python -m app -p ref 1,"Chill Mix"
@@ -14,9 +15,13 @@ Entry points (all equivalent):
     python -m app --login spotify --client-id X --client-secret Y --refresh-token Z
     python -m app --logout youtube_music
     python -m app --logout spotify
+    python -m app --install spotify            # download/install a platform plugin
+    python -m app --install all                # install every supported platform
+    python -m app --uninstall spotify          # remove a platform + all its local data
+    python -m app --uninstall all              # remove every installed platform
 
 Designed for compositor-owned shortcuts (i3 / sway / hyprland / KDE / GNOME
-binds) - the Wayland-safe replacement for pynput global hotkeys (plan.md W1,
+binds) - the Wayland-safe replacement for pynput global keybinds (plan.md W1,
 Option A). The compositor grabs the key and runs this command; no global input
 capture is needed.
 
@@ -34,18 +39,16 @@ import re
 import sys
 from typing import Dict, List, Optional, Tuple
 
-from constants import (
-    KNOWN_PLATFORMS,
-    PLATFORM_SPOTIFY,
-    PLATFORM_YOUTUBE_MUSIC,
-)
-from integrations.music_youtube.music_youtube_receiver import URLReceiverManager, extract_video_id
-from services import auth_setup
+from plugin_loader import PluginRegistry, get_default_registry
+from services import auth_setup, duplicate_queue, integration_manager
 from services.database import DatabaseManager
+from services.integration import IntegrationRegistry
 from services.playlist_store import PlaylistStore
 from services.playlist_sync import PlaylistSyncService
 from services.playlist_url import parse_playlist_url
+from services import scrobble_log
 from services.song_manager import SongManager
+from utils.config import get_setting
 from utils.logging_config import user_log
 from utils.thumbnail import ThumbnailService
 
@@ -103,9 +106,9 @@ def resolve_targets(
     kept.
 
     *allow_urls* enables URL tokens, resolved against the registry by
-    (platform, playlist_id) - used by the del/ref commands. The song-add path
-    leaves it False so a URL there falls through to name lookup and fails
-    with "not found".
+    (platform, playlist_id). Used by the add/del/ref commands: the del/ref
+    path always allows them, and the song-add path enables them so ``-a
+    <URL>`` targets a registered playlist by its link.
 
     Raises UsageError on malformed, out-of-range, unknown or ambiguous input.
     """
@@ -123,7 +126,7 @@ def resolve_targets(
         # (platform, playlist_id or name) so distinct legacy playlists are
         # not collapsed into a single dedup key.
         key = (
-            entry.get("platform") or PLATFORM_YOUTUBE_MUSIC,
+            entry.get("platform") or "youtube_music",
             entry.get("playlist_id") or entry.get("name"),
         )
         if key in seen:
@@ -136,14 +139,14 @@ def resolve_targets(
         if kind == "number":
             if not 1 <= value <= total:
                 raise UsageError(
-                    f"Playlist #{value} out of range - valid: 1–{total}"
+                    f"Playlist #{value} out of range - valid: 1-{total}"
                 )
             add(playlists[value - 1], value)
         elif kind == "range":
             start, end = value
             if start < 1 or end > total:
                 raise UsageError(
-                    f"Playlist range {start}–{end} out of range - valid: 1–{total}"
+                    f"Playlist range {start}-{end} out of range - valid: 1-{total}"
                 )
             for number in range(start, end + 1):
                 add(playlists[number - 1], number)
@@ -204,74 +207,96 @@ def resolve_targets_for(
 
 
 # ---------------------------------------------------------------------------
-# Auth bootstrap (mirrors App.__init__ in app/app.py)
+# Auth bootstrap (generic - driven by the plugin manifests)
 # ---------------------------------------------------------------------------
 
 
-def _init_yt_music():
-    """Return an authenticated YTMusic client, or None if unavailable."""
+def _init_platform(plugin_registry, platform_id: str):
+    """Authenticate one platform via its plugin. Returns the integration
+    with a live client, or ``None`` when unavailable/unconfigured."""
+    plugin = plugin_registry.get(platform_id)
+    if plugin is None:
+        return None
     try:
-        from integrations.music_youtube.music_youtube import youtube_auth
-
-        if youtube_auth.setup_auth():
-            return youtube_auth.get_yt_music()
-        logger.warning("YouTube Music not configured (no browser.json)")
-    except ImportError:
-        user_log(
-            logger, "ytmusicapi not installed - YouTube Music integration disabled"
+        auth_manager = None
+        if plugin.auth_module:
+            auth_manager = plugin.import_auth_attr()
+        integration_cls = plugin.import_integration()
+    except Exception as e:
+        logger.error(
+            "%s integration unavailable: %s", platform_id, e, exc_info=True
         )
-    except Exception as e:
-        logger.error(f"YouTube Music auth failed: {e}", exc_info=True)
-    return None
+        return None
 
-
-def _init_spotify():
-    """Return an authenticated SpotifyIntegration, or None if unavailable."""
+    integration = integration_cls(auth_manager=auth_manager)
     try:
-        from integrations.music_spotify.music_spotify import spotify_auth
-        from services.integration import SpotifyIntegration
-
-        if spotify_auth.setup_auth():
-            integration = SpotifyIntegration(auth_manager=spotify_auth)
-            integration.spotify_api = spotify_auth.get_api()
-            return integration
-        logger.warning("Spotify is not configured (no spotify.json)")
+        if not integration.authenticate():
+            logger.warning(
+                "%s is not configured - run the GUI auth setup first",
+                plugin.display_name,
+            )
+            return None
     except Exception as e:
-        logger.error(f"Spotify auth failed: {e}", exc_info=True)
-    return None
+        logger.error("%s auth failed: %s", plugin.display_name, e, exc_info=True)
+        return None
+    return integration
 
 
-def _auth_error(platform: str) -> str:
+def _auth_error(plugin) -> str:
     """Message for an unconfigured platform, matching the song-add path."""
-    if platform == PLATFORM_YOUTUBE_MUSIC:
-        return (
-            "YouTube Music not configured - run the GUI auth setup first "
-            "(ytmusicapi must be installed)"
-        )
-    return f"{platform} not configured - run the GUI auth setup first"
+    return f"{plugin.display_name} not configured - run the GUI auth setup first"
 
 
 def _build_integrations():
-    """Return an IntegrationRegistry with the authenticated integrations.
+    """Return an IntegrationRegistry covering every discovered plugin.
 
-    Mirrors App.__init__ (app.py:33-75) headlessly: no tkinter, no
-    messageboxes. Integrations without credentials stay registered with no
-    client so PlaylistSyncService can still report a per-platform error.
+    Mirrors App.__init__ headlessly: no tkinter, no messageboxes.  Every
+    loadable integration is registered; consumers gate on
+    ``is_authenticated()`` so an unconfigured or failed platform simply
+    reports a per-platform error instead of disappearing.
     """
-    from services.integration import IntegrationRegistry, YouTubeMusicIntegration
-
     registry = IntegrationRegistry()
-
-    yt_client = _init_yt_music()
-    yt_integration = YouTubeMusicIntegration()
-    yt_integration.yt_client = yt_client
-    registry.register(yt_integration)
-
-    sp_integration = _init_spotify()
-    if sp_integration is not None:
-        registry.register(sp_integration)
-
+    plugin_registry = get_default_registry()
+    for pid, plugin in plugin_registry.get_all().items():
+        try:
+            auth_manager = None
+            if plugin.auth_module:
+                auth_manager = plugin.import_auth_attr()
+            integration_cls = plugin.import_integration()
+            registry.register(integration_cls(auth_manager=auth_manager))
+        except Exception as e:
+            user_log(
+                logger, "%s integration unavailable (%s)", plugin.display_name, e
+            )
+    # Authenticate after registration - authenticate() is a network round
+    # trip and must never keep a broken plugin from being registered.
+    for integration in registry.get_all().values():
+        try:
+            integration.authenticate()
+        except Exception as e:
+            logger.error(
+                "%s auth failed: %s", integration.display_name, e, exc_info=True
+            )
     return registry
+
+
+def _scrobble_backend():
+    """Return the single ScrobbleCapable integration, or ``None``.
+
+    Built lazily (and only on demand - the caller gates on auto-scrobble
+    being enabled) so an add that is not going to scrobble never pays the
+    full-registry authenticate() cost of every installed platform.  ``None``
+    when no scrobble-capable backend is installed/configured.
+    """
+    integrations = _build_integrations()
+    return next(
+        (
+            integ
+            for integ in integrations.get_all().values()
+            if getattr(integ, "scrobble", None) is not None
+        ),
+        None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +320,13 @@ def run_list() -> int:
 
 
 def run_add(spec: str) -> int:
-    """Add the currently-playing song to the requested playlists."""
+    """Add the currently-playing song to the requested playlists.
+
+    Targets can be order numbers ("1,2,3"), ranges ("1-3"), names
+    ("Chill Mix"), or a playlist URL ("-a <URL>") resolving to a registered
+    playlist by (platform, playlist_id). URLs must already be in the
+    registry - add them first with ``-p add <URL>``.
+    """
     playlists = PlaylistStore.load_playlists()
     if not playlists:
         print(
@@ -306,80 +337,78 @@ def run_add(spec: str) -> int:
         return 2
 
     try:
-        targets = resolve_targets(spec, playlists)
+        targets = resolve_targets(spec, playlists, allow_urls=True)
     except UsageError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
+    plugin_registry = get_default_registry()
     song_manager = SongManager()
 
-    # Legacy registry entries predate the "platform" field - default them to
-    # YouTube Music, matching the per-target resolution in the loop below.
-    yt_targets = [
-        t
-        for t in targets
-        if (t[1].get("platform") or PLATFORM_YOUTUBE_MUSIC) == PLATFORM_YOUTUBE_MUSIC
-    ]
-    sp_targets = [
-        t for t in targets if (t[1].get("platform") or PLATFORM_YOUTUBE_MUSIC) == PLATFORM_SPOTIFY
-    ]
+    # Read the auto-scrobble gate ONCE (not per target - get_setting hits
+    # the settings INI) and, only when it is enabled, resolve the
+    # ScrobbleCapable backend once.  When it's off (default) we never
+    # authenticate unrelated platforms just to find a scrobble backend.
+    auto_scrobble = get_setting("scrobble_on_add")
+    scrobble_integ = _scrobble_backend() if auto_scrobble else None
 
-    yt = _init_yt_music() if yt_targets else None
-    sp_integration = _init_spotify() if sp_targets else None
+    # Legacy registry entries predate the "platform" field - default them
+    # to YouTube Music, matching PlaylistStore.
+    targets_by_platform: Dict[str, list] = {}
+    for number, entry in targets:
+        platform = entry.get("platform") or "youtube_music"
+        targets_by_platform.setdefault(platform, []).append((number, entry))
 
-    # Capture ONE YouTube Music URL (+ song details) and share it across all
-    # YT playlists - the browser extension delivers it to the receiver.
-    keybind_flow = None
-    yt_url = None
-    yt_song_data = None
-    yt_error = ""
-    if yt_targets and yt is not None:
-        from controllers.keybind_flow import KeybindFlowController
+    # Per platform: authenticate once, build its flow via the plugin
+    # manifest, capture the current song ONCE and share it across all of
+    # that platform's target playlists.
+    contexts: Dict[str, dict] = {}
+    for platform, group in targets_by_platform.items():
+        ctx = {"flow": None, "url": None, "song_data": None, "error": ""}
+        contexts[platform] = ctx
 
-        receiver = URLReceiverManager()
-        keybind_flow = KeybindFlowController(yt, song_manager, receiver)
-        yt_url, yt_song_data, yt_error = _capture_yt_song(keybind_flow, receiver)
-
-    sp_flow = None
-    sp_song_data = None
-    sp_error = ""
-    if sp_targets and sp_integration is not None:
-        from controllers.keybind_flow import SpotifyFlowController
-
-        sp_flow = SpotifyFlowController(sp_integration, song_manager)
-        sp_song_data, sp_error = _capture_spotify_song(sp_flow)
+        plugin = plugin_registry.get(platform)
+        if plugin is None or not plugin.flow_class:
+            ctx["error"] = f"unsupported platform '{platform}'"
+            continue
+        integration = _init_platform(plugin_registry, platform)
+        if integration is None:
+            ctx["error"] = _auth_error(plugin)
+            continue
+        try:
+            flow_cls = plugin.import_flow()
+            if plugin.flow_type == "extension":
+                flow = flow_cls(
+                    integration, song_manager, plugin.build_receiver()
+                )
+            else:
+                # "api" type - reads the platform directly, no receiver.
+                flow = flow_cls(integration, song_manager)
+            ctx["flow"] = flow
+            ctx["url"], ctx["song_data"], ctx["error"] = flow.capture(URL_WAIT_TIMEOUT)
+        except Exception as e:
+            logger.error("%s flow/capture failed: %s", platform, e, exc_info=True)
+            ctx["flow"] = None
+            ctx["error"] = str(e)
 
     failures = 0
     for number, entry in targets:
-        platform = entry.get("platform") or PLATFORM_YOUTUBE_MUSIC
+        platform = entry.get("platform") or "youtube_music"
         name = entry.get("name")
-        if platform == PLATFORM_YOUTUBE_MUSIC:
-            if keybind_flow is None:
-                ok, message = False, (
-                    "Error: YouTube Music not configured - run the GUI auth setup "
-                    "first (ytmusicapi must be installed)"
-                )
-            elif yt_url is None:
-                ok, message = False, f"Error: {yt_error or 'Timeout: no URL received'}"
-            else:
-                ok, message = _run_flow(
-                    keybind_flow, name, url=yt_url, song_data=yt_song_data,
-                    playlist_id=entry.get("playlist_id") or None,
-                )
-        elif platform == PLATFORM_SPOTIFY:
-            if sp_flow is None:
-                ok, message = False, (
-                    "Error: Spotify is not configured - run the GUI auth setup first"
-                )
-            elif sp_song_data is None:
-                ok, message = False, f"Error: {sp_error or 'Nothing playing'}"
-            else:
-                ok, message = _run_flow(
-                    sp_flow, name, song_data=sp_song_data,
-                    playlist_id=entry.get("playlist_id") or None,
-                )
+        ctx = contexts[platform]
+        if ctx["flow"] is None:
+            ok, message = False, f"Error: {ctx['error']}"
+        elif plugin_registry.get(platform).flow_type == "extension" and ctx["url"] is None:
+            ok, message = False, f"Error: {ctx['error'] or 'Timeout: no URL received'}"
+        elif ctx["song_data"] is None:
+            ok, message = False, f"Error: {ctx['error'] or 'Nothing playing'}"
         else:
-            ok, message = False, f"Error: unsupported platform '{platform}'"
+            ok, message = _run_flow(
+                ctx["flow"], name, url=ctx["url"], song_data=ctx["song_data"],
+                playlist_id=entry.get("playlist_id") or None,
+                scrobble_integ=scrobble_integ,
+                platform=platform,
+            )
 
         line = f'#{number} "{name}" ({platform}): {message}'
         if ok:
@@ -423,7 +452,7 @@ def run_add_url(url: str) -> int:
 
     # Non-editable playlists (followed, not collaborative) can be tracked
     # read-only, but adding songs to them fails on the platform - warn.
-    if platform == PLATFORM_SPOTIFY and isinstance(details, dict):
+    if platform == "spotify" and isinstance(details, dict):
         try:
             user_id = (
                 integration.spotify_api.get_user_id()
@@ -507,15 +536,14 @@ def run_del(spec: str) -> int:
         name = entry.get("name")
         # Legacy entries may lack the platform field - default to YT like
         # PlaylistStore does, so delete_playlist_db never sees None.
-        platform = entry.get("platform") or PLATFORM_YOUTUBE_MUSIC
+        platform = entry.get("platform") or "youtube_music"
+        playlist_id = entry.get("playlist_id", "")
         PlaylistStore.delete_playlist(
-            name, platform=platform, playlist_id=entry.get("playlist_id", "")
+            name, platform=platform, playlist_id=playlist_id
         )
-        DatabaseManager.delete_playlist_db(
-            name,
-            platform,
-            playlist_id=entry.get("playlist_id", ""),
-        )
+        DatabaseManager.delete_playlist_db(name, platform, playlist_id=playlist_id)
+        scrobble_log.remove_playlist_entries(platform, playlist_id)
+        duplicate_queue.purge_playlist(platform, playlist_id, name or "")
         print(f'#{number} "{name}" ({platform}): deleted', flush=True)
     return 0
 
@@ -539,7 +567,7 @@ def run_refresh(spec: str) -> int:
     failures = 0
     for number, entry in targets:
         name = entry.get("name")
-        platform = entry.get("platform") or PLATFORM_YOUTUBE_MUSIC
+        platform = entry.get("platform") or "youtube_music"
         playlist_id = entry.get("playlist_id", "")
         if not playlist_id:
             print(
@@ -567,6 +595,73 @@ def run_refresh(spec: str) -> int:
     return 0 if failures == 0 else 1
 
 
+def run_scrobble() -> int:
+    """Scrobble the currently-playing song without adding to any playlist.
+
+    For ``api``-type platforms (Spotify), reads the currently-playing track
+    directly.  For ``extension``-type platforms (YouTube Music), captures
+    once via the browser extension (30 s wait).  Requires a
+    ``ScrobbleCapable`` integration (Last.fm) to be loaded and
+    authenticated.
+
+    Composable with compositor shortcuts:
+        playlistmanager -s
+    """
+    plugin_registry = get_default_registry()
+    song_manager = SongManager()
+    integrations = _build_integrations()
+
+    # Find the ScrobbleCapable backend (Last.fm).
+    scrobble_integ = next(
+        (
+            integ
+            for integ in integrations.get_all().values()
+            if getattr(integ, "scrobble", None) is not None
+        ),
+        None,
+    )
+    if scrobble_integ is None:
+        print("error: no scrobble backend available (is Last.fm configured?)",
+              file=sys.stderr)
+        return 1
+
+    # Try each authenticated platform's capture path until one produces a
+    # song — mirrors keybind_controller._scrobble_current_action.
+    for platform_id, integration in integrations.get_all().items():
+        if not integration.is_authenticated():
+            continue
+
+        plugin = plugin_registry.get(platform_id)
+        if plugin is None or not plugin.flow_class:
+            continue
+
+        try:
+            flow_cls = plugin.import_flow()
+            if plugin.flow_type == "extension":
+                flow = flow_cls(integration, song_manager, plugin.build_receiver())
+            else:
+                flow = flow_cls(integration, song_manager)
+
+            _url, song_data, error = flow.capture(URL_WAIT_TIMEOUT)
+            if song_data:
+                if scrobble_integ.scrobble(song_data):
+                    title = song_data.get("title", "unknown")
+                    artist = (song_data.get("artists") or ["unknown"])[0]
+                    print(f"Scrobbled: {artist} - {title}", flush=True)
+                    return 0
+                print(f"error: scrobble failed for "
+                      f"{song_data.get('title', 'unknown')}", file=sys.stderr)
+                return 1
+            # Nothing playing on this platform — try the next.
+            logger.debug("No song playing on %s: %s", platform_id, error)
+        except Exception as e:
+            logger.debug("Capture failed on %s: %s", platform_id, e)
+            continue
+
+    print("error: no currently-playing song found", file=sys.stderr)
+    return 1
+
+
 def _stored_refresh_token() -> Optional[str]:
     """Read the refresh token from the saved spotify.json, if any.
 
@@ -574,12 +669,17 @@ def _stored_refresh_token() -> Optional[str]:
     prompt - pressing Enter re-logs-in with the stored token (e.g. when
     only the client credentials changed).
     """
-    try:
-        from integrations.music_spotify.music_spotify import SPOTIFY_AUTH_FILE
+    return _stored_refresh_token_for(get_default_registry().get("spotify"))
 
-        data = json.loads(SPOTIFY_AUTH_FILE.read_text(encoding="utf-8"))
+
+def _stored_refresh_token_for(plugin) -> Optional[str]:
+    """Read the refresh token from a plugin's saved auth file, if any."""
+    if plugin is None or not plugin.auth_path:
+        return None
+    try:
+        data = json.loads(plugin.auth_path.read_text(encoding="utf-8"))
         return data.get("refresh_token") or None
-    except (ImportError, OSError, ValueError):
+    except (OSError, ValueError):
         return None
 
 
@@ -597,6 +697,109 @@ def _prompt(label: str, hidden: bool = False) -> Optional[str]:
         return None
 
 
+def _run_soundcloud_login(
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    refresh_token: Optional[str] = None,
+) -> int:
+    """CLI SoundCloud login: prompts for credentials, verifies FIRST.
+
+    Mirrors the Spotify login: the SoundCloud OAuth config
+    (client id / client secret / refresh token) is verified against the
+    live ``/me`` round-trip and only persisted on success - a typo can
+    never destroy previously working auth.
+    """
+    plugin = get_default_registry().get("soundcloud")
+    if plugin is None:
+        print("error: SoundCloud plugin not found", file=sys.stderr)
+        return 2
+
+    if not client_id:
+        client_id = _prompt("Client id: ")
+    if not client_secret:
+        client_secret = _prompt("Client secret: ", hidden=True)
+    if not refresh_token:
+        stored = _stored_refresh_token_for(plugin)
+        prompt_value = _prompt("Refresh token (leave empty to reuse stored): ", hidden=True)
+        refresh_token = prompt_value or stored
+    if not client_id or not client_secret or not refresh_token:
+        print(
+            "error: client id, client secret and a refresh token are all "
+            "required (from your SoundCloud app's dashboard)",
+            file=sys.stderr,
+        )
+        return 2
+
+    result = _soundcloud_save_and_verify(client_id, client_secret, refresh_token)
+    if result.get("ok"):
+        print(f"soundcloud: logged in as {result.get('display_name')}", flush=True)
+        return 0
+
+    print(
+        f"error: soundcloud login failed: {result.get('error')} "
+        "(existing credentials left untouched)",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _soundcloud_save_and_verify(client_id, client_secret, refresh_token) -> dict:
+    """Call the SoundCloud plugin's own verify-first save helper.
+
+    The plugin declares no core auth_setup functions (login is
+    self-contained in the plugin via ``login_module``/``login_class``), so
+    the CLI resolves the plugin's soundcloud module directly rather than
+    hard-coding a path into app/services/auth_setup.py.
+    """
+    try:
+        soundcloud_mod = __import__(
+            f"integrations.{_soundcloud_dir_name()}.soundcloud",
+            fromlist=["save_and_verify_soundcloud_credentials"],
+        )
+        return soundcloud_mod.save_and_verify_soundcloud_credentials(
+            client_id, client_secret, refresh_token
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"SoundCloud plugin error: {e}"}
+
+
+def _soundcloud_dir_name() -> str:
+    """Directory name of the SoundCloud plugin (``integrations.<dir>``)."""
+    return "soundcloud"
+
+
+def _run_deezer_login() -> int:
+    """CLI Deezer login: prompts for the ARL cookie, verifies FIRST.
+
+    The ARL is obtained by logging into Deezer in a browser and copying
+    the ``arl`` cookie value from DevTools → Application → Cookies.
+    """
+    arl = _prompt("ARL cookie: ", hidden=True)
+    if not arl:
+        print(
+            "error: ARL cookie is required (log into Deezer in your "
+            "browser, open DevTools → Application → Cookies → deezer.com → "
+            "copy the 'arl' value)",
+            file=sys.stderr,
+        )
+        return 2
+
+    result = auth_setup.save_and_verify_deezer_credentials(arl.strip())
+    if result.get("ok"):
+        print(
+            f"deezer: logged in as user {result.get('display_name')}",
+            flush=True,
+        )
+        return 0
+
+    print(
+        f"error: deezer login failed: {result.get('error')} "
+        "(existing credentials left untouched)",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def run_login(
     platform: str,
     client_id: Optional[str] = None,
@@ -607,7 +810,7 @@ def run_login(
 
     youtube_music: mirrors the GUI tile - opens the auth folder and a
     terminal running ``ytmusicapi browser`` (manual instructions instead
-    when no terminal emulator is installed).
+    when no terminal emulator is available).
 
     spotify: ``--login spotify`` alone prompts interactively (client id,
     client secret, refresh token - secret/token hidden like sudo).  The
@@ -621,22 +824,24 @@ def run_login(
     the GUI's save_and_verify ordering
     (auth_setup.save_and_verify_spotify_credentials).
     """
-    if platform not in KNOWN_PLATFORMS:
+    known = get_default_registry().get_platform_ids()
+    if platform not in known:
         print(
-            f"error: unknown platform '{platform}' "
-            f"(use {', '.join(KNOWN_PLATFORMS)})",
+            f"error: unknown platform '{platform}' (use {', '.join(known)})",
             file=sys.stderr,
         )
         return 2
 
-    if platform == PLATFORM_YOUTUBE_MUSIC:
+    if platform == "youtube_music":
         result = auth_setup.setup_ytmusic_auth()
-        if result.get("manual"):
+        if not result.get("ok"):
+            # Terminal could not be launched - fall back to manual steps.
             print(
                 f"youtube_music: no terminal emulator found - manually run:\n"
-                f"  cd {result['auth_dir']}\n"
+                f"  cd {result.get('auth_dir', auth_setup.AUTH_DIR)}\n"
                 f"  ytmusicapi browser\n"
-                f"and place the generated browser.json in {result['auth_dir']}",
+                f"and place the generated browser.json in "
+                f"{result.get('auth_dir', auth_setup.AUTH_DIR)}",
                 file=sys.stderr,
             )
             return 0
@@ -647,6 +852,24 @@ def run_login(
             flush=True,
         )
         return 0
+
+    if platform == "lastfm":
+        # Last.fm auth needs the browser-authorization + auth.getSession
+        # flow that only the GUI login dialog drives (api key + secret, then
+        # approve in the browser).  No useful non-interactive path.
+        print(
+            "lastfm: GUI-only at the moment - open the app's Settings -> "
+            "Login/Accounts -> Last.fm, enter your API key + secret, and "
+            "approve the browser authorization",
+            file=sys.stderr,
+        )
+        return 2
+
+    if platform == "deezer":
+        return _run_deezer_login()
+
+    if platform == "soundcloud":
+        return _run_soundcloud_login(client_id, client_secret, refresh_token)
 
     # Spotify.  Flags override; missing values are prompted interactively
     # (hidden input for the secret and the token, like sudo).
@@ -687,22 +910,25 @@ def run_login(
 
 
 def run_logout(platform: str) -> int:
-    """Log out of a platform: delete its credentials, registry entries and
-    local databases. Local-only - never touches the platform itself.
+    """Log out of a platform: delete its credentials, registry entries,
+    local databases, duplicate-queue records and scrobble-ledger entries.
+    Local-only - never touches the platform itself.
 
     Idempotent: a second run with nothing left prints "no credentials
     found" and still exits 0.
     """
-    if platform not in KNOWN_PLATFORMS:
+    known = get_default_registry().get_platform_ids()
+    if platform not in known:
         print(
-            f"error: unknown platform '{platform}' "
-            f"(use {', '.join(KNOWN_PLATFORMS)})",
+            f"error: unknown platform '{platform}' (use {', '.join(known)})",
             file=sys.stderr,
         )
         return 2
 
     try:
-        deleted, _missing = auth_setup.delete_platform_credentials(platform)
+        deleted, _missing = auth_setup.delete_platform_credentials(
+            platform, plugin_registry=get_default_registry()
+        )
     except OSError as e:
         print(
             f"error: failed to delete {platform} credentials: {e}",
@@ -725,96 +951,192 @@ def run_logout(platform: str) -> int:
     n_dbs = DatabaseManager.delete_platform_databases(platform)
     if n_dbs:
         print(f"{platform}: deleted {n_dbs} local database file(s)")
+
+    # Drop the platform's pending duplicate-decisions and scrobble-ledger
+    # records (matching integration_manager.uninstall_platform_data), so a
+    # later login can't resurface stale decisions / unscrobbles for it.
+    n_pending, n_songs, n_errors = duplicate_queue.purge_platform(platform)
+    if n_pending or n_songs or n_errors:
+        print(
+            f"{platform}: purged {n_pending} pending duplicate decision(s), "
+            f"{n_songs} remembered song(s), {n_errors} error(s)"
+        )
+    scrobble_log.remove_platform_entries(platform)
     return 0
 
 
-def _capture_spotify_song(
-    sp_flow,
-) -> Tuple[Optional[Dict], str]:
-    """Fetch the currently-playing Spotify track once for CLI batch mode.
+def _resolve_platform_arg(platform: str) -> List[str]:
+    """Expand a --install/--uninstall argument into platform ids.
 
-    Returns ``(song_data, error)`` - on failure *song_data* is ``None``
-    and *error* describes what went wrong ("" on success).
+    ``all`` expands to every catalog platform (downloadable); otherwise the
+    id is validated against the catalog.  Returns the ids or raises
+    ``UsageError`` (mapped to exit code 2).
     """
-    try:
-        playing = sp_flow.spotify_integration.get_currently_playing()
-    except Exception as e:
-        logger.error(f"Failed to fetch Spotify currently-playing: {e}", exc_info=True)
-        return None, str(e)
-    if not playing:
-        return None, "Nothing playing on Spotify"
-    return {
-        "title": playing["title"],
-        "artists": playing["artists"],
-        "duration": playing["duration_ms"] // 1000,
-        "track_id": playing["track_id"],
-        "thumbnail": playing.get("thumbnail"),
-    }, ""
-
-
-def _capture_yt_song(
-    keybind_flow, receiver
-) -> Tuple[Optional[str], Optional[Dict], str]:
-    """
-    Capture the current YouTube Music URL from the browser extension and fetch
-    its song details. Returns ``(url, song_data, error)`` - on failure both
-    url and song_data are None and *error* describes what went wrong ("" on
-    success).
-    """
-    url = None
-    try:
-        receiver.start()
-        receiver.set_waiting(True)
-        print(
-            "Waiting for YouTube Music URL... "
-            "(play the song in the browser with the extension installed)",
-            flush=True,
+    catalog = integration_manager.installable_ids()
+    if platform == "all":
+        return catalog
+    if platform not in catalog:
+        raise UsageError(
+            f"unknown platform '{platform}' (use {', '.join(catalog)})"
         )
-        url = receiver.get_received_url(timeout=URL_WAIT_TIMEOUT)
-    except TimeoutError:
-        return None, None, "Timeout: no URL received from the browser extension"
-    except Exception as e:
-        logger.error(f"Failed to capture the YouTube Music URL: {e}", exc_info=True)
-        return None, None, f"failed to start the URL receiver: {e}"
-    finally:
-        try:
-            receiver.set_waiting(False)
-        except Exception:
-            pass
-        try:
-            if receiver.is_running():
-                receiver.stop()
-        except Exception:
-            pass
+    return [platform]
 
-    video_id = extract_video_id(url)
-    if video_id is None:
-        logger.error(f"Could not extract a video ID from '{url}'")
-        return None, None, "could not extract a video ID from the received URL"
+
+def run_install(platform: str) -> int:
+    """Download and install one (or ``all``) platform plugin(s).
+
+    Writes only the plugin directory under ``integrations/``; it does not
+    authenticate (see ``--login``) or register any playlists.  Idempotent
+    with respect to already-installed platforms - an existing install is
+    replaced with a fresh copy.
+    """
     try:
-        song_data = keybind_flow.fetch_song_details(video_id)
-    except Exception as e:
-        logger.error(f"Failed to fetch song details: {e}", exc_info=True)
-        return None, None, f"failed to fetch song details: {e}"
-    return url, song_data, ""
+        targets = _resolve_platform_arg(platform)
+    except UsageError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    failures: List[str] = []
+    for pid in targets:
+        display = integration_manager.INTEGRATION_REPOS[pid].display_name
+        target_dir = PluginRegistry().base_dir / pid
+        already = target_dir.is_dir()
+        try:
+            integration_manager.download_integration(pid)
+            print(
+                f"{pid}: {'updated' if already else 'installed'} ({display})",
+                flush=True,
+            )
+        except Exception as e:
+            logger.exception("Install failed for %s", pid)
+            print(f"error: failed to install {pid}: {e}", file=sys.stderr)
+            failures.append(pid)
+
+    if failures:
+        return 1
+    return 0
+
+
+def run_uninstall(platform: str) -> int:
+    """Remove one (or ``all``) platform plugin(s) and all their local data.
+
+    Like the GUI's per-platform uninstall: deletes credentials, playlist
+    registry entries, song databases, duplicate-queue records and the
+    plugin directory itself - the online playlists are untouched.  The
+    CLI has no running app (no receiver/listener to stop), so only the
+    disk-level uninstall step applies.  Idempotent: a platform that is not
+    installed is reported as such and not an error.
+    """
+    catalog = integration_manager.installable_ids()
+    if platform == "all":
+        # Every installed plugin - catalog or third-party - plus catalog
+        # platforms whose directory is on disk but whose manifest failed
+        # to load (the registry cannot see those).
+        registry = get_default_registry()
+        targets = sorted(
+            set(registry.get_all())
+            | {
+                pid
+                for pid in catalog
+                if (PluginRegistry().base_dir / pid).is_dir()
+            }
+        )
+    else:
+        # Accept ids that are installed but not in the catalog (they were
+        # downloaded by hand or by the GUI) - uninstalling them by id is
+        # the only CLI path to remove them.
+        registry = get_default_registry()
+        if platform not in catalog and registry.get(platform) is None:
+            print(
+                f"error: unknown platform '{platform}' "
+                f"(use {', '.join(catalog)})",
+                file=sys.stderr,
+            )
+            return 2
+        targets = [platform]
+
+    failures: List[str] = []
+    for pid in targets:
+        registry = get_default_registry()
+        plugin = registry.get(pid)
+        if plugin is None and not (PluginRegistry().base_dir / pid).is_dir():
+            print(f"{pid}: not installed (nothing to uninstall)")
+            continue
+        try:
+            report = integration_manager.uninstall_platform_data(
+                pid, plugin=plugin
+            )
+            parts = [
+                f"{report['credentials']} credential(s)",
+                f"{report['playlists']} playlist(s)",
+                f"{report['databases']} DB(s)",
+                f"{report['plugin_dirs']} folder(s)",
+            ]
+            print(
+                f"{pid}: uninstalled ({', '.join(parts)})",
+                flush=True,
+            )
+        except Exception as e:
+            logger.exception("Uninstall failed for %s", pid)
+            print(f"error: failed to uninstall {pid}: {e}", file=sys.stderr)
+            failures.append(pid)
+
+    if failures:
+        return 1
+    return 0
 
 
 def _run_flow(
-    flow, playlist_name: str, url=None, song_data=None, playlist_id=None
+    flow, playlist_name: str, url=None, song_data=None, playlist_id=None,
+    scrobble_integ=None, platform: str = "",
 ) -> Tuple[bool, str]:
-    """Run one add-flow; returns (ok, message) - message is the line tail."""
+    """Run one add-flow; returns (ok, message) - message is the line tail.
+
+    *scrobble_integ* is the pre-resolved ScrobbleCapable backend (or
+    ``None``), resolved once by the caller when auto-scrobble is enabled.
+    """
+    # Flows declare their platform id (PLATFORM class attr); the caller
+    # passes it where the platform is already resolved to be explicit.
+    platform = platform or getattr(flow, "PLATFORM", "")
     outcome = {"ok": None, "message": ""}
 
     def on_status(msg: str) -> None:
-        logger.debug(f"[{playlist_name}] {msg}")
+        logger.debug("[%s] %s", playlist_name, msg)
 
     def on_error(msg: str) -> None:
         outcome["ok"] = False
         outcome["message"] = msg
 
     def on_success(result: Dict) -> None:
+        status = result.get("status")
         outcome["ok"] = True
-        outcome["message"] = result.get("message", "Added")
+        if status == "duplicate":
+            # Queued in db/extra.json, added nowhere - the CLI keeps
+            # going (continue-on-error policy); resolution happens in
+            # the GUI's activity window.
+            outcome["message"] = (
+                f"{result.get('message', 'maybe-duplicate')} "
+                "[queued as maybe-duplicate - resolve in the GUI]"
+            )
+        else:
+            outcome["message"] = result.get("message", "Added")
+
+        # Scrobble the song if auto-scrobble is enabled and a ScrobbleCapable
+        # integration was resolved.  An accepted scrobble is recorded in
+        # the scrobble ledger so the remove-song path can later delete
+        # THIS exact scrobble (not the track's most recent one).
+        if status == "added" and scrobble_integ is not None:
+            song_data = result.get("song", {})
+            if song_data:
+                try:
+                    ts = scrobble_integ.scrobble(song_data)
+                    song_id = result.get("song_id")
+                    if ts is not None and song_id is not None:
+                        scrobble_log.record_scrobble(
+                            platform, playlist_id or "", song_id, ts
+                        )
+                except Exception as e:
+                    logger.debug("Failed to scrobble song: %s", e)
 
     try:
         flow.execute_flow(
@@ -827,7 +1149,7 @@ def _run_flow(
             playlist_id=playlist_id,
         )
     except Exception as e:
-        logger.error(f"Flow failed for '{playlist_name}': {e}", exc_info=True)
+        logger.error("Flow failed for '%s': %s", playlist_name, e, exc_info=True)
         outcome["ok"] = False
         outcome["message"] = f"Error: {e}"
     return outcome["ok"] is True, outcome["message"]

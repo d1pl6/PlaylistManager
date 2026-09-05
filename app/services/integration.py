@@ -4,12 +4,14 @@ Integration registry and platform-specific integration wrappers.
 Concrete integration classes receive their auth manager as a constructor
 argument rather than importing it at module level, so this file has zero
 import-time side effects and does not pull in optional dependencies.
+
+Since 0.3.0 the concrete integrations live in their plugin packages
+(``integrations/<platform_id>/integration.py``) - see app/plugin_loader.py.
+This module only carries the shared base class and registry.
 """
 
 import logging
-from typing import Dict, List, Optional
-
-from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
+from typing import Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +19,18 @@ logger = logging.getLogger(__name__)
 class BaseIntegration:
     id: str = ""
     display_name: str = ""
+    # Whether this platform can serve as an "add playlist" source (i.e. it
+    # can browse a library and manage playlists).  Service-only integrations
+    # (e.g. Last.fm - scrobble/like but no playlists) set this False so they
+    # are never offered as a source in the "Choose platform" picker, while
+    # staying available for their service actions (get_all still returns
+    # them; only get_active excludes them).
+    supports_playlists: bool = True
+    # Public auth-manager handle, passed in via the constructor and exposed
+    # so bootstrap/auth plumbing (app.py) can reach it without reaching into
+    # a private ``_auth`` attribute.  Platforms without credentials leave
+    # it None.
+    auth_manager = None
 
     def is_authenticated(self) -> bool:
         raise NotImplementedError
@@ -58,6 +72,90 @@ class BaseIntegration:
         return False
 
 
+class ScrobbleCapable:
+    """Optional capability interface for scrobbling / liking backends.
+
+    A plugin integration may implement this interface to expose shared
+    scrobble actions consumed by the core (e.g., Last.fm). Core consumers
+    use duck-typing:
+
+        scrobble_fn = getattr(integration, "scrobble", None)
+        if scrobble_fn:
+            scrobble_fn(song_data)
+
+    This keeps the scrobble backend self-contained under its plugin folder
+    while the core remains platform-agnostic.
+    """
+
+    def scrobble(self, song_data: dict) -> Optional[int]:
+        """Scrobble a song.
+
+        *song_data* is a dict with at minimum::
+
+            {
+                "title": str,
+                "artists": [str, ...],  # artist is artists[0]
+                "duration": int,  # seconds
+            }
+
+        Album and track_number (from song_data["album"], song_data["track_number"])
+        are optional but improve scrobble fidelity.
+
+        Returns the scrobble's Unix timestamp (seconds) only when the
+        backend CONFIRMED the scrobble was accepted; ``None`` when it was
+        rejected (e.g. last.fm ignored it) or the round trip failed.  The
+        returned timestamp is also the evidence the remove path uses to
+        delete exactly this scrobble (see ``delete_scrobble``).  Failures
+        must be logged but never block or fail the calling add-flow.
+        """
+        raise NotImplementedError
+
+    def unlove(self, artist: str, track: str) -> bool:
+        """Remove a track from the user's loved/liked list.
+
+        Returns True only when the backend confirmed the removal.
+        """
+        raise NotImplementedError
+
+    def love(self, artist: str, track: str) -> bool:
+        """Add a track to the user's loved/liked list (like a song).
+
+        This is a separate action from :meth:`scrobble`: liking must never
+        create a scrobble, and auto-scrobbling on add must never like the
+        song.  The core's like toggle calls this directly.
+
+        Returns True only when the backend confirmed the like.
+        """
+        raise NotImplementedError
+
+    def is_loved(self, artist: str, track: str) -> bool | None:
+        """Check if a track is in the user's loved/liked list.
+
+        Returns:
+            True if loved, False if not loved, None if unknown/unauthenticated.
+
+        Must return synchronously (cached value preferred to avoid network
+        round trips per-track). Load state asynchronously on display and
+        update via root.after(0, ...) from the worker thread.
+        """
+        raise NotImplementedError
+
+    def delete_scrobble(self, artist: str, track: str, timestamp: int | None = None) -> bool:
+        """Delete a scrobble entry.
+
+        *timestamp* (seconds since epoch) is optional; when omitted, deletes
+        the most recent scrobble of that track.  Omission is a LAST RESORT:
+        the core's remove-song path only calls this with the exact timestamp
+        that the add-flow's ``scrobble`` returned (persisted in the scrobble
+        ledger) - a timestamp-less delete can silently erase a legitimate
+        earlier scrobble the user actually listened to.
+
+        Returns True only when the backend confirmed the deletion.
+        Failures are best-effort; never fail or re-enqueue the calling remove.
+        """
+        raise NotImplementedError
+
+
 class IntegrationRegistry:
     def __init__(self):
         self._integrations: Dict[str, BaseIntegration] = {}
@@ -70,237 +168,53 @@ class IntegrationRegistry:
 
     def get_active(self) -> Dict[str, BaseIntegration]:
         return {
-            k: v for k, v in self._integrations.items() if v.is_authenticated()
+            k: v
+            for k, v in self._integrations.items()
+            if v.is_authenticated() and v.supports_playlists
         }
 
     def get(self, integration_id: str) -> Optional[BaseIntegration]:
         return self._integrations.get(integration_id)
 
+    def unregister(self, platform_id: str) -> None:
+        """Drop one integration (Manage dialog uninstall path).
 
-class YouTubeMusicIntegration(BaseIntegration):
-    id = PLATFORM_YOUTUBE_MUSIC
-    display_name = "YouTube Music"
-
-    def __init__(self, auth_manager=None):
-        self._auth = auth_manager
-        self.yt_client = None
-
-    def authenticate(self) -> bool:
-        if self._auth is None:
-            return False
-        if self._auth.setup_auth():
-            self.yt_client = self._auth.get_yt_music()
-            return True
-        return False
-
-    def is_authenticated(self) -> bool:
-        return self.yt_client is not None
-
-    def refresh_auth(self) -> bool:
-        self.yt_client = None
-        return self.authenticate()
-
-    def get_library_playlists(self) -> list:
-        if not self.yt_client:
-            return []
-        try:
-            # Filter to playlists the user can actually add songs to.
-            # ytmusicapi's parse marks each item with "owned" (the library
-            # browse can surface followed/saved playlists the user is not a
-            # collaborator on - adding to them fails on the platform side).
-            # Items without the flag are kept defensively so a parser change
-            # can never hide an owned playlist.
-            return [
-                p
-                for p in self.yt_client.get_library_playlists()
-                if p.get("owned") is not False
-            ]
-        except Exception as e:
-            logger.error(f"YouTube Music: failed to get library playlists: {e}")
-            return []
-
-    def get_playlist_details(self, playlist_id: str, limit: int = 1) -> dict:
-        if not self.yt_client:
-            return {}
-        try:
-            return self.yt_client.get_playlist(playlist_id, limit=limit)
-        except Exception as e:
-            logger.error(f"YouTube Music: failed to get playlist details: {e}")
-            return {}
-
-    def get_playlist_id(self, name: str) -> Optional[str]:
-        if not self.yt_client:
-            return None
-        try:
-            playlists = self.yt_client.get_library_playlists()
-            for playlist in playlists:
-                if playlist.get("owned") is not False and playlist.get("title") == name:
-                    return playlist.get("playlistId")
-            return None
-        except Exception as e:
-            logger.error(f"YouTube Music: failed to get playlist ID: {e}")
-            return None
-
-    def get_playlist_tracks(self, playlist_id: str) -> list:
-        if not self.yt_client:
-            return []
-        try:
-            result = self.yt_client.get_playlist(playlist_id, limit=None)
-            return result.get("tracks", [])
-        except Exception as e:
-            logger.error(f"YouTube Music: failed to get playlist tracks: {e}")
-            return []
-
-    def remove_track(self, playlist_id: str, track_id: str) -> bool:
-        if not self.yt_client:
-            return False
-        try:
-            # ytmusicapi's remove_playlist_items requires BOTH videoId and
-            # setVideoId per item - setVideoId is the playlist-scoped id the
-            # edit endpoint needs (only present when the playlist is
-            # editable).  Fetch the playlist, locate the track and pass its
-            # full item through; a track that is gone or lacks setVideoId
-            # (non-owned playlist) is reported, not raised.
-            playlist = self.yt_client.get_playlist(playlist_id, limit=None)
-            tracks = playlist.get("tracks", [])
-            target = next(
-                (
-                    t
-                    for t in tracks
-                    if t.get("videoId") == track_id and t.get("setVideoId")
-                ),
-                None,
-            )
-            if target is None:
-                logger.warning(
-                    "YouTube Music: track %s is not removable from playlist %s "
-                    "(not in the playlist, or the playlist is not editable)",
-                    track_id, playlist_id,
-                )
-                return False
-            self.yt_client.remove_playlist_items(playlist_id, [target])
-            logger.info(
-                "YouTube Music: removed track %s from playlist %s",
-                track_id, playlist_id,
-            )
-            return True
-        except Exception as e:
-            logger.error(
-                f"YouTube Music: failed to remove track {track_id}: {e}"
-            )
-            return False
+        Consumers iterate ``get_all()`` / ``get_active()``, so the id
+        simply disappears from every derived view.  An in-flight flow
+        that already captured the object keeps running to completion -
+        its platform-first write path fails loudly the same way any API
+        error does.
+        """
+        removed = self._integrations.pop(platform_id, None)
+        if removed is not None:
+            logger.info("Unregistered integration '%s'", platform_id)
 
 
-class SpotifyIntegration(BaseIntegration):
-    id = PLATFORM_SPOTIFY
-    display_name = "Spotify"
+class BaseFlowController:
+    """Protocol for platform-specific flow controllers.
 
-    def __init__(self, auth_manager=None):
-        self._auth = auth_manager
-        self.spotify_api = None
+    Plugin flow classes subclass this (or duck-type it); KeybindController
+    dispatches against the interface below.
+    """
 
-    def authenticate(self) -> bool:
-        if self._auth is None:
-            return False
-        if self._auth.setup_auth():
-            self.spotify_api = self._auth.get_api()
-            return True
-        return False
+    def execute_flow(
+        self,
+        playlist_name: str,
+        on_status: Callable[[str], None],
+        on_error: Callable[[str], None],
+        on_success,
+        playlist_id: str | None = None,
+        url: str | None = None,
+        song_data: dict | None = None,
+        skip_duplicate_check: bool = False,
+    ) -> None:
+        """Run one add-song attempt for *playlist_name*.
 
-    def is_authenticated(self) -> bool:
-        return self.spotify_api is not None
-
-    def refresh_auth(self) -> bool:
-        self.spotify_api = None
-        return self.authenticate()
-
-    def get_library_playlists(self) -> list:
-        if not self.spotify_api:
-            return []
-        try:
-            raw = self.spotify_api.get_playlists()
-            # /me/playlists includes playlists the user merely *follows* -
-            # those reject add-song calls ("not owner or collaborator") and
-            # only clutter the picker.  Keep owned + collaborative entries.
-            owner_id = self.spotify_api.get_user_id()
-            if owner_id is None:
-                logger.warning(
-                    "Could not determine Spotify user id; non-owned "
-                    "playlists will appear in the picker"
-                )
-            out = []
-            for p in raw:
-                if (
-                    owner_id
-                    and p.get("owner", {}).get("id") != owner_id
-                    and not p.get("collaborative")
-                ):
-                    continue
-                out.append(
-                    {
-                        "title": p.get("name", "Unknown"),
-                        "playlistId": p.get("id", ""),
-                        "thumbnail": p.get("images", [{}])[0].get("url")
-                        if p.get("images")
-                        else None,
-                        "trackCount": p.get("tracks", {}).get("total", 0),
-                        "followerCount": p.get("followers", {}).get("total", 0),
-                    }
-                )
-            return out
-        except Exception as e:
-            logger.error(f"Spotify: failed to get library playlists: {e}")
-            return []
-
-    def get_playlist_details(self, playlist_id: str, limit: int = 1) -> dict:
-        if not self.spotify_api:
-            return {}
-        try:
-            data = self.spotify_api.get_playlist(playlist_id)
-            if not data:
-                return {}
-            return {
-                "thumbnails": data.get("images", []),
-                "title": data.get("name", ""),
-                "trackCount": data.get("tracks", {}).get("total", 0),
-                "owner_id": (data.get("owner") or {}).get("id", ""),
-                "collaborative": bool(data.get("collaborative")),
-                "followerCount": (data.get("followers") or {}).get("total", 0),
-            }
-        except Exception as e:
-            logger.error(f"Spotify: failed to get playlist details: {e}")
-            return {}
-
-    def get_playlist_tracks(self, playlist_id: str) -> list:
-        if not self.spotify_api:
-            return []
-        try:
-            return self.spotify_api.get_playlist_tracks(playlist_id)
-        except Exception as e:
-            logger.error(f"Spotify: failed to get playlist tracks: {e}")
-            return []
-
-    def get_currently_playing(self) -> Optional[Dict]:
-        if not self.spotify_api:
-            return None
-        return self.spotify_api.get_currently_playing()
-
-    def get_playlist_id(self, name: str) -> Optional[str]:
-        """Look up a Spotify playlist ID by name."""
-        if not self.spotify_api:
-            return None
-        return self.spotify_api.get_playlist_id_by_name(name)
-
-    def get_playlist_id_by_name(self, name: str) -> Optional[str]:
-        """Alias for :meth:`get_playlist_id` - retained for backward compat."""
-        return self.get_playlist_id(name)
-
-    def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]) -> bool:
-        if not self.spotify_api:
-            return False
-        return self.spotify_api.add_tracks_to_playlist(playlist_id, track_ids)
-
-    def remove_track(self, playlist_id: str, track_id: str) -> bool:
-        if not self.spotify_api:
-            return False
-        return self.spotify_api.remove_track_from_playlist(playlist_id, track_id)
+        Exactly one of *on_success* / *on_error* fires when the flow
+        finishes. *url* / *song_data*, when given, skip song acquisition
+        (pre-captured by the caller). *skip_duplicate_check* bypasses the
+        opt-in near-duplicate check - used ONLY by the activity window's
+        Add action, otherwise Add would re-trigger the check it is
+        trying to satisfy.
+        """
+        raise NotImplementedError

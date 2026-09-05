@@ -12,15 +12,23 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, messagebox
 
-from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
+# Platform ids are declared by the plugin manifests (integrations/*/
+# plugin.json); these local constants mirror the built-in ids.
+PLATFORM_YOUTUBE_MUSIC = "youtube_music"
+PLATFORM_SPOTIFY = "spotify"
+PLATFORM_SOUNDCLOUD = "soundcloud"
+PLATFORM_DEEZER = "deezer"
 from controllers.keybind_registry import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
+from services import duplicate_queue
 from services.database import DatabaseManager
-from services.playlist_store import PlaylistStore
+from services.duplicate_check import find_duplicate_pairs
+from services.playlist_store import PlaylistStore, playlist_still_registered
 from services.playlist_sync import PlaylistSyncService
 from services.song_manager import SongManager
 from utils.icons import IconService
 from utils.scaling import px, ui_font
+from ui.activity_window import show_activity_window
 from ui.card_grid import CardGridManager
 from ui.search_manager import SearchManager
 from ui.showcase_manager import ShowcaseManager
@@ -32,7 +40,8 @@ from utils.window import center_window, resize_window
 from utils.config import get_setting, get_setting_value
 from ui.scrollable import ScrollableFrame
 from utils.theme import C, load_theme, btn_colors, hover_bg
-from utils.platform import is_wayland_session
+from utils.logging_config import user_log
+from utils.platform import is_wayland_session, x11_root_desktop_state
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +54,8 @@ INTEGRATION_ERROR_MSG = (
 _PLATFORM_API_TARGETS: dict[str, tuple[str, int]] = {
     PLATFORM_YOUTUBE_MUSIC: ("music.youtube.com", 443),
     PLATFORM_SPOTIFY: ("api.spotify.com", 443),
+    PLATFORM_SOUNDCLOUD: ("api.soundcloud.com", 443),
+    PLATFORM_DEEZER: ("pipe.deezer.com", 443),
 }
 
 assets_dir = Path(__file__).resolve().parents[2] / "assets"
@@ -52,6 +63,8 @@ playlist_cover_img_path = assets_dir / "playlist_image.png"
 close_playlist_img_path = assets_dir / "close_playlist.png"
 reload_database_img_path = assets_dir / "reloadCache.png"
 loading_img_path = assets_dir / "hourglass.png"
+heart_empty_img_path = assets_dir / "heart_empty.png"
+heart_full_img_path = assets_dir / "heart_full.png"
 
 
 class MainWindow:
@@ -62,11 +75,16 @@ class MainWindow:
         integrations,
         keybind_controller,
         app_controller,
+        plugin_registry=None,
     ) -> None:
         self.root = root
         self.integrations = integrations
         self.kc = keybind_controller
         self.ac = app_controller
+        # The live PluginRegistry (shared with App / KeybindController);
+        # None in legacy/test call sites - flows keep working, only the
+        # Manage dialog's integration-set display needs it.
+        self.plugin_registry = plugin_registry
 
         self._recording_frame_idx: int | None = None
 
@@ -83,6 +101,7 @@ class MainWindow:
         self._warnings: dict[str, str] = {}
         self._connectivity_after_id: str | None = None
         self._service_after_id: str | None = None
+        self._activity_poll_after_id: str | None = None
 
         # Set by App._start_tray() once the window exists; None when no
         # tray backend is available.
@@ -90,6 +109,12 @@ class MainWindow:
         # Pending hide-to-tray after() id (cancelled if the window is
         # mapped again before the WM settles the minimize).
         self._hide_after_id: str | None = None
+        # Virtual desktop the window was last mapped on (X11
+        # ``_NET_CURRENT_DESKTOP``); None until the first map or when the
+        # property cannot be read.  Used to distinguish a desktop switch
+        # (which the WM may carry out by minimizing the windows it
+        # leaves behind) from a genuine minimize of this window.
+        self._last_desktop: int | None = None
 
         self._sync_service = PlaylistSyncService(integrations)
 
@@ -123,6 +148,8 @@ class MainWindow:
         self.close_playlist_img = IconService.get(close_playlist_img_path, 16)
         self.reload_database_img = IconService.get(reload_database_img_path, 16)
         self.loading_img = IconService.get(loading_img_path, 32)
+        self.heart_empty_img = IconService.get(heart_empty_img_path, 16)
+        self.heart_full_img = IconService.get(heart_full_img_path, 16)
 
         self.root.grid_rowconfigure(0, weight=0)
         self.root.grid_rowconfigure(1, weight=0)   # search bar
@@ -205,9 +232,12 @@ class MainWindow:
             self.card_grid,
             self._song_manager,
             close_playlist_img=self.close_playlist_img,
+            heart_empty_img=self.heart_empty_img,
+            heart_full_img=self.heart_full_img,
             integrations=self.integrations,
             card_index_fn=self._card_index,
             search_results=self.search._search_results,
+            playlist_cover_img_path=playlist_cover_img_path,
         )
 
     def _card_index(self, card) -> int | None:
@@ -254,11 +284,19 @@ class MainWindow:
 
         header_bg = C["frame_head_bg"]
         self.header_frame.configure(background=header_bg)
+        self._header_right.configure(background=header_bg)
+
+        def _style_header_button(widget) -> None:
+            widget.configure(**btn_colors(C["button_head_bg"], C["button_head_fg"]))
+
         for widget in self.header_frame.winfo_children():
             if isinstance(widget, tk.Button):
-                widget.configure(
-                    **btn_colors(C["button_head_bg"], C["button_head_fg"])
-                )
+                _style_header_button(widget)
+            elif isinstance(widget, tk.Frame):
+                # The right-side cluster (Activity + Settings buttons).
+                for sub in widget.winfo_children():
+                    if isinstance(sub, tk.Button):
+                        _style_header_button(sub)
 
         # Re-style the status warning banner.
         warn_bg = C["label_playlist_warn_bg"]
@@ -286,7 +324,14 @@ class MainWindow:
             highlightthickness=0,
             relief="raised",
             command=lambda: show_login_dialog(
-                self.root, on_success=self.ac.refresh_auth
+                self.root,
+                on_success=self.ac.refresh_auth,
+                integrations=list(self.integrations.get_all().values()),
+                integration_registry=self.integrations,
+                keybind_controller=self.kc,
+                plugin_registry=self.plugin_registry,
+                on_uninstall=self._on_uninstall_integration,
+                on_plugins_changed=self._on_plugins_changed,
             ),
         )
         ToolTip(self.btn_login, "Log in to music services")
@@ -306,8 +351,12 @@ class MainWindow:
 
         open_settings_img_path = assets_dir / "settings.png"
         self.open_settings_img = IconService.get(open_settings_img_path, 32)
+        # Right-side header cluster: Activity badge button + Settings.
+        self._header_right = tk.Frame(
+            self.header_frame, background=C["frame_head_bg"]
+        )
         self.btn_open_settings = tk.Button(
-            self.header_frame,
+            self._header_right,
             image=self.open_settings_img,
             cursor="hand2",
             **btn_header_colors,
@@ -325,16 +374,39 @@ class MainWindow:
                 on_playlist_stats_change=self.set_playlist_stats,
                 on_columns_change=self.set_columns,
                 on_check_updates_now=lambda on_done=None: self.ac.check_updates(force=True, on_done=on_done),
+                on_check_duplicates_now=self._run_duplicate_scan,
+                on_like_button_change=self._apply_like_button_visibility,
+                on_scrobble_keybind_change=self._register_scrobble_keybind,
+                on_restart_app=self.ac.restart_app,
+                plugin_availability=set(self.integrations.get_all()),
             ),
         )
         ToolTip(self.btn_open_settings, "Settings")
 
+        self.btn_activity = tk.Button(
+            self._header_right,
+            text="Activity",
+            cursor="hand2",
+            **btn_header_colors,
+            highlightthickness=0,
+            relief="raised",
+            font=ui_font(11),
+            command=self._open_activity_window,
+        )
+        ToolTip(self.btn_activity, "Errors and duplicate songs")
+        self.btn_activity.pack(side="left", padx=(0, 4))
+        self.btn_open_settings.pack(side="left")
+
         # Span the whole card grid so the header background bar matches the
         # window width at any column count.
         self.header_frame.grid(row=0, column=0, columnspan=self._columns, sticky="nsew")
-        self.header_frame.grid_columnconfigure(0, weight=1)
+        # `uniform` forces the two side columns to EQUAL width even though
+        # the right cluster (Activity + Settings) is naturally wider than
+        # the lone login button - without it, "Add playlist" drifts off
+        # center toward the narrow side.
+        self.header_frame.grid_columnconfigure(0, weight=1, uniform="header_sides")
         self.header_frame.grid_columnconfigure(1, weight=0)
-        self.header_frame.grid_columnconfigure(2, weight=1)
+        self.header_frame.grid_columnconfigure(2, weight=1, uniform="header_sides")
 
         # --- status warning banner (row 0, hidden by default) -----------
         warn_bg = C["label_playlist_warn_bg"]
@@ -356,7 +428,7 @@ class MainWindow:
 
         self.btn_login.grid(row=1, column=0, sticky="w", padx=4, pady=4)
         self.btn_add_playlist.grid(row=1, column=1, padx=4, pady=4)
-        self.btn_open_settings.grid(row=1, column=2, sticky="e", padx=4, pady=4)
+        self._header_right.grid(row=1, column=2, sticky="e", padx=4, pady=4)
 
     # ------------------------------------------------------------------
     # Playlist dialog workflow (delegates to PlaylistController)
@@ -443,6 +515,55 @@ class MainWindow:
     def _show_integration_error(self) -> None:
         messagebox.showerror("Integration Error", INTEGRATION_ERROR_MSG)
 
+    def _on_uninstall_integration(self, platform_id: str) -> None:
+        """Close every playlist card for *platform_id* (uninstall path).
+
+        Invoked by the Manage dialog BEFORE its disk cleanup: home
+        ``close_main_frame`` is the canonical per-playlist teardown
+        (keybind unregister, registry entry, song DB, widget destroy +
+        grid renumber), so cards of a removed platform never linger
+        showing dead data once the plugin directory is gone.
+
+        Best-effort per card: one card failing to close (e.g. a DROP
+        fighting a locked DB) must not leave the rest of the platform's
+        cards open - the disk cleanup that follows would then delete the
+        db files out from under their widgets.
+        """
+        failure: Optional[str] = None
+        for card in list(self.card_grid.cards):
+            platform = (getattr(card, "platform", None) or "").strip()
+            if platform and platform == platform_id:
+                try:
+                    self.card_grid.close_main_frame(card, delete_db=True)
+                except Exception:
+                    logger.exception(
+                        "Failed to close card for '%s' during uninstall of %s",
+                        getattr(card, "name_label", None) and card.name_label.cget("text"),
+                        platform_id,
+                    )
+                    if failure is None:
+                        failure = "one or more playlist cards could not be closed"
+        if failure:
+            user_log(
+                logger,
+                "Uninstalling %s: %s - their keybinds/databases may remain",
+                platform_id, failure,
+            )
+
+    def _on_plugins_changed(self) -> None:
+        """Re-scan integrations/ after a Manage dialog download/uninstall.
+
+        Re-discovering the live registry lets a freshly downloaded plugin
+        be used (login tiles, keybinds, URL parsing) without a restart;
+        uninstalled plugins simply stop existing.  The plugin registry is
+        shared with App and KeybindController, and
+        ``App.reload_plugins`` re-registers new integrations into the
+        shared IntegrationRegistry.
+        """
+        app = getattr(self.ac, "app", None)
+        if app is not None and hasattr(app, "reload_plugins"):
+            app.reload_plugins()
+
     def _on_dialog_cancel(self) -> None:
         """Restore UI after playlist dialog is cancelled."""
         self.btn_add_playlist.configure(state="normal", image=self.add_playlist_img)
@@ -466,7 +587,7 @@ class MainWindow:
             status_label.config(text="Sync", background=C["label_playlist_warn_bg"])
 
             if thumb_url:
-                self.showcase.set_playlist_cover(card.cover_label, thumb_url)
+                self.showcase.set_playlist_cover(card.cover_label, thumb_url, card=card)
 
             frame_idx = len(self.card_grid.cards) - 1
             self.showcase.refresh_stats(frame_idx, playlist_name, platform)
@@ -531,6 +652,13 @@ class MainWindow:
             card.log_status.config(text="OK", background=C["label_playlist_good_bg"])
         elif status_text == "Error":
             card.log_status.config(text=status_text, background=C["label_playlist_error_bg"])
+            # Persist for the activity window's Errors tab.
+            try:
+                duplicate_queue.record_error(
+                    playlist_name, card.platform, "Track import failed"
+                )
+            except Exception:
+                logger.debug("Could not log import error", exc_info=True)
         else:
             card.log_status.config(text=status_text, background=C["label_playlist_warn_bg"])
         self.showcase.update_log_labels_from_db(
@@ -564,11 +692,10 @@ class MainWindow:
             except tk.TclError:
                 pass
             if thumb_url:
-                self.showcase.set_playlist_cover(card.cover_label, thumb_url)
+                self.showcase.set_playlist_cover(card.cover_label, thumb_url, card=card)
 
     # ------------------------------------------------------------------
     # Keybind setup (called once after __init__)
-    # ------------------------------------------------------------------
 
     def _make_keybind_callbacks(self, frame_idx: int) -> KeybindCallbacks:
         """Build a :class:`KeybindCallbacks` bound to *frame_idx* widgets.
@@ -634,30 +761,384 @@ class MainWindow:
             on_song_added=on_song_added,
         )
 
+    # ------------------------------------------------------------------
+    # Activity window (errors + duplicate songs)
+    # ------------------------------------------------------------------
+
+    def _open_activity_window(self) -> None:
+        """Open (or re-lift) the non-modal activity window."""
+        show_activity_window(
+            self.root,
+            load_data=self._load_activity_data,
+            on_song=self._handle_activity_song,
+            on_close=self.refresh_activity_badge,
+        )
+        self.refresh_activity_badge()
+
+    def _load_activity_data(self) -> dict:
+        """Fresh data snapshot for the activity window (UI thread)."""
+        return {
+            "pending": duplicate_queue.list_pending(),
+            "errors": duplicate_queue.list_errors(),
+            "songs": duplicate_queue.list_songs(),
+            "pairs": list(getattr(self, "_last_scan_pairs", []) or []),
+        }
+
+    def refresh_activity_badge(self) -> None:
+        """Update the header button text: 'Activity' / 'Activity (N)'."""
+        try:
+            n = duplicate_queue.activity_count()
+        except Exception:
+            n = 0
+        try:
+            self.btn_activity.configure(
+                text="Activity" if not n else f"Activity ({n})"
+            )
+        except tk.TclError:
+            pass
+
+    def _poll_activity_stamp(self) -> None:
+        """2 s badge poll driven by extra.json's mtime.
+
+        Catches mutations from every source - keybind flows, this UI, and
+        even the CLI process writing the same file - without any pub-sub
+        plumbing.  A stat() per tick is far cheaper than re-reading.
+        """
+        current = duplicate_queue.stamp()
+        if current != getattr(self, "_activity_stamp", None):
+            self._activity_stamp = current
+            self.refresh_activity_badge()
+        try:
+            self._activity_poll_after_id = self.root.after(
+                2000, self._poll_activity_stamp
+            )
+        except tk.TclError:
+            pass  # app shutting down
+
+    # -- song dispatch ------------------------------------------------
+
+    def _handle_activity_song(self, record: dict, action: str) -> None:
+        """Dispatcher passed to the activity window (runs on UI thread)."""
+        kind = record.get("kind")
+        if kind == "pair":
+            pair_key = record["pair_key"]
+            if action == "not_duplicate":
+                duplicate_queue.set_song(pair_key, "not_duplicate")
+            elif action == "remove_newer":
+                self._remove_scanner_duplicate(record)
+            elif action == "undo":
+                duplicate_queue.delete_song(pair_key)
+            return
+
+        if kind == "clear_errors" and action == "clear":
+            duplicate_queue.clear_errors()
+            self.refresh_activity_badge()
+            return
+
+        # Pending add songs.
+        if action == "dismiss":
+            duplicate_queue.remove_pending(record["id"])
+            duplicate_queue.set_song(record["pair_key"], "dismissed")
+        elif action == "add":
+            duplicate_queue.remove_pending(record["id"])
+            alive = playlist_still_registered(
+                record.get("playlist_name", ""),
+                record.get("platform", ""),
+                record.get("playlist_id") or None,
+            )
+            if not alive:
+                duplicate_queue.record_error(
+                    record.get("playlist_name", ""),
+                    record.get("platform", ""),
+                    "Playlist closed before the queued song was added",
+                )
+            else:
+                duplicate_queue.set_song(record["pair_key"], "added")
+                threading.Thread(
+                    target=self._pending_add_worker,
+                    args=(dict(record),),
+                    daemon=True,
+                ).start()
+        else:
+            logger.warning("Unknown activity action %r", action)
+        self.refresh_activity_badge()
+
+    def _pending_add_worker(self, rec: dict) -> None:
+        """Daemon-thread half of the Add action.
+
+        Re-runs the real flow with the queued record's pre-captured
+        url/song_data; ``skip_duplicate_check`` prevents Add from
+        re-triggering the very check that queued it.
+        """
+        platform = rec.get("platform", "")
+
+        def _ui(fn) -> None:
+            try:
+                self.root.after(0, fn)
+            except Exception:
+                pass  # app shutting down (rule: guard every worker after())
+
+        # Hold the global flow lock for the whole Add.  Without it, this
+        # worker's flow.capture (extension platforms) races an in-flight
+        # keybind/scrobble flow's capture on the same receiver port and the
+        # two can double-handle the same URL command.  Non-blocking acquire:
+        # if another flow is mid-flight, re-enqueue rather than queue behind
+        # it (a duplicate/interleaved command is worse than a no-op).
+        busy = self.kc.flow_busy()
+        if not busy.acquire(blocking=False):
+            logger.debug("Flow in progress - deferring activity Add for %s", platform)
+            duplicate_queue.add_pending(rec)
+            duplicate_queue.record_error(
+                rec.get("playlist_name", ""),
+                platform,
+                "Another add is in progress - this song stays queued",
+            )
+            _ui(self.refresh_activity_badge)
+            return
+
+        try:
+            flow = self.kc.get_flow(platform)
+            if flow is None:
+                duplicate_queue.record_error(
+                    rec.get("playlist_name", ""),
+                    platform,
+                    f"{platform} unavailable - could not add '{rec.get('title', '')}'",
+                )
+                _ui(self.refresh_activity_badge)
+                return
+
+            song_data = {
+                "title": rec.get("title", ""),
+                "artists": rec.get("artists") or [],
+                "duration": rec.get("duration"),
+                "track_id": rec.get("track_id"),
+                "thumbnail": rec.get("thumbnail_url"),
+            }
+
+            def on_status(msg: str) -> None:
+                pass
+
+            def on_error(msg: str) -> None:
+                duplicate_queue.add_pending(rec)  # re-enqueue for another try
+                duplicate_queue.record_error(rec.get("playlist_name", ""), platform, msg)
+                _ui(self.refresh_activity_badge)
+
+            def on_success(result: dict) -> None:
+                # added / exists / duplicate all resolve the queue entry;
+                # badge refresh keeps the count honest either way.
+                _ui(self.refresh_activity_badge)
+
+            try:
+                flow.execute_flow(
+                    rec.get("playlist_name", ""),
+                    on_status,
+                    on_error,
+                    on_success,
+                    url=rec.get("url"),
+                    song_data=song_data,
+                    playlist_id=rec.get("playlist_id") or None,
+                    skip_duplicate_check=True,
+                )
+            except Exception as e:
+                logger.error("Activity Add failed: %s", e, exc_info=True)
+                duplicate_queue.add_pending(rec)
+                duplicate_queue.record_error(
+                    rec.get("playlist_name", ""), platform, str(e)
+                )
+                _ui(self.refresh_activity_badge)
+        finally:
+            busy.release()
+
+    def _remove_scanner_duplicate(self, pair_record: dict) -> None:
+        """Remove-newer action: platform-first removal, then the local row.
+
+        Mirrors the add-path ordering and showcase_manager's established
+        removal chain (find_playlist -> authenticated integration ->
+        remove_track -> delete_song): removing only locally would let the
+        next reload resurrect the pair from platform truth.
+        """
+        newer = pair_record.get("newer") or {}
+        name = pair_record.get("playlist_name", "")
+        platform = pair_record.get("platform", "")
+        pid = pair_record.get("playlist_id", "") or ""
+        playlist_data = PlaylistStore.find_playlist(
+            name, platform, playlist_id=pid or None
+        )
+        platform_playlist_id = (
+            playlist_data.get("playlist_id", "") if playlist_data else ""
+        )
+        integration = (
+            self.integrations.get(platform) if self.integrations else None
+        )
+
+        def work():
+            ok = False
+            reason = ""
+            if not platform_playlist_id:
+                reason = f"No platform playlist id for '{name}' - cannot remove"
+            elif integration is None or not integration.is_authenticated():
+                reason = f"{platform} not authenticated - cannot remove"
+            else:
+                ok = integration.remove_track(
+                    platform_playlist_id, newer.get("track_id")
+                )
+                if not ok:
+                    reason = "Platform refused the removal"
+
+            def apply():
+                if not ok:
+                    duplicate_queue.record_error(name, platform, reason)
+                    self.refresh_activity_badge()
+                    return
+                if self._song_manager.delete_song(
+                    name, newer.get("id"), platform=platform, playlist_id=pid
+                ):
+                    duplicate_queue.set_song(
+                        pair_record["pair_key"], "added"
+                    )
+                    idx = self._find_frame_index_by_name(name)
+                    if idx is not None:
+                        self.showcase.refresh(idx, name, platform)
+                        self.showcase.refresh_stats(idx, name, platform)
+                else:
+                    # Platform side already removed; surface the mirror
+                    # drift instead of pretending all went well.
+                    duplicate_queue.record_error(
+                        name,
+                        platform,
+                        "Removed from the platform but the local row "
+                        "could not be deleted",
+                    )
+                self.refresh_activity_badge()
+
+            try:
+                self.root.after(0, apply)
+            except Exception:
+                pass  # app shutting down
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # -- manual scan ("Check for duplicates now") --------------------------
+
+    def _run_duplicate_scan(self, on_done) -> None:
+        """Settings-button scan: fuzzy-pair every registered playlist.
+
+        Runs off-thread; *on_done(found_count, error_or_None)* marshals
+        back to the Settings dialog on the UI thread (same contract as
+        update checks).
+        """
+
+        def _scan():
+            found = 0
+            error = None
+            pairs = []
+            try:
+                song_manager = self._song_manager
+                for pl in PlaylistStore.load_playlists():
+                    name = pl.get("name", "")
+                    platform = pl.get("platform", "")
+                    pid = pl.get("playlist_id") or ""
+                    songs = song_manager.get_all_songs(
+                        name, platform=platform, playlist_id=pid
+                    )
+                    for match in find_duplicate_pairs(songs):
+                        key = duplicate_queue.make_pair_key(
+                            platform,
+                            pid,
+                            match["older"].get("track_id"),
+                            match["newer"].get("track_id"),
+                        )
+                        song = (
+                            duplicate_queue.get_song(key) or {}
+                        ).get("song")
+                        if song in ("added", "not_duplicate"):
+                            continue  # already resolved / whitelisted
+                        found += 1
+                        pairs.append(
+                            {
+                                "kind": "pair",
+                                "pair_key": key,
+                                "playlist_name": name,
+                                "platform": platform,
+                                "playlist_id": pid,
+                                "newer": match["newer"],
+                                "older": match["older"],
+                                "similarity": match["similarity"],
+                            }
+                        )
+            except Exception as e:
+                logger.error("Duplicate scan failed: %s", e, exc_info=True)
+                error = str(e)
+
+            # Publish results on the UI thread; the window renders them.
+            def _publish():
+                self._last_scan_pairs = pairs
+                if callable(on_done):
+                    try:
+                        on_done(found, error)
+                    except tk.TclError:
+                        pass
+                if found and not error:
+                    self._open_activity_window()
+
+            try:
+                self.root.after(0, _publish)
+            except Exception:
+                pass  # app shutting down
+
+        threading.Thread(target=_scan, daemon=True).start()
+
+    @staticmethod
+    def _filter_available_playlists(playlists, available_platforms):
+        """Pair each store entry with its platform, skipping dead ones.
+
+        Returns ``[(playlist_dict, platform)]`` for every entry whose
+        *platform* is in *available_platforms*.  A playlist whose plugin
+        directory is absent (or whose optional dependency failed to
+        import) has no working flow behind it - its card would offer
+        keybinds and reloads that can only fail.  The entry itself stays
+        untouched in db/playlists.json: restoring the integration brings
+        the card back on the next launch.  Legacy entries without a
+        *platform* field were all YouTube Music.
+        """
+        visible = []
+        for playlist in playlists:
+            platform = playlist.get("platform") or PLATFORM_YOUTUBE_MUSIC
+            if platform in available_platforms:
+                visible.append((playlist, platform))
+            else:
+                logger.info(
+                    "Hiding playlist '%s' (no %s integration loaded)",
+                    playlist.get("name"), platform,
+                )
+        return visible
+
     def setup(self) -> None:
         self.kc.set_root(self.root)
-        playlists = PlaylistStore.load_playlists()
-        if playlists:
-            self.card_grid.create_main_frame(len(playlists))
-            for i, playlist in enumerate(playlists):
+        visible = self._filter_available_playlists(
+            PlaylistStore.load_playlists(),
+            set(self.integrations.get_all()),
+        )
+        if visible:
+            self.card_grid.create_main_frame(len(visible))
+            for i, (playlist, platform) in enumerate(visible):
                 if i < len(self.card_grid.cards):
                     card = self.card_grid.cards[i]
                     name = playlist.get("name", f"Playlist {i + 1}")
-                    platform = playlist.get("platform", PLATFORM_YOUTUBE_MUSIC)
                     playlist_id = playlist.get("playlist_id", "")
                     card.name_label.config(text=name)
                     card.platform = platform
                     card.playlist_id = playlist_id
 
-                    hotkey = playlist.get("hotkey", "")
-                    if hotkey:
+                    keybind = playlist.get("keybind", "")
+                    if keybind:
                         entry = card.keybind_entry
                         entry.config(state="normal")
-                        entry.insert(0, hotkey)
+                        entry.insert(0, keybind)
                         entry.config(state="readonly")
-                        displaced = self.kc.register_hotkey(
+                        displaced = self.kc.register_keybind(
                             name,
-                            hotkey,
+                            keybind,
                             self._make_keybind_callbacks(i),
                             platform=platform,
                             playlist_id=playlist_id,
@@ -671,9 +1152,12 @@ class MainWindow:
 
                     thumb_url = playlist.get("thumbnail_url", "")
                     if thumb_url:
-                        self.showcase.set_playlist_cover(card.cover_label, thumb_url)
+                        self.showcase.set_playlist_cover(card.cover_label, thumb_url, card=card)
 
         self.card_grid._sync_empty_state()
+
+        # Register the scrobble keybind (standalone action, not tied to a playlist)
+        self._register_scrobble_keybind()
 
         # Start periodic connectivity and service-health probes.
         self._start_background_checks()
@@ -699,7 +1183,7 @@ class MainWindow:
         """Hide the window to the tray when minimized (if enabled).
 
         ``<Unmap>`` fires for reasons other than minimize (our own
-        ``withdraw()``, WM restarts), so the decision is deferred and
+        ``withdraw()``, WM restarts), so the song is deferred and
         gated on ``state() == "iconic"`` - that distinguishes a real
         minimize from ``withdraw()`` (state ``withdrawn``), which
         prevents recursion.  The WM may take a few event-loop ticks to
@@ -736,6 +1220,16 @@ class MainWindow:
             if state == "iconic" or (
                 is_wayland_session() and attempts == 0 and not viewable
             ):
+                if not self._is_user_minimize():
+                    # The WM minimized this window while moving to
+                    # another virtual desktop (common when a fullscreen
+                    # game is open on the desktop being left, and in
+                    # non-composited sessions) or entered "show the
+                    # desktop" mode.  Hiding to tray would yank the
+                    # window out of the taskbar prematurely - leave it
+                    # minimized so the WM restores it like any other
+                    # window.
+                    return
                 self.root.withdraw()
             elif attempts > 0:
                 # WM hasn't settled the minimize yet - try again shortly.
@@ -747,7 +1241,7 @@ class MainWindow:
         self._hide_after_id = self.root.after(0, _maybe_hide)
 
     def _on_map(self, event) -> None:
-        """Cancel a pending hide-to-tray decision once the window maps.
+        """Cancel a pending hide-to-tray song once the window maps.
 
         If the user restores the window within the retry window, the
         pending ``after`` callback must not hide it again.
@@ -760,6 +1254,42 @@ class MainWindow:
             except tk.TclError:
                 pass
             self._hide_after_id = None
+        # Record which desktop this window came back on.  A later unmap
+        # whose desktop differs from this one is a WM desktop switch
+        # (non-composited WMs map/unmap the windows they leave behind,
+        # and some minimize them when a fullscreen game is open on the
+        # desktop), not a user minimize of this window.
+        self._last_desktop, _ = x11_root_desktop_state()
+
+    def _is_user_minimize(self) -> bool:
+        """Whether the minimize was aimed at this window (not the WM
+        switching desktops or entering show-desktop mode).
+
+        Windows get minimized for reasons unrelated to the user's intent
+        for *this* window: virtual desktop switches with a fullscreen
+        game open on the desktop being left (non-composited WMs minimize
+        the windows they abandon, KWin does this for game desktops), and
+        "show the desktop" (minimize-all).  Hiding to tray in those
+        cases would remove the app from the taskbar although the user
+        never minimized it - it must stay minimized so the WM restores
+        it when the desktop comes back.
+
+        Returns True (hide to tray) when the minimize happened while the
+        desktop stayed put and show-desktop mode is off; False (leave
+        minimized) on a desktop switch or show-desktop mode.  When the
+        X11 root properties cannot be read (non-X11 session, no
+        ``xprop``), True is returned to preserve the original behavior.
+        """
+        desktop, showing = x11_root_desktop_state()
+        if showing:
+            return False
+        if (
+            desktop is not None
+            and self._last_desktop is not None
+            and desktop != self._last_desktop
+        ):
+            return False
+        return True
 
     def set_hide_to_tray(self, enabled: bool) -> None:
         """Live-apply the hide-to-tray setting (called from Settings)."""
@@ -930,6 +1460,49 @@ class MainWindow:
         self.card_grid._sync_empty_state()
         self._fit_window()
 
+    def _apply_like_button_visibility(self, enabled: bool) -> None:
+        """Live-apply the like button visibility setting (called from Settings).
+
+        Rebuilds every card's showcase section to show/hide the like button.
+        """
+        for frame_idx in range(len(self.card_grid.cards)):
+            try:
+                playlist_name = self.card_grid.cards[frame_idx].name_label.cget("text")
+                platform = self.card_grid.cards[frame_idx].platform
+            except (IndexError, tk.TclError):
+                continue
+            self.showcase.refresh(frame_idx, playlist_name, platform)
+        self._fit_window()
+
+    def _register_scrobble_keybind(self) -> None:
+        """Register the scrobble keybind (standalone action) if one is set.
+
+        Called once at setup and by the Settings dialog when the keybind
+        changes (Record or Clear). Re-running it replaces the prior action
+        binding: ``register`` unregisters the existing "scrobble" action
+        first, so a cleared (empty) keybind removes the live binding and a
+        changed combo replaces it.
+        """
+        keybind = get_setting_value("scrobble_keybind", "keybind") or ""
+
+        def _on_scrobble_status(msg, bg):
+            # For now, scrobble actions don't have a display widget like
+            # playlists do; they just log silently. Future: could add a
+            # small status label or activity indicator.
+            logger.debug("Scrobble action: %s", msg)
+
+        callbacks = KeybindCallbacks(
+            on_status=_on_scrobble_status,
+        )
+        self.kc.registry.register(
+            "scrobble",
+            keybind,
+            callbacks,
+            platform="",  # action bindings have no platform
+            playlist_id="",
+            kind="action",  # distinguish from playlist bindings
+        )
+
     def _auto_resize(self) -> None:
         """Resize the window to fit playlist frames."""
         if not self._auto_resize_enabled:
@@ -944,13 +1517,13 @@ class MainWindow:
     # ------------------------------------------------------------------
 
     def _clear_displaced_keybind(self, displaced: dict) -> None:
-        """Clear a hotkey that was just taken over by another playlist.
+        """Clear a keybind that was just taken over by another playlist.
 
         Recording the same combo on playlist B silently displaces playlist
         A's binding (``KeybindRegistry.register`` returns the displaced
         info).  A's entry must stop showing the stolen combo and its
         persisted keybind must be cleared - otherwise the app would
-        display a hotkey that fires B, and a restart would resurrect the
+        display a keybind that fires B, and a restart would resurrect the
         collision (leaving the combo bound to nothing once B's frame is
         closed).
         """
@@ -1023,8 +1596,8 @@ class MainWindow:
             if not was_recording_here:
                 return
             # Escape / focus-out during recording: commit the empty combo so
-            # the previously registered hotkey is removed and the store
-            # matches what the entry now shows - a stale hotkey firing with
+            # the previously registered keybind is removed and the store
+            # matches what the entry now shows - a stale keybind firing with
             # a blank entry is confusing.
             playlist_name = self.card_grid.cards[cur_idx].name_label.cget("text")
             platform = self.card_grid.cards[cur_idx].platform
@@ -1032,7 +1605,7 @@ class MainWindow:
             PlaylistStore.update_keybind(
                 playlist_name, platform, "", playlist_id=playlist_id
             )
-            self.kc.unregister_hotkey(
+            self.kc.unregister_keybind(
                 playlist_name, platform=platform, playlist_id=playlist_id
             )
 
@@ -1044,6 +1617,13 @@ class MainWindow:
             return
         self._recording_frame_idx = None
         combo = self.kc.stop_recording()
+
+        # The deferred after(1) path (_on_root_click) can land after a card
+        # was closed - the index went stale.  Bail out quietly instead of
+        # raising IndexError in the Tk callback.
+        if frame_idx >= len(self.card_grid.cards):
+            logger.debug("Recording card %d closed before stop; discarding", frame_idx)
+            return
 
         card = self.card_grid.cards[frame_idx]
         entry = card.keybind_entry
@@ -1061,7 +1641,7 @@ class MainWindow:
             PlaylistStore.update_keybind(
                 playlist_name, platform, combo, playlist_id=playlist_id
             )
-            displaced = self.kc.register_hotkey(
+            displaced = self.kc.register_keybind(
                 playlist_name,
                 combo,
                 self._make_keybind_callbacks(frame_idx),
@@ -1074,15 +1654,17 @@ class MainWindow:
             PlaylistStore.update_keybind(
                 playlist_name, platform, "", playlist_id=playlist_id
             )
-            self.kc.unregister_hotkey(
+            self.kc.unregister_keybind(
                 playlist_name, platform=platform, playlist_id=playlist_id
             )
 
     def _on_root_click(self, event) -> None:
         if self._recording_frame_idx is not None:
-            entry = self.card_grid.cards[self._recording_frame_idx].keybind_entry
-            if event.widget != entry:
-                self.root.after(1, self._stop_recording, self._recording_frame_idx)
+            idx = self._recording_frame_idx
+            if idx < len(self.card_grid.cards):
+                entry = self.card_grid.cards[idx].keybind_entry
+                if event.widget != entry:
+                    self.root.after(1, self._stop_recording, idx)
 
     # ------------------------------------------------------------------
     # Reload database (delegates to PlaylistSyncService)
@@ -1203,6 +1785,13 @@ class MainWindow:
             )
         except tk.TclError:
             pass
+        # Activity badge poll (extra.json mtime, every 2 s).
+        try:
+            self._activity_poll_after_id = self.root.after(
+                2000, self._poll_activity_stamp
+            )
+        except tk.TclError:
+            pass
 
     def _run_connectivity_check(self) -> None:
         """Launch a connectivity probe in a daemon thread."""
@@ -1235,12 +1824,14 @@ class MainWindow:
 
     def _run_service_health_check(self) -> None:
         """Launch a per-platform service-health probe in a daemon thread."""
-        # Only probe platforms the user actually has playlists for.
+        # Only probe platforms the user actually has playlists for AND
+        # whose integration is loaded - with no integration there is
+        # nothing to reach and nothing to warn about.
+        available = set(self.integrations.get_all())
         platforms = {
-            p.get("platform")
+            p.get("platform") or PLATFORM_YOUTUBE_MUSIC
             for p in PlaylistStore.load_playlists()
-            if p.get("platform")
-        }
+        } & available
         if platforms:
             threading.Thread(
                 target=self._service_health_probe,
@@ -1271,16 +1862,13 @@ class MainWindow:
             pass
 
     def _on_service_health_result(self, results: dict[str, bool]) -> None:
-        _DISPLAY_NAMES = {
-            PLATFORM_YOUTUBE_MUSIC: "YouTube Music",
-            PLATFORM_SPOTIFY: "Spotify",
-        }
         for platform, ok in results.items():
             key = f"service:{platform}"
             if ok:
                 self._set_warning(key, None)
             else:
-                name = _DISPLAY_NAMES.get(platform, platform)
+                integration = self.integrations.get(platform)
+                name = integration.display_name if integration else platform
                 self._set_warning(key, f"{name} service is unreachable")
         self._reschedule_service_check()
 
@@ -1300,8 +1888,12 @@ class MainWindow:
         self.search.dismiss()
         self.showcase.frame_img_refs.clear()
         self.card_grid.cleanup()
-        # Cancel pending connectivity / service-health timers.
-        for aid in (self._connectivity_after_id, self._service_after_id):
+        # Cancel pending connectivity / service-health / activity-poll timers.
+        for aid in (
+            self._connectivity_after_id,
+            self._service_after_id,
+            self._activity_poll_after_id,
+        ):
             if aid is not None:
                 try:
                     self.root.after_cancel(aid)
@@ -1309,6 +1901,7 @@ class MainWindow:
                     pass
         self._connectivity_after_id = None
         self._service_after_id = None
+        self._activity_poll_after_id = None
         # Release cached per-thread SQLite connections held by the UI thread.
         try:
             DatabaseManager.close_thread_connections()

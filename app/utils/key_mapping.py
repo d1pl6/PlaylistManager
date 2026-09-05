@@ -1,5 +1,5 @@
 """
-Key normalisation and hotkey parsing utilities.
+Key normalisation and keybind parsing utilities.
 
 Separated from the keybind controller so the mapping functions can be
 tested and reused independently of the pynput listener loop.
@@ -84,9 +84,9 @@ def normalize_tk_key(keysym: str) -> Optional[str]:
     return None
 
 
-def parse_hotkey(hotkey_str: str) -> Set[str]:
+def parse_keybind(keybind_str: str) -> Set[str]:
     """Split ``"ctrl+shift+a"`` into ``{'ctrl', 'shift', 'a'}``."""
-    return {k.strip().lower() for k in hotkey_str.split("+") if k.strip()}
+    return {k.strip().lower() for k in keybind_str.split("+") if k.strip()}
 
 
 def read_global_listener_setting() -> bool:

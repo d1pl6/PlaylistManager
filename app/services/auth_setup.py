@@ -12,15 +12,14 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from platformdirs import user_config_dir
+from services import profile_store as _profile_store
 
-from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from utils.logging_config import user_log
 from utils.platform import get_terminal_command, open_directory
 
 logger = logging.getLogger(__name__)
 
-AUTH_DIR = Path(user_config_dir("playlistmanager")) / "auth"
+AUTH_DIR = _profile_store.auth_dir()
 SPOTIFY_FILE = AUTH_DIR / "spotify.json"
 BROWSER_FILE = AUTH_DIR / "browser.json"
 
@@ -68,14 +67,14 @@ def save_spotify_credentials(
 ) -> None:
     """Write Spotify credentials to disk with secure permissions.
 
-    Delegates to :func:`integrations.music_spotify.music_spotify
+    Delegates to :func:`integrations.spotify.spotify
     .save_spotify_credentials_file` so the token-refresh path (which
     lives on :class:`SpotifyAPI`) and the login UI write through the
     same single writer.
 
     Raises ``OSError`` on write failure.
     """
-    from integrations.music_spotify.music_spotify import (
+    from integrations.spotify.spotify import (
         save_spotify_credentials_file,
     )
 
@@ -129,7 +128,7 @@ def verify_spotify_credentials(
     invalidated during the check and replaced).
     """
     try:
-        from integrations.music_spotify.music_spotify import SpotifyAuthManager
+        from integrations.spotify.spotify import SpotifyAuthManager
 
         me, api = SpotifyAuthManager.verify_credentials(
             client_id, client_secret, refresh_token
@@ -175,33 +174,350 @@ def save_and_verify_spotify_credentials(
 
 
 # ---------------------------------------------------------------------------
+# Last.fm
+# ---------------------------------------------------------------------------
+
+def load_lastfm_credentials() -> Dict[str, str]:
+    """Load existing Last.fm credentials from disk.
+
+    Delegates to :func:`integrations.lastfm.lastfm.load_lastfm_credentials`
+    so the plugin owns the read contract (single-writer lives in the
+    plugin; the app keeps only the static delete path here).  Returns an
+    empty dict when the plugin is missing or the file does not exist.
+    """
+    try:
+        from integrations.lastfm.lastfm import load_lastfm_credentials as load_impl
+        return load_impl()
+    except ImportError:
+        logger.warning("Last.fm plugin not found - cannot load credentials")
+        return {}
+
+
+def validate_lastfm_credentials(api_key: str, api_secret: str) -> Dict[str, Any]:
+    """Validate Last.fm api_key/secret WITHOUT opening a browser or waiting
+    for authorization.
+
+    Delegates to :func:`integrations.lastfm.lastfm.validate_api_credentials`
+    (a signed ``auth.getToken`` round trip - a bad key or secret fails
+    fast).  Used by the login dialog's Test button; Save runs the full
+    web-auth flow (:func:`verify_lastfm_credentials`).
+
+    Returns ``{"ok": True}`` or ``{"ok": False, "error": ...}``.
+    """
+    try:
+        from integrations.lastfm.lastfm import validate_api_credentials as validate_impl
+        return validate_impl(api_key, api_secret)
+    except ImportError:
+        return {
+            "ok": False,
+            "error": "Last.fm plugin not found",
+        }
+    except Exception as e:
+        logger.error("Last.fm credential validation failed: %s", e, exc_info=True)
+        return {"ok": False, "error": str(e)}
+
+
+def delete_lastfm_credentials() -> bool:
+    """Remove the Last.fm credential file.
+
+    Returns ``True`` when the file was deleted, ``False`` when it
+    did not exist.
+    """
+    lastfm_file = AUTH_DIR / "lastfm.json"
+    if lastfm_file.exists():
+        try:
+            lastfm_file.unlink()
+            user_log(logger, "Deleted Last.fm credentials")
+            return True
+        except Exception as e:
+            logger.error("Failed to delete Last.fm credentials: %s", e)
+            return False
+    return False
+
+
+def verify_lastfm_credentials(api_key: str, api_secret: str) -> Dict[str, Any]:
+    """Test if Last.fm credentials are valid by calling auth.getSession.
+
+    Delegates to :func:`integrations.lastfm.lastfm.verify_lastfm_credentials`
+    so the Last.fm client logic and session-key fetch stays in the plugin.
+
+    Returns a dict with keys:
+        - ``ok`` (bool): True if verification succeeded.
+        - ``username`` (str): Last.fm username (when ok is True).
+        - ``display_name`` (str): Display name for the user (when ok is True).
+        - ``error`` (str): Error message (when ok is False).
+    """
+    try:
+        from integrations.lastfm.lastfm import verify_lastfm_credentials as verify_impl
+        return verify_impl(api_key, api_secret)
+    except ImportError:
+        return {
+            "ok": False,
+            "error": "Last.fm plugin not found",
+        }
+    except Exception as e:
+        logger.error("Last.fm verification failed: %s", e, exc_info=True)
+        return {
+            "ok": False,
+            "error": str(e),
+        }
+
+
+def save_and_verify_lastfm_credentials(api_key: str, api_secret: str) -> Dict[str, Any]:
+    """Verify Last.fm credentials and persist them if they are valid.
+
+    Verification runs FIRST: only a successful verification round trip
+    persists the credentials (verify-first pattern, repo rule #69).
+
+    Delegates the actual save to :func:`integrations.lastfm.lastfm
+    .save_lastfm_credentials_file` so the plugin owns the write-through
+    contract.
+
+    Returns the same dict as :func:`verify_lastfm_credentials`.
+    """
+    result = verify_lastfm_credentials(api_key, api_secret)
+    if result.get("ok"):
+        try:
+            from integrations.lastfm.lastfm import save_lastfm_credentials_file
+            save_lastfm_credentials_file(
+                api_key,
+                api_secret,
+                result.get("session_key", ""),
+                result.get("username", ""),
+            )
+        except ImportError:
+            logger.error("Last.fm plugin not found; credentials not saved")
+            return {
+                "ok": False,
+                "error": "Last.fm plugin not found",
+            }
+        except Exception as e:
+            logger.error("Failed to save Last.fm credentials: %s", e, exc_info=True)
+            return {
+                "ok": False,
+                "error": f"Failed to save: {e}",
+            }
+    return result
+
+
+# ---------------------------------------------------------------------------
+# SoundCloud
+# ---------------------------------------------------------------------------
+
+
+def load_soundcloud_credentials() -> Dict[str, str]:
+    """Load existing SoundCloud credentials from disk.
+
+    Delegates to :func:`integrations.soundcloud.soundcloud
+    .load_soundcloud_credentials` so the plugin owns the read contract.
+    Returns an empty dict when the plugin is missing or the file does
+    not exist.
+    """
+    try:
+        from integrations.soundcloud.soundcloud import (
+            load_soundcloud_credentials as load_impl,
+        )
+        result = load_impl()
+        return result if result else {}
+    except ImportError:
+        logger.warning("SoundCloud plugin not found - cannot load credentials")
+        return {}
+
+
+def delete_soundcloud_credentials() -> bool:
+    """Remove the SoundCloud credential file.
+
+    Returns ``True`` when the file was deleted, ``False`` when it
+    did not exist.
+    """
+    try:
+        from integrations.soundcloud.soundcloud import (
+            delete_soundcloud_credentials as delete_impl,
+        )
+        return delete_impl()
+    except ImportError:
+        logger.warning("SoundCloud plugin not found - cannot delete credentials")
+        return False
+
+
+def verify_soundcloud_credentials(
+    client_id: str, client_secret: str, refresh_token: str
+) -> Dict[str, Any]:
+    """Test if SoundCloud credentials are valid by calling ``/me``.
+
+    Delegates to the plugin's ``verify_soundcloud_credentials`` so the
+    API client logic lives in the plugin.
+
+    Returns a dict with keys ``ok`` (bool) and either ``display_name``
+    or ``error``.
+    """
+    try:
+        from integrations.soundcloud.soundcloud import (
+            verify_soundcloud_credentials as verify_impl,
+        )
+        me, api = verify_impl(client_id, client_secret, refresh_token)
+        if me:
+            name = me.get("username") or me.get("full_name") or me.get("id") or ""
+            return {"ok": True, "display_name": str(name)}
+        return {"ok": False, "error": "Authentication failed"}
+    except ImportError:
+        return {"ok": False, "error": "SoundCloud plugin not found"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def save_and_verify_soundcloud_credentials(
+    client_id: str, client_secret: str, refresh_token: str
+) -> Dict[str, Any]:
+    """Verify SoundCloud credentials and persist them if they are valid.
+
+    Verification runs FIRST: only a successful ``/me`` round trip
+    persists the credentials (verify-first pattern, repo rule #69).
+
+    Delegates the actual save to the plugin's
+    ``save_and_verify_soundcloud_credentials``.
+
+    Returns the same dict as :func:`verify_soundcloud_credentials`.
+    """
+    try:
+        from integrations.soundcloud.soundcloud import (
+            save_and_verify_soundcloud_credentials as save_impl,
+        )
+        return save_impl(client_id, client_secret, refresh_token)
+    except ImportError:
+        return {"ok": False, "error": "SoundCloud plugin not found"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Deezer
+# ---------------------------------------------------------------------------
+
+DEEZER_FILE = AUTH_DIR / "deezer.json"
+
+
+def load_deezer_credentials() -> dict | None:
+    """Read the Deezer ARL from the auth file.  Returns None if absent."""
+    if not DEEZER_FILE.exists():
+        return None
+    try:
+        with open(DEEZER_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        arl = str(data.get("arl", "")).strip()
+        if not arl:
+            return None
+        return {"arl": arl}
+    except Exception as e:
+        logger.error("Failed to load Deezer credentials: %s", e)
+        return None
+
+
+def verify_deezer_credentials(arl: str) -> tuple:
+    """Verify a Deezer ARL with a live Pipe API round trip.
+
+    Returns ``(me, api)`` or ``(None, None)`` on failure.  The *api*
+    is a temporary :class:`DeezerAPI` whose state carried through the
+    check.
+    """
+    try:
+        from integrations.deezer.deezer import (
+            verify_deezer_credentials as verify_impl,
+        )
+        return verify_impl(arl)
+    except ImportError:
+        return None, None
+    except Exception as e:
+        logger.error("Deezer credential verification failed: %s", e)
+        return None, None
+
+
+def save_and_verify_deezer_credentials(arl: str) -> dict:
+    """VERIFY-FIRST credential save for the CLI ``--login deezer`` path.
+
+    The plugin declares ``login_module``/``login_class`` for the GUI tile,
+    so this is the CLI entrypoint that calls into the plugin's own
+    verify-first helper.
+    """
+    try:
+        from integrations.deezer.deezer import (
+            save_and_verify_deezer_credentials as save_impl,
+        )
+        return save_impl(arl)
+    except ImportError:
+        return {"ok": False, "error": "Deezer plugin not found"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def delete_deezer_credentials(plugin_registry=None) -> tuple:
+    """Delete Deezer credential files.  Returns ``(deleted, missing)``."""
+    from services.profile_store import auth_dir as _auth_dir
+    path = _auth_dir() / "deezer.json"
+    deleted = []
+    missing = []
+    if path.exists():
+        path.unlink()
+        deleted.append(path)
+    else:
+        missing.append(path)
+    return deleted, missing
+
+
+# ---------------------------------------------------------------------------
 # Multi-platform credential deletion (CLI --logout)
 # ---------------------------------------------------------------------------
 
-# platform -> primary credential file(s) deleted on logout.
-# Deliberately only the auth-dir file - NOT the repo fallback browser.json
-# copies (decision cli.md 15.12.2: CLI and GUI logins are never used
-# simultaneously, so a stale fallback copy is not a practical concern).
+# platform id -> credential file(s) deleted on logout, used as the
+# fallback when the manifest cannot be read (plugin dir missing or a
+# broken plugin.json).  The primary source is the plugin manifest: the
+# auth-dir file declared via ``auth_file`` plus any ``auth_file_fallbacks``
+# (legacy repo-root copies), resolved by PluginInfo.auth_paths.
 PLATFORM_CREDENTIAL_FILES = {
-    PLATFORM_YOUTUBE_MUSIC: [BROWSER_FILE],
-    PLATFORM_SPOTIFY: [SPOTIFY_FILE],
+    "youtube_music": [BROWSER_FILE],
+    "spotify": [SPOTIFY_FILE],
+    "lastfm": [AUTH_DIR / "lastfm.json"],
+    "soundcloud": [AUTH_DIR / "soundcloud.json"],
+    "deezer": [DEEZER_FILE],
 }
 
 
-def delete_platform_credentials(platform: str) -> Tuple[List[Path], List[Path]]:
+def _credential_paths(plugin_registry, platform: str) -> List[Path]:
+    """Every file that may hold *platform*'s credentials.
+
+    Manifest-declared paths (``PluginInfo.auth_paths``: auth-dir file +
+    declared repo-root fallbacks) first, then the hardcoded map entries
+    for the known platforms as defense in depth.  Deleting all of them
+    is what makes logout / uninstall complete - a surviving fallback
+    browser.json would otherwise re-authenticate the platform on the
+    next login.
+    """
+    paths: List[Path] = list(PLATFORM_CREDENTIAL_FILES.get(platform, []))
+    if plugin_registry is not None:
+        plugin = plugin_registry.get(platform)
+        if plugin is not None:
+            for manifest_path in plugin.auth_paths:
+                if manifest_path not in paths:
+                    paths.append(manifest_path)
+    return paths
+
+
+def delete_platform_credentials(
+    platform: str, plugin_registry=None
+) -> Tuple[List[Path], List[Path]]:
     """Delete every credential file listed for *platform*.
 
     Returns ``(deleted, missing)`` - the files that were removed and the
     ones that did not exist.  Raises ``OSError`` on the first failed
     unlink so callers can report the error.
 
-    Adding a future platform: add its identifier to
-    ``constants.KNOWN_PLATFORMS`` and its credential file(s) to
-    :data:`PLATFORM_CREDENTIAL_FILES`.
+    *plugin_registry*, when given, supplies the manifest-declared paths
+    (auth-dir file + ``auth_file_fallbacks``); without it the hardcoded
+    :data:`PLATFORM_CREDENTIAL_FILES` map applies.
     """
     deleted: List[Path] = []
     missing: List[Path] = []
-    for path in PLATFORM_CREDENTIAL_FILES.get(platform, []):
+    for path in _credential_paths(plugin_registry, platform):
         if path.exists():
             path.unlink()
             user_log(logger, "Deleted credentials: %s", path)

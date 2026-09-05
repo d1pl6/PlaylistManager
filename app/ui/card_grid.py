@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
+import webbrowser
 from typing import TYPE_CHECKING, Callable
 
-from constants import PLATFORM_YOUTUBE_MUSIC
 from controllers.keybind_registry import KeybindCallbacks
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
+from services.playlist_url import build_playlist_url
+from services import duplicate_queue, scrobble_log
 from ui.card import PlaylistCard
 from ui.close_playlist_dialog import show_close_playlist_dialog
 from ui.tooltip import ToolTip
@@ -240,7 +242,7 @@ class CardGridManager:
                 readonlybackground=entry_playlist_ro_bg,
                 state="readonly",
             )
-            ToolTip(playlist_keybind, "Click to record a hotkey")
+            ToolTip(playlist_keybind, "Click to record a keybind")
 
             reload_database = tk.Button(
                 main_header_frame,
@@ -300,9 +302,22 @@ class CardGridManager:
                 log_artist=log_artist,
                 log_name=log_name,
                 log_status=log_status,
-                platform=PLATFORM_YOUTUBE_MUSIC,
+                platform="",
             )
             card.position = (row, col)
+
+            def _open_card_playlist(_event, c=card):
+                try:
+                    pid = c.playlist_id or ""
+                    url = build_playlist_url(c.platform, pid)
+                    if not url:
+                        return
+                    webbrowser.open(url)
+                except Exception:
+                    logger.debug("Failed to open playlist URL", exc_info=True)
+
+            playlist_name.bind("<Button-1>", _open_card_playlist)
+            playlist_name.configure(cursor="hand2")
 
             close_playlist["command"] = lambda c=card: self._confirm_close_playlist(c)
             playlist_keybind.bind(
@@ -378,7 +393,7 @@ class CardGridManager:
             platform = card.platform
             playlist_id = card.playlist_id
 
-            self.kc.unregister_hotkey(
+            self.kc.unregister_keybind(
                 playlist_name, platform=platform, playlist_id=playlist_id
             )
 
@@ -397,6 +412,17 @@ class CardGridManager:
                 DatabaseManager.delete_playlist_db(
                     playlist_name, platform, playlist_id
                 )
+
+            # Scrobble-ledger records are pinned to this playlist's rows -
+            # worthless once the playlist + DB are gone.
+            scrobble_log.remove_playlist_entries(platform, playlist_id)
+
+            # Pending duplicate decisions, pair-memory and error-log lines
+            # reference this playlist - purge them too, or they linger in
+            # db/extra.json and resurface if the playlist is re-added.
+            duplicate_queue.purge_playlist(
+                platform, playlist_id, playlist_name
+            )
 
             card.frame.grid_forget()
             card.frame.destroy()

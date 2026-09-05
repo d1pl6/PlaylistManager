@@ -10,15 +10,14 @@ log/
 db/
 auth/
 cfg/
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
+.vscode/
 .history/*
-youtube-music-extension/
 .cortexkit/
 .agents
+0.3.0/
+integrations/*
+!integrations/__init__.py
+docs/*
 
 close.png
 closeWindow.png

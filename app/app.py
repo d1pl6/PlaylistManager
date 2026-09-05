@@ -1,17 +1,13 @@
 import logging
 import threading
 import tkinter as tk
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional
 from tkinter import messagebox
 
-from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from controllers.app_controller import AppController
 from controllers.keybind_controller import KeybindController
-from services.integration import (
-    IntegrationRegistry,
-    SpotifyIntegration,
-    YouTubeMusicIntegration,
-)
+from plugin_loader import PluginInfo, PluginRegistry
+from services.integration import IntegrationRegistry
 from services.playlist_store import PlaylistStore
 from services.tray import TrayService
 from ui.main_window import MainWindow
@@ -40,63 +36,192 @@ class App:
         # profile - the option database makes the default follow too.
         self.root.option_add("*Font", scaling.ui_font(10))
 
-        yt_client = None
-        youtube_auth = None
-        try:
-            from integrations.music_youtube.music_youtube import youtube_auth as _yt_auth
-            youtube_auth = _yt_auth
-            if _yt_auth.setup_auth():
-                try:
-                    yt_client = _yt_auth.get_yt_music()
-                    user_log(logger, "YouTube Music authenticated")
-                except Exception as e:
-                    logger.error(f"YouTube Music auth failed: {e}")
-                    messagebox.showwarning(
-                        "YouTube Music",
-                        f"YouTube Music authentication failed:\n{e}",
-                    )
-            else:
-                logger.warning("YouTube Music not configured (no browser.json)")
-        except ImportError:
-            user_log(
-                logger,
-                "ytmusicapi not installed - YouTube Music integration disabled",
-            )
+        # Plugin discovery scans integrations/*/plugin.json - no plugin
+        # Python is imported here; every class reference below resolves
+        # lazily inside its try/except so one broken plugin (or a missing
+        # optional dependency) cannot take down startup or the other
+        # platforms.
+        self.plugin_registry = PluginRegistry().discover()
 
         self.integrations = IntegrationRegistry()
-        yt_integration = YouTubeMusicIntegration(auth_manager=youtube_auth)
-        yt_integration.yt_client = yt_client
-        self.integrations.register(yt_integration)
+        for pid, plugin in self.plugin_registry.get_all().items():
+            self._register_plugin(plugin)
 
-        # Spotify: setup_auth() verifies the stored credentials against
-        # /v1/me - a network round trip with a 15 s timeout.  Running it
-        # synchronously here would delay first paint by up to 15 s when
-        # the network is slow or offline (same rule as refresh_auth:
-        # platform round trips must never block the tkinter main thread).
-        # The verification runs on a worker thread; the finished API is
-        # swapped in via root.after when it lands.  A login or refresh
-        # that completes first wins and is never clobbered.
-        spotify_auth = None
+        self._bootstrap_auth()
+
+        keybind_controller = KeybindController(self.plugin_registry, self.integrations)
+        app_controller = AppController(self)
+        self.ac = app_controller
+
+        # Migrate legacy playlists (without playlist_id) so the new
+        # (platform, playlist_id) dedup key works for existing entries.
+        # The lookups call the platform APIs (network) - run them in the
+        # background so they never block first paint of the UI thread.
+        threading.Thread(target=self._migrate_playlist_schema, daemon=True).start()
+
+        # Ensure db/playlists.json exists BEFORE the main window reads the
+        # store: MainWindow's card grid does store lookups during setup,
+        # and a missing file would otherwise be reported (and cached) as an
+        # empty registry until ensure_playlists_file() runs after.
+        PlaylistStore.ensure_playlists_file()
+
+        self.main_window = MainWindow(
+            self.root,
+            integrations=self.integrations,
+            keybind_controller=keybind_controller,
+            app_controller=app_controller,
+            plugin_registry=self.plugin_registry,
+        )
+
+        if get_setting("center_windows", True):
+            center_window(self.root)
+
+    def _register_plugin(self, plugin: PluginInfo) -> bool:
+        """Load one plugin's integration into the live registry.
+
+        Returns True on success.  Each step is guarded: a broken plugin
+        (or a missing optional dependency) is reported and skipped
+        instead of taking down startup or the other platforms.
+        """
         try:
-            from integrations.music_spotify.music_spotify import spotify_auth as _sp_auth
-            spotify_auth = _sp_auth
-        except ImportError:
+            integration_cls = plugin.import_integration()
+        except ImportError as e:
+            # Optional dependency of this plugin is missing - degrade
+            # gracefully exactly like the pre-plugin code did.
             user_log(
                 logger,
-                "Spotify integration unavailable (requests missing)",
+                "%s integration unavailable (%s)",
+                plugin.display_name,
+                e,
             )
-        sp_integration = SpotifyIntegration(auth_manager=spotify_auth)
-        self.integrations.register(sp_integration)
+            return False
+        except Exception as e:
+            logger.warning("Plugin %s failed to load: %s", plugin.id, e)
+            return False
+
+        auth_manager = None
+        if plugin.auth_module:
+            try:
+                auth_manager = plugin.import_auth_attr()
+            except ImportError as e:
+                user_log(
+                    logger,
+                    "%s integration unavailable (%s)",
+                    plugin.display_name,
+                    e,
+                )
+                return False
+            except Exception as e:
+                logger.warning(
+                    "Plugin %s: auth manager unavailable (%s)", plugin.id, e
+                )
+                return False
+
+        try:
+            integration = integration_cls(auth_manager=auth_manager)
+        except Exception as e:
+            logger.warning("Plugin %s failed to instantiate: %s", plugin.id, e)
+            return False
+        self.integrations.register(integration)
+        return True
+
+    def reload_plugins(self) -> None:
+        """Re-scan integrations/ and load integrations new since startup.
+
+        Called by the Manage dialog's ``on_plugins_changed`` after a
+        download or uninstall so the change applies without a restart:
+
+        * the plugin registry object is shared with KeybindController and
+          MainWindow - re-discovering it makes removed plugins vanish
+          (their flows already stopped) and freshly downloaded ones
+          immediately keybind-/login-capable;
+        * the shared IntegrationRegistry is mutated by registering new
+          integrations; already-registered ids are left untouched so
+          in-flight flows never lose their integration object.
+        """
+        self.plugin_registry.discover()
+        # Keep the process-wide get_default_registry() singleton (the
+        # fallback used by build_playlist_url / build_song_url and the CLI)
+        # in lockstep with the live registry - otherwise post-uninstall URL
+        # building for a removed platform resolves through a stale copy.
+        try:
+            from plugin_loader import get_default_registry
+
+            get_default_registry().discover()
+        except Exception:
+            logger.exception("Failed to refresh the default plugin registry")
+        for pid, plugin in self.plugin_registry.get_all().items():
+            if pid in self.integrations.get_all():
+                continue
+            if self._register_plugin(plugin):
+                user_log(logger, "%s integration loaded", plugin.display_name)
+
+    def _bootstrap_auth(self) -> None:
+        """Initial authentication for every registered integration.
+
+        Auth logic stays platform-specific in Step 1 (see 0.3.0/step1.md) -
+        each integration owns its auth manager; this only wires them up.
+        YouTube Music's setup_auth() reads local files (fast -> sync);
+        Spotify's verifies credentials against /v1/me - a network round
+        trip with a 15 s timeout.  Running that synchronously would delay
+        first paint by up to 15 s when the network is slow or offline
+        (same rule as refresh_auth: platform round trips must never block
+        the tkinter main thread).  The verification runs on a worker
+        thread; the finished API is swapped in via root.after when it
+        lands.  A login or refresh that completes first wins and is never
+        clobbered.
+        """
+        yt_integration = self.integrations.get("youtube_music")
+        if yt_integration is not None and yt_integration.auth_manager is not None:
+            try:
+                if yt_integration.authenticate():
+                    user_log(logger, "YouTube Music authenticated")
+                else:
+                    logger.warning("YouTube Music not configured (no browser.json)")
+            except ImportError as e:
+                # setup_auth imports ytmusicapi lazily - a missing optional
+                # dependency disables the integration quietly (log, no modal).
+                user_log(
+                    logger,
+                    "ytmusicapi not installed - YouTube Music integration "
+                    "disabled (%s)",
+                    e,
+                )
+            except Exception as e:
+                yt_integration.yt_client = None
+                logger.error("YouTube Music auth failed: %s", e)
+                messagebox.showwarning(
+                    "YouTube Music",
+                    f"YouTube Music authentication failed:\n{e}",
+                )
+
+        lf_integration = self.integrations.get("lastfm")
+        if lf_integration is not None:
+            # Last.fm authenticate() reads lastfm.json from disk only - no
+            # network round trip - so it can run synchronously here (same as
+            # YouTube Music).  An unconfigured plugin returns False quietly.
+            try:
+                if lf_integration.authenticate():
+                    user_log(logger, "Last.fm authenticated")
+                else:
+                    logger.debug("Last.fm not configured (no lastfm.json)")
+            except Exception as e:
+                logger.error("Last.fm auth failed: %s", e)
+
+        sp_integration = self.integrations.get("spotify")
+        sp_auth = sp_integration.auth_manager if sp_integration is not None else None
+        if sp_integration is None:
+            return
 
         def _spotify_auth_worker() -> None:
             ok, api = False, None
-            if spotify_auth is not None:
+            if sp_auth is not None:
                 try:
-                    if spotify_auth.setup_auth():
-                        api = spotify_auth.get_api()
+                    if sp_auth.setup_auth():
+                        api = sp_auth.get_api()
                         ok = True
                 except Exception as e:
-                    logger.error(f"Spotify auth failed: {e}")
+                    logger.error("Spotify auth failed: %s", e)
                 if not ok:
                     logger.warning("Spotify is not configured")
 
@@ -119,27 +244,6 @@ class App:
 
         threading.Thread(target=_spotify_auth_worker, daemon=True).start()
 
-        keybind_controller = KeybindController(yt_client, spotify_integration=sp_integration)
-        app_controller = AppController(self)
-        self.ac = app_controller
-
-        # Migrate legacy playlists (without playlist_id) so the new
-        # (platform, playlist_id) dedup key works for existing entries.
-        # The lookups call the platform APIs (network) - run them in the
-        # background so they never block first paint of the UI thread.
-        threading.Thread(target=self._migrate_playlist_schema, daemon=True).start()
-
-        self.main_window = MainWindow(
-            self.root,
-            integrations=self.integrations,
-            keybind_controller=keybind_controller,
-            app_controller=app_controller,
-        )
-
-        PlaylistStore.ensure_playlists_file()
-        if get_setting("center_windows", True):
-            center_window(self.root)
-
     def _migrate_playlist_schema(self) -> None:
         """Backfill missing *playlist_id* values in the store.
 
@@ -156,8 +260,6 @@ class App:
             try:
                 if hasattr(integration, "get_playlist_id"):
                     pid = integration.get_playlist_id(name)
-                elif hasattr(integration, "get_playlist_id_by_name"):
-                    pid = integration.get_playlist_id_by_name(name)
                 else:
                     pid = None
                 return pid or ""
@@ -172,13 +274,13 @@ class App:
         platform: Optional[str] = None,
         on_done: Optional[Callable[[], None]] = None,
     ) -> None:
-        """Re-authenticate integrations and push fresh clients to the keybind flow.
+        """Re-authenticate integrations and invalidate the affected flows.
 
-        With *platform* given (a ``constants.PLATFORM_*`` value) only that
-        integration is refreshed - a YouTube Music login event must not
-        re-verify (and, on a transient failure, deauthenticate) Spotify,
-        and vice versa.  Without it (legacy callers) every integration is
-        refreshed.
+        With *platform* given (a plugin id, e.g. ``"youtube_music"``) only
+        that integration is refreshed - a YouTube Music login event must
+        not re-verify (and, on a transient failure, deauthenticate)
+        Spotify, and vice versa.  Without it (legacy callers) every
+        integration is refreshed.
 
         *on_done*, when given, is called on the main thread after the
         credential swap has been applied - e.g. the playlist picker uses
@@ -190,19 +292,24 @@ class App:
         The refresh runs on a worker thread: Spotify's re-auth validates
         the credentials against ``/v1/me`` (a network round trip with a
         15 s timeout) and must never block the tkinter main thread.  Only
-        the final credential swap (``update_credentials``) and *on_done*
-        are marshaled back to the main thread via ``root.after``.
+        the flow invalidation (``update_credentials``) and *on_done* are
+        marshaled back to the main thread via ``root.after``.
         """
         integrations = self.integrations.get_all()
         if platform is not None:
             if platform not in integrations:
-                logger.error(f"Unknown platform '{platform}' - cannot refresh")
+                logger.error("Unknown platform '%s' - cannot refresh", platform)
                 return
             targets = [integrations[platform]]
         else:
             targets = list(integrations.values())
 
         def _refresh_worker() -> None:
+            # Only platforms whose refresh SUCCEEDED are invalidated -
+            # their flows are rebuilt lazily with the fresh clients.  A
+            # platform that failed keeps its existing (still working)
+            # flow instead of being disabled until the next launch.
+            refreshed_ids = []
             for integration in targets:
                 try:
                     ok = integration.refresh_auth()
@@ -213,24 +320,12 @@ class App:
                     ok = False
                 if ok:
                     user_log(logger, "%s re-authenticated", integration.display_name)
+                    refreshed_ids.append(integration.id)
                 else:
-                    logger.error(f"{integration.display_name} re-authentication failed")
-
-            # update_credentials treats a missing kwarg as "leave untouched"
-            # and an explicit None as "clear" - so a scoped refresh must only
-            # pass the integration that was actually refreshed.
-            kwargs: Dict[str, object] = {}
-            if platform is None or platform == PLATFORM_YOUTUBE_MUSIC:
-                yt = self.integrations.get(PLATFORM_YOUTUBE_MUSIC)
-                if isinstance(yt, YouTubeMusicIntegration):
-                    kwargs["yt_client"] = yt.yt_client
-            if platform is None or platform == PLATFORM_SPOTIFY:
-                sp = self.integrations.get(PLATFORM_SPOTIFY)
-                if isinstance(sp, SpotifyIntegration):
-                    kwargs["spotify_integration"] = sp
+                    logger.error("%s re-authentication failed", integration.display_name)
 
             def _apply() -> None:
-                self.main_window.kc.update_credentials(**kwargs)
+                self.main_window.kc.update_credentials(refreshed_ids=refreshed_ids)
                 if on_done is not None:
                     try:
                         on_done()

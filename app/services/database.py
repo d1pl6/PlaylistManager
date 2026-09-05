@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from constants import PLATFORM_YOUTUBE_MUSIC
+from services import profile_store as _profile_store
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class DatabaseManager:
     @staticmethod
     def _get_db_directory(platform: str) -> Path:
         """Get the database directory path for a given platform."""
-        return Path(__file__).resolve().parents[2] / "db" / platform
+        return _profile_store.db_dir() / platform
 
     @staticmethod
     def get_playlist_db_path_static(
@@ -196,7 +196,7 @@ class DatabaseManager:
     def get_playlist_db_path(
         self,
         playlist_name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str = "youtube_music",
         playlist_id: str = "",
     ) -> Path:
         """Get the database file path for a playlist.
@@ -245,7 +245,7 @@ class DatabaseManager:
     def get_db_connection(
         self,
         playlist_name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str = "youtube_music",
         playlist_id: str = "",
     ) -> sqlite3.Connection:
         """Get a connection to the playlist's database, creating it if needed."""
@@ -258,17 +258,17 @@ class DatabaseManager:
             conn.row_factory = sqlite3.Row  # Enable column access by name
             self._init_playlist_database(conn)
             _set_pragmas(conn)
-            logger.debug(f"Connected to playlist database: {db_path}")
+            logger.debug("Connected to playlist database: %s", db_path)
             return conn
         except sqlite3.Error as e:
-            logger.error(f"Failed to connect to database {db_path}: {e}")
+            logger.error("Failed to connect to database %s: %s", db_path, e)
             raise
 
     @contextmanager
     def get_connection(
         self,
         playlist_name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str = "youtube_music",
         playlist_id: str = "",
     ) -> Iterator[sqlite3.Connection]:
         """Context manager: yields a thread-cached connection.
@@ -331,7 +331,7 @@ class DatabaseManager:
             conn.commit()
             logger.debug("Initialized playlist database schema")
         except sqlite3.Error as e:
-            logger.error(f"Failed to initialize database schema: {e}")
+            logger.error("Failed to initialize database schema: %s", e)
             raise
 
     @staticmethod

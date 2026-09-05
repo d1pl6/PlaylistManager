@@ -9,11 +9,12 @@ for the YouTube Music auth flow.
 import logging
 import os
 import platform
+import re
 import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,47 @@ def is_wayland_session() -> bool:
     return bool(os.environ.get("WAYLAND_DISPLAY")) or os.environ.get(
         "XDG_SESSION_TYPE", ""
     ).lower() == "wayland"
+
+
+def x11_root_desktop_state() -> Tuple[Optional[int], Optional[bool]]:
+    """Read two EWMH root-window properties from the X server.
+
+    Returns ``(current_desktop, showing_desktop)``:
+
+    - ``current_desktop``: the value of ``_NET_CURRENT_DESKTOP``, i.e.
+      which virtual desktop the WM is currently on.
+    - ``showing_desktop``: ``True`` when ``_NET_SHOWING_DESKTOP`` is 1
+      (the WM is in "show the desktop" mode - all windows minimized),
+      ``False`` when it is 0, ``None`` when the property is unset.
+
+    Either element is ``None`` on any failure (``xprop`` missing, no X
+    display, unreadable property, timeout) - callers must treat ``None``
+    as "unknown, keep the previous behavior".
+
+    Used by the hide-to-tray logic to tell a genuine per-window minimize
+    apart from WM-wide actions that also unmap/minimize windows
+    (virtual desktop switches, "show the desktop").
+    """
+    try:
+        out = subprocess.run(
+            ["xprop", "-root", "_NET_CURRENT_DESKTOP", "_NET_SHOWING_DESKTOP"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    current_desktop: Optional[int] = None
+    showing_desktop: Optional[bool] = None
+    for line in out.splitlines():
+        m = re.match(r"_NET_CURRENT_DESKTOP[^=]*=\s*(\d+)", line)
+        if m:
+            current_desktop = int(m.group(1))
+            continue
+        m = re.match(r"_NET_SHOWING_DESKTOP[^=]*=\s*(\d+)", line)
+        if m:
+            showing_desktop = m.group(1) == "1"
+    return current_desktop, showing_desktop
 
 
 def open_directory(path: Path) -> None:
