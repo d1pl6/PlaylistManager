@@ -51,12 +51,19 @@ class IntegrationRepo:
     """Download source for one platform plugin.
 
     ``copies`` maps paths inside the repo tree (relative to the archive
-    root) to destinations relative to ``<repo_root>/integrations/``.
-    Example - YouTube Music keeps the browser extension at the repo root
-    while the plugin package sits under ``integrations/youtube_music/``;
-    both must end up inside ``integrations/youtube_music/`` because the
-    receiver port is pinned jointly by the plugin manifest and the
-    extension's ``host_permissions`` (see AGENTS.md "Integration quirks").
+    root) to destinations relative to ``<repo_root>/integrations/``.  An
+    empty source (``""``) means the whole repo root.
+
+    Every plugin repo is **flat**: the Python package, ``logo.png`` and
+    ``plugin.json`` sit at the repo root, and the browser extension (if
+    any) lives *inside* the repo as a sibling dir ``<platform>-extension/``.
+    So a single whole-root copy ``("", "<platform>")`` installs both the
+    plugin and its extension into ``integrations/<platform>/`` in one go -
+    the extension naturally lands at
+    ``integrations/<platform>/<platform>-extension/``, which is exactly
+    where it must be (the receiver port is pinned jointly by the plugin
+    manifest and the extension's ``host_permissions`` - see AGENTS.md
+    "Integration quirks").
     """
 
     platform_id: str
@@ -86,13 +93,9 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
         display_name="YouTube Music",
         owner="d1pl6",
         repo="youtube-music-integration",
-        copies = (
-            ("youtube_music", "youtube_music"),
-            (
-                "youtube-music-extension",
-                "youtube_music/youtube-music-extension",
-            ),
-        )
+        copies=(
+            ("", "youtube_music"),
+        ),
     ),
     "spotify": IntegrationRepo(
         platform_id="spotify",
@@ -100,7 +103,7 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
         owner="d1pl6",
         repo="spotify-integration",
         copies=(
-            ("spotify", "spotify"),
+            ("", "spotify"),
         ),
     ),
     "soundcloud": IntegrationRepo(
@@ -109,11 +112,7 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
         owner="d1pl6",
         repo="soundcloud-integration",
         copies=(
-            ("soundcloud", "soundcloud"),
-            (
-                "soundcloud-extension",
-                "soundcloud/soundcloud-extension"
-            )
+            ("", "soundcloud"),
         ),
     ),
     "lastfm": IntegrationRepo(
@@ -122,7 +121,7 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
         owner="d1pl6",
         repo="lastfm-integration",
         copies=(
-            ("lastfm", "lastfm"),
+            ("", "lastfm"),
         ),
     ),
     "deezer": IntegrationRepo(
@@ -131,11 +130,7 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
         owner="d1pl6",
         repo="deezer-integration",
         copies=(
-            ("deezer", "deezer"),
-            (
-                "deezer-extension",
-                "deezer/deezer-extension"
-            )
+            ("", "deezer"),
         ),
     )
 }
