@@ -86,15 +86,13 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
         display_name="YouTube Music",
         owner="d1pl6",
         repo="youtube-music-integration",
-        copies=(
-            ("integrations/youtube_music", "youtube_music"),
-            # Extension lives at the repo root but installs INSIDE the
-            # plugin directory - see the dataclass docstring.
+        copies = (
+            ("youtube_music", "youtube_music"),
             (
                 "youtube-music-extension",
                 "youtube_music/youtube-music-extension",
             ),
-        ),
+        )
     ),
     "spotify": IntegrationRepo(
         platform_id="spotify",
@@ -102,7 +100,7 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
         owner="d1pl6",
         repo="spotify-integration",
         copies=(
-            ("integrations/spotify", "spotify"),
+            ("spotify", "spotify"),
         ),
     ),
     "soundcloud": IntegrationRepo(
@@ -111,8 +109,11 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
         owner="d1pl6",
         repo="soundcloud-integration",
         copies=(
-            ("integration/soundcloud", "soundcloud"),
-            ("soundcloud-extension", "soundcloud/soundcloud-extension")
+            ("soundcloud", "soundcloud"),
+            (
+                "soundcloud-extension",
+                "soundcloud/soundcloud-extension"
+            )
         ),
     ),
     "lastfm": IntegrationRepo(
@@ -121,7 +122,7 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
         owner="d1pl6",
         repo="lastfm-integration",
         copies=(
-            ("integrations/lastfm", "lastfm"),
+            ("lastfm", "lastfm"),
         ),
     ),
     "deezer": IntegrationRepo(
@@ -130,8 +131,11 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
         owner="d1pl6",
         repo="deezer-integration",
         copies=(
-            ("integrations/deezer", "deezer"),
-            ("deezer-extensions", "deezer/deezer-extension")
+            ("deezer", "deezer"),
+            (
+                "deezer-extension",
+                "deezer/deezer-extension"
+            )
         ),
     )
 }
