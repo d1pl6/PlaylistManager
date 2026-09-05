@@ -171,11 +171,10 @@ def _extract_deezer_track(track: dict) -> Optional[tuple]:
 
     duration = track.get("duration", 0)
 
-    # Extract thumbnail from album cover.  Pipe returns cover.urls from
-    # largest to smallest (the last entry is 56x56 - too small for the
-    # 64 px showcase covers), so pick the smallest size >= 64 px instead
-    # of blindly taking the last (or the first, which is a ~1200 px
-    # multi-hundred-KB image that gets downscaled away anyway).
+    # Extract thumbnail from album cover.  Pipe returns cover.urls as a
+    # list of URL strings at the requested size (264x264 in the plugin's
+    # queries) - still pick the entry >= 64 px to guard against any
+    # smaller entries and unexpected orderings.
     album = track.get("album") or {}
     cover = album.get("cover") or {}
     urls = cover.get("urls") or []
@@ -204,12 +203,13 @@ _COVER_SIZE_RE = re.compile(r"(\d+)x\d+")
 
 
 def _pick_deezer_cover(urls: list) -> Optional[str]:
-    """Pick the smallest Deezer cover URL that is at least 64 px wide.
+    """Pick the most appropriate Deezer cover URL.
 
-    Pipe's ``cover.urls`` are ordered largest-first (1200px down to
-    56px).  Prefers the smallest entry >= 64 px (what the 64 px showcase
-    covers need), falling back to the smallest available, then to None -
-    mirroring :func:`_pick_thumbnail`.
+    Pipe's ``cover.urls`` is a list of URL strings at the requested
+    size; dict-shaped entries (``{"link": ...}``) are tolerated.  Prefers
+    the smallest entry >= 64 px (what the 64 px showcase covers need),
+    falling back to the smallest available, then to None - mirroring
+    :func:`_pick_thumbnail`.
     """
     if not urls:
         return None

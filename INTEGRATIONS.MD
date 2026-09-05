@@ -3,11 +3,11 @@
 - [Spotify](#spotify)
 - [YouTube Music](#youtube-music)
 - [Last.fm](#lastfm)
+- [SoundCloud](#soundcloud)
+- [Deezer](#deezer)
 ### Planned
 - [Apple Music](#apple-music)
-- [SoundCloud](#soundcloud)
-- [Amazon Music](#amazon-music)
-- [Deezer](#deezer)
+- [Amazon Music](#amazon-music-blocked)
 - [Qobuz](#qobuz)
 - [Others](#others)
 
@@ -26,13 +26,12 @@ Added without tests.
 Can't import playlists using OAuth so only browser’s Request Headers option is available.
 
 1. Install the [integration](https://github.com/d1pl6/youtube-music-integration)
-2. Install the [browser extension](https://github.com/d1pl6/youtube-music-integration) (Firefox only)
-3. Add the extension [here](about:debugging#/runtime/this-firefox) (i won't sign extension)
-4. Open https://music.youtube.com
-5. Open Web Developers tools (F12 or Ctrl+Shift+I)
-6. Open "Network" tab and search for "browse?". If it didn't appear, scroll down the page, reload, do whatever but it should appear.
-7. Open console (cd) in `~/.config/playlistmanager/auth` or `AppData/{something}/playlistmanager/auth` folder and use `ytmusicapi browser` in console
-8. Follow instructions (copy Request Headers > paste them in console > Enter > Ctrl+Z or Ctrl+D > Enter). Use Ctrl+C to cancel
+2. Add the extension [here](about:debugging#/runtime/this-firefox) (i won't sign extension)
+3. Open https://music.youtube.com
+4. Open Web Developers tools (F12 or Ctrl+Shift+I)
+5. Open "Network" tab and search for "browse?". If it didn't appear, scroll down the page, reload, do whatever but it should appear.
+6. Open console (cd) in `~/.config/playlistmanager/auth` or `AppData/{something}/playlistmanager/auth` folder and use `ytmusicapi browser` in console
+7. Follow instructions (copy Request Headers > paste them in console > Enter > Ctrl+Z or Ctrl+D > Enter). Use Ctrl+C to cancel
 
 ### Lastfm
 Lastfm not supporting playlists through API anymore
@@ -44,12 +43,17 @@ Lastfm not supporting playlists through API anymore
 ### [SoundCloud](https://soundcloud.com/you/apps/new)
 Requires Artist Pro to create app & use API
 
-Will be added. Without tests (I don't have money)
 
-### [Deezer](https://developers.deezer.com/myapps)
-Dead since 2023: [We're not accepting new application creation at this time. Please check again later.](https://en.deezercommunity.com/features-feedback-44/apis-to-enable-3rd-party-apps-ndk-not-available-javascript-sdk-not-working-76108?postid=222090#post222090)
 
-[Check this in the future](https://foxxmd.github.io/multi-scrobbler/configuration/sources/deezer/)
+### Deezer
+Working poorly. You can't open 2+ deezer tabs, because extension won't be able to get currently-playing song. New song updates every 5 seconds, so you CAN skip songs fast but it's NOT RECOMMENDED to do so
+
+1. Install the [integration](https://github.com/d1pl6/deezer-integration)
+2. Add the extension [here](about:debugging#/runtime/this-firefox) (i won't sign extension)
+3. Open https://www.deezer.com
+4. Open Web Developers tools (F12 or Ctrl+Shift+I)
+5. Open Storage -> Cookies -> https://www.deezer.com
+6. Filter 'arl' and copy clean value (not `arl="xyz"`, only `xyz`)
 
 ---
 
@@ -66,4 +70,4 @@ Won’t be added in the near future.
 No official API
 
 ### Others
-You can request your app/platform [here](https://github.com/d1pl6/PlaylistManager/issues/new?template=platform-integration-request.md)
+You can request app/platform that you're using [here](https://github.com/d1pl6/PlaylistManager/issues/new?template=platform-integration-request.md)

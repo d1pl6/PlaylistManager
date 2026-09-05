@@ -26,7 +26,9 @@ I couldn't find something similar so i did it. First it used Electron, but i did
 # Integrations
 Currently supported:
 - YouTube Music
-- Spotify
+- Spotify (not tested)
+- SoundCloud (not tested)
+- Deezer
 
 See [INTEGRATIONS.MD](INTEGRATIONS.MD)
 

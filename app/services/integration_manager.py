@@ -124,6 +124,16 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
             ("integrations/lastfm", "lastfm"),
         ),
     ),
+    "deezer": IntegrationRepo(
+        platform_id="deezer",
+        display_name="Deezer (not tested)",
+        owner="d1pl6",
+        repo="deezer-integration",
+        copies=(
+            ("integrations/deezer", "deezer"),
+            ("deezer-extensions", "deezer/deezer-extension")
+        ),
+    )
 }
 
 
