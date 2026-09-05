@@ -126,7 +126,7 @@ INTEGRATION_REPOS: Dict[str, IntegrationRepo] = {
     ),
     "deezer": IntegrationRepo(
         platform_id="deezer",
-        display_name="Deezer (not tested)",
+        display_name="Deezer",
         owner="d1pl6",
         repo="deezer-integration",
         copies=(

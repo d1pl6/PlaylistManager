@@ -43,9 +43,21 @@ Lastfm not supporting playlists through API anymore
 ### [SoundCloud](https://soundcloud.com/you/apps/new)
 Requires Artist Pro to create app & use API
 
+OAuth with a refresh token, like Spotify. Credentials (client id, client secret, refresh token) go in `auth/soundcloud.json`.
 
+1. Install the [integration](https://github.com/d1pl6/soundcloud-integration)
+2. Create an app at [soundcloud.com/you/apps/new](https://soundcloud.com/you/apps/new)
+3. Get the refresh token via the SoundCloud OAuth flow (`secure.soundcloud.com/authorize`)
 
-### Deezer
+The extension is optional but recommended for exact captures:
+1. Add the extension [here](about:debugging#/runtime/this-firefox) (i won't sign extension)
+2. Enable "Hybird" mode in settings (default)
+
+Note: SoundCloud has no "append to playlist" endpoint — each add rewrites the whole playlist's track array (read-modify-write), so adds are a bit slower.
+
+Note 2: "Now playing" comes from `/me/recently-played/tracks`[0] so it need confirmation that it can be used as "Now playing" so i could remove extension.
+
+# Deezer
 Working poorly. You can't open 2+ deezer tabs, because extension won't be able to get currently-playing song. New song updates every 5 seconds, so you CAN skip songs fast but it's NOT RECOMMENDED to do so
 
 1. Install the [integration](https://github.com/d1pl6/deezer-integration)
