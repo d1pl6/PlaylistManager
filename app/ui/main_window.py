@@ -17,6 +17,7 @@ from tkinter import ttk, messagebox
 PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 PLATFORM_SPOTIFY = "spotify"
 PLATFORM_SOUNDCLOUD = "soundcloud"
+PLATFORM_DEEZER = "deezer"
 from controllers.keybind_registry import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
 from services import duplicate_queue
@@ -39,6 +40,7 @@ from utils.window import center_window, resize_window
 from utils.config import get_setting, get_setting_value
 from ui.scrollable import ScrollableFrame
 from utils.theme import C, load_theme, btn_colors, hover_bg
+from utils.logging_config import user_log
 from utils.platform import is_wayland_session, x11_root_desktop_state
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,7 @@ _PLATFORM_API_TARGETS: dict[str, tuple[str, int]] = {
     PLATFORM_YOUTUBE_MUSIC: ("music.youtube.com", 443),
     PLATFORM_SPOTIFY: ("api.spotify.com", 443),
     PLATFORM_SOUNDCLOUD: ("api.soundcloud.com", 443),
+    PLATFORM_DEEZER: ("pipe.deezer.com", 443),
 }
 
 assets_dir = Path(__file__).resolve().parents[2] / "assets"
@@ -875,55 +878,76 @@ class MainWindow:
             except Exception:
                 pass  # app shutting down (rule: guard every worker after())
 
-        flow = self.kc.get_flow(platform)
-        if flow is None:
+        # Hold the global flow lock for the whole Add.  Without it, this
+        # worker's flow.capture (extension platforms) races an in-flight
+        # keybind/scrobble flow's capture on the same receiver port and the
+        # two can double-handle the same URL command.  Non-blocking acquire:
+        # if another flow is mid-flight, re-enqueue rather than queue behind
+        # it (a duplicate/interleaved command is worse than a no-op).
+        busy = self.kc.flow_busy()
+        if not busy.acquire(blocking=False):
+            logger.debug("Flow in progress - deferring activity Add for %s", platform)
+            duplicate_queue.add_pending(rec)
             duplicate_queue.record_error(
                 rec.get("playlist_name", ""),
                 platform,
-                f"{platform} unavailable - could not add '{rec.get('title', '')}'",
+                "Another add is in progress - this song stays queued",
             )
             _ui(self.refresh_activity_badge)
             return
 
-        song_data = {
-            "title": rec.get("title", ""),
-            "artists": rec.get("artists") or [],
-            "duration": rec.get("duration"),
-            "track_id": rec.get("track_id"),
-            "thumbnail": rec.get("thumbnail_url"),
-        }
-
-        def on_status(msg: str) -> None:
-            pass
-
-        def on_error(msg: str) -> None:
-            duplicate_queue.add_pending(rec)  # re-enqueue for another try
-            duplicate_queue.record_error(rec.get("playlist_name", ""), platform, msg)
-            _ui(self.refresh_activity_badge)
-
-        def on_success(result: dict) -> None:
-            # added / exists / duplicate all resolve the queue entry;
-            # badge refresh keeps the count honest either way.
-            _ui(self.refresh_activity_badge)
-
         try:
-            flow.execute_flow(
-                rec.get("playlist_name", ""),
-                on_status,
-                on_error,
-                on_success,
-                url=rec.get("url"),
-                song_data=song_data,
-                playlist_id=rec.get("playlist_id") or None,
-                skip_duplicate_check=True,
-            )
-        except Exception as e:
-            logger.error("Activity Add failed: %s", e, exc_info=True)
-            duplicate_queue.add_pending(rec)
-            duplicate_queue.record_error(
-                rec.get("playlist_name", ""), platform, str(e)
-            )
-            _ui(self.refresh_activity_badge)
+            flow = self.kc.get_flow(platform)
+            if flow is None:
+                duplicate_queue.record_error(
+                    rec.get("playlist_name", ""),
+                    platform,
+                    f"{platform} unavailable - could not add '{rec.get('title', '')}'",
+                )
+                _ui(self.refresh_activity_badge)
+                return
+
+            song_data = {
+                "title": rec.get("title", ""),
+                "artists": rec.get("artists") or [],
+                "duration": rec.get("duration"),
+                "track_id": rec.get("track_id"),
+                "thumbnail": rec.get("thumbnail_url"),
+            }
+
+            def on_status(msg: str) -> None:
+                pass
+
+            def on_error(msg: str) -> None:
+                duplicate_queue.add_pending(rec)  # re-enqueue for another try
+                duplicate_queue.record_error(rec.get("playlist_name", ""), platform, msg)
+                _ui(self.refresh_activity_badge)
+
+            def on_success(result: dict) -> None:
+                # added / exists / duplicate all resolve the queue entry;
+                # badge refresh keeps the count honest either way.
+                _ui(self.refresh_activity_badge)
+
+            try:
+                flow.execute_flow(
+                    rec.get("playlist_name", ""),
+                    on_status,
+                    on_error,
+                    on_success,
+                    url=rec.get("url"),
+                    song_data=song_data,
+                    playlist_id=rec.get("playlist_id") or None,
+                    skip_duplicate_check=True,
+                )
+            except Exception as e:
+                logger.error("Activity Add failed: %s", e, exc_info=True)
+                duplicate_queue.add_pending(rec)
+                duplicate_queue.record_error(
+                    rec.get("playlist_name", ""), platform, str(e)
+                )
+                _ui(self.refresh_activity_badge)
+        finally:
+            busy.release()
 
     def _remove_scanner_duplicate(self, pair_record: dict) -> None:
         """Remove-newer action: platform-first removal, then the local row.
@@ -966,7 +990,7 @@ class MainWindow:
                     duplicate_queue.record_error(name, platform, reason)
                     self.refresh_activity_badge()
                     return
-                if SongManager().delete_song(
+                if self._song_manager.delete_song(
                     name, newer.get("id"), platform=platform, playlist_id=pid
                 ):
                     duplicate_queue.set_song(
@@ -1009,7 +1033,7 @@ class MainWindow:
             error = None
             pairs = []
             try:
-                song_manager = SongManager()
+                song_manager = self._song_manager
                 for pl in PlaylistStore.load_playlists():
                     name = pl.get("name", "")
                     platform = pl.get("platform", "")
@@ -1594,6 +1618,13 @@ class MainWindow:
         self._recording_frame_idx = None
         combo = self.kc.stop_recording()
 
+        # The deferred after(1) path (_on_root_click) can land after a card
+        # was closed - the index went stale.  Bail out quietly instead of
+        # raising IndexError in the Tk callback.
+        if frame_idx >= len(self.card_grid.cards):
+            logger.debug("Recording card %d closed before stop; discarding", frame_idx)
+            return
+
         card = self.card_grid.cards[frame_idx]
         entry = card.keybind_entry
         entry.config(
@@ -1629,9 +1660,11 @@ class MainWindow:
 
     def _on_root_click(self, event) -> None:
         if self._recording_frame_idx is not None:
-            entry = self.card_grid.cards[self._recording_frame_idx].keybind_entry
-            if event.widget != entry:
-                self.root.after(1, self._stop_recording, self._recording_frame_idx)
+            idx = self._recording_frame_idx
+            if idx < len(self.card_grid.cards):
+                entry = self.card_grid.cards[idx].keybind_entry
+                if event.widget != entry:
+                    self.root.after(1, self._stop_recording, idx)
 
     # ------------------------------------------------------------------
     # Reload database (delegates to PlaylistSyncService)

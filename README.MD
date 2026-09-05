@@ -16,6 +16,7 @@ Add songs that you're currently listening to your chosen playlists or liked trac
 - [Usage](#usage)
   - [CLI](CLI.MD#cli)
     - [Global install (linux)](CLI.MD#global-install-for-compositor-shortcuts)
+- [Uninstall](#uninstall)
 - [License](#license)
 - [Q&A](#q--a)
 
@@ -115,6 +116,10 @@ python main.py
 6. Choose playlist
 7. Wait database creation (might take longer if you have a lot of songs in playlist)
 8. Create keybind (click on 2nd line after playlist name)
+
+# Uninstall
+- Delete `~/.config/playlistmanager`
+- Unisntall python dependencies
 
 # License
 PlaylistManager is licensed under the GNU-GPL-2.0-or-later. If you did not get a copy, please see <https://www.gnu.org/licenses/>.

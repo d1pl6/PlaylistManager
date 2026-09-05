@@ -543,6 +543,7 @@ def run_del(spec: str) -> int:
         )
         DatabaseManager.delete_playlist_db(name, platform, playlist_id=playlist_id)
         scrobble_log.remove_playlist_entries(platform, playlist_id)
+        duplicate_queue.purge_playlist(platform, playlist_id, name or "")
         print(f'#{number} "{name}" ({platform}): deleted', flush=True)
     return 0
 
@@ -767,6 +768,38 @@ def _soundcloud_dir_name() -> str:
     return "soundcloud"
 
 
+def _run_deezer_login() -> int:
+    """CLI Deezer login: prompts for the ARL cookie, verifies FIRST.
+
+    The ARL is obtained by logging into Deezer in a browser and copying
+    the ``arl`` cookie value from DevTools → Application → Cookies.
+    """
+    arl = _prompt("ARL cookie: ", hidden=True)
+    if not arl:
+        print(
+            "error: ARL cookie is required (log into Deezer in your "
+            "browser, open DevTools → Application → Cookies → deezer.com → "
+            "copy the 'arl' value)",
+            file=sys.stderr,
+        )
+        return 2
+
+    result = auth_setup.save_and_verify_deezer_credentials(arl.strip())
+    if result.get("ok"):
+        print(
+            f"deezer: logged in as user {result.get('display_name')}",
+            flush=True,
+        )
+        return 0
+
+    print(
+        f"error: deezer login failed: {result.get('error')} "
+        "(existing credentials left untouched)",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def run_login(
     platform: str,
     client_id: Optional[str] = None,
@@ -831,6 +864,9 @@ def run_login(
             file=sys.stderr,
         )
         return 2
+
+    if platform == "deezer":
+        return _run_deezer_login()
 
     if platform == "soundcloud":
         return _run_soundcloud_login(client_id, client_secret, refresh_token)

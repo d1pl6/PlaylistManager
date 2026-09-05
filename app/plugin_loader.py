@@ -75,10 +75,9 @@ def _ensure_repo_root_on_path() -> None:
     entry points don't each have to remember it. No-op for paths already
     present.
 
-    Plugin modules also import app code by bare module name (``constants``,
-    ``utils.logging_config``, ...) - Step 2 will remove those imports, but
-    until then ``app/`` must stay importable for them too, so both roots go
-    onto sys.path.
+    Plugin modules import app code by bare module name (``services.*``,
+    ``utils.*``), so ``app/`` must stay importable for them too; both
+    roots go onto sys.path.
     """
     root = str(_repo_root())
     if root not in sys.path:
@@ -121,8 +120,8 @@ class PluginInfo:
     # Optional login-dialog tile: a callable ``(parent, on_success)`` invoked
     # when the user clicks the platform's tile in the login dialog.  Declares
     # a module + attribute like the other lazy class refs.  When omitted the
-    # login dialog falls back to its built-in handlers (the three bundled
-    # platforms).
+    # login dialog falls back to its built-in handlers (the platforms
+    # that shipped before the plugin system).
     login_module: str = ""
     login_class: str = ""
     # Optional logo for the login tile, relative to the plugin directory.
@@ -215,6 +214,20 @@ class PluginInfo:
             )
             return None
         return candidate
+
+    @property
+    def logo_path(self) -> Optional[Path]:
+        """Canonical plugin logo.
+
+        Resolves the manifest-declared ``login_logo`` when set, otherwise
+        the standard ``integrations/<dir>/logo.png``.  None when neither
+        exists - callers fall back to a generic placeholder.
+        """
+        declared = self.login_logo_path
+        if declared is not None and declared.is_file():
+            return declared
+        standard = self.directory / "logo.png"
+        return standard if standard.is_file() else None
 
     def build_receiver(self, **kwargs):
         """Construct a fresh receiver with the manifest-declared port.

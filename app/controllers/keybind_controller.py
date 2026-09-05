@@ -52,6 +52,14 @@ class KeybindController:
         # event-loop tick could both pass the busy check.
         self._flow_busy = threading.Lock()
 
+        # Serialises lazy flow/receiver construction in `_ensure_initialized`.
+        # That method can be reached concurrently: the activity window's Add
+        # action (worker thread via get_flow) races the keybind/scrobble paths.
+        # Without it, two callers could build two receivers and two flows for
+        # one platform - the second receiver would fail to bind its port and
+        # the flow objects would fight over the shared URL receiver.
+        self._init_lock = threading.Lock()
+
         # Flow controllers / URL receivers, keyed by platform id -
         # lazily created on first keybind trigger for that platform.
         self._flows: Dict[str, object] = {}
@@ -151,8 +159,8 @@ class KeybindController:
                 "Wayland session detected - not starting the global "
                 "keybinds listener (it cannot capture keys on native "
                 "Wayland). Bind compositor shortcuts to "
-                "'playlistmanager add N' for reliable global keybinds "
-                "(see cli.md)."
+                "'playlistmanager -a N' for reliable global keybinds "
+                "(see README 'Global command for compositor shortcuts')."
             )
             self._global_mode = False
             self._bind_local_keys()
@@ -207,11 +215,24 @@ class KeybindController:
             self._recording = False
             combo = self._last_recording_combo
             self._last_recording_combo = ""
-            if self._recording_callback and self._root:
-                self._root.after(0, self._recording_callback, combo)
+            if combo and self._recording_callback and self._root:
+                # No combo means the user clicked away before pressing any
+                # key - reporting it would flash the partial entry before
+                # the stop callback wipes it.
+                try:
+                    self._root.after(0, self._recording_callback, combo)
+                except Exception:
+                    # App shutting down - after() raises TclError once the
+                    # root is destroyed.
+                    logger.debug("App is shutting down; dropped focus-out callback")
             self._recording_callback = None
             if self._recording_stop_callback and self._root:
-                self._root.after(0, self._recording_stop_callback)
+                try:
+                    self._root.after(0, self._recording_stop_callback)
+                except Exception:
+                    logger.debug(
+                        "App is shutting down; dropped focus-out stop callback"
+                    )
             self._recording_stop_callback = None
 
     # ------------------------------------------------------------------
@@ -589,6 +610,17 @@ class KeybindController:
             return None
         return self._flows.get(platform_id)
 
+    def flow_busy(self):
+        """Return the global single-flow lock.
+
+        The activity window's Add worker must hold this while it runs
+        ``flow.execute_flow`` so its capture does not race an in-flight
+        keybind/scrobble flow's receiver on the same local port (both use
+        the extension's capture path).  Non-blocking acquire - if another
+        flow is already running, the Add is skipped rather than queued.
+        """
+        return self._flow_busy
+
     def _handle_action_keybind(self, info: dict) -> None:
         """Dispatch an action-type keybind (e.g., scrobble).
 
@@ -699,6 +731,17 @@ class KeybindController:
         if platform_id in self._flows:
             return True
 
+        # Serialise construction so concurrent callers (activity Add worker
+        # racing the keybind/scrobble paths) never build two flows or two
+        # receivers for the same platform.  Double-check the flow inside the
+        # lock: the first caller may have just built it while we waited.
+        with self._init_lock:
+            if platform_id in self._flows:
+                return True
+            return self._build_flow(platform_id, callbacks)
+
+    def _build_flow(self, platform_id: str, callbacks: KeybindCallbacks) -> bool:
+        """Build (or fetch) the flow for one platform.  Caller holds _init_lock."""
         integration = self.integrations.get(platform_id)
         if integration is None or not integration.is_authenticated():
             callbacks.on_status("Error", C["label_playlist_error_bg"])
@@ -728,7 +771,6 @@ class KeybindController:
                 # can be wired in without the manifest being "extension".
                 try:
                     receiver = plugin.build_receiver()
-                    self._receivers[platform_id] = receiver
                 except Exception as e:
                     logger.error(
                         "Failed to build receiver for %s: %s", platform_id, e
@@ -749,6 +791,13 @@ class KeybindController:
                 # "api" type - reads the platform directly, no receiver.
                 flow = flow_cls(integration, self.song_manager)
 
+            # Register the receiver only after the flow has been built
+            # successfully.  Registering it earlier (before flow_cls(...)) left
+            # a stale receiver bound to its port when construction raised below,
+            # so the next trigger would fail to build a fresh one ("address
+            # already in use") and the platform would look permanently broken.
+            if receiver is not None:
+                self._receivers[platform_id] = receiver
             self._flows[platform_id] = flow
             logger.info(
                 "Initialized %s flow (%s)", plugin.display_name, plugin.flow_type
@@ -786,3 +835,11 @@ class KeybindController:
         self.song_manager = None
         self._flows.clear()
         self._receivers.clear()
+        # Drop any half-finished keybind recording state so a stray FocusOut
+        # or press callback after cleanup cannot fire into a dead window.
+        with self._pressed_keys_lock:
+            self._pressed_keys.clear()
+        self._recording = False
+        self._last_recording_combo = ""
+        self._recording_callback = None
+        self._recording_stop_callback = None

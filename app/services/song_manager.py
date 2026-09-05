@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import logging
+import re
 import threading
 from typing import Dict, List, Optional, Callable
 # Platform ids are declared by the plugin manifests (integrations/*/
@@ -9,6 +10,7 @@ from typing import Dict, List, Optional, Callable
 PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 PLATFORM_SPOTIFY = "spotify"
 PLATFORM_SOUNDCLOUD = "soundcloud"
+PLATFORM_DEEZER = "deezer"
 from services.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -143,17 +145,90 @@ def _extract_soundcloud_track(track: dict) -> Optional[tuple]:
     return (title, artists, duration, track_id, thumbnail_url)
 
 
+def _extract_deezer_track(track: dict) -> Optional[tuple]:
+    """Extract fields from a Deezer Pipe GraphQL track dict.
+
+    Returns (title, artists, duration_seconds, track_id, thumbnail_url)
+    or None if the track has no usable id.  Deezer track IDs are numeric
+    strings; duration is already in seconds from the GraphQL API.
+    """
+    track_id = track.get("id")
+    if not track_id:
+        return None
+    track_id = str(track_id)
+
+    title = track.get("title", "Unknown")
+
+    # Extract artists from contributors edges.
+    artists = []
+    for edge in track.get("contributors", {}).get("edges", []):
+        node = edge.get("node", {})
+        name = node.get("name")
+        if name:
+            artists.append(name)
+    if not artists:
+        artists = ["Unknown Artist"]
+
+    duration = track.get("duration", 0)
+
+    # Extract thumbnail from album cover.  Pipe returns cover.urls from
+    # largest to smallest (the last entry is 56x56 - too small for the
+    # 64 px showcase covers), so pick the smallest size >= 64 px instead
+    # of blindly taking the last (or the first, which is a ~1200 px
+    # multi-hundred-KB image that gets downscaled away anyway).
+    album = track.get("album") or {}
+    cover = album.get("cover") or {}
+    urls = cover.get("urls") or []
+    thumbnail_url = _pick_deezer_cover(urls)
+
+    return (title, artists, duration, track_id, thumbnail_url)
+
+
 # Maps platform name → extractor callable.  Extractor signature:
 #   (track: dict) -> (title, artists, duration, track_id, thumbnail_url) | None
 _TRACK_EXTRACTORS: dict[str, Callable[[dict], Optional[tuple]]] = {
     PLATFORM_YOUTUBE_MUSIC: _extract_youtube_track,
     PLATFORM_SPOTIFY: _extract_spotify_track,
     PLATFORM_SOUNDCLOUD: _extract_soundcloud_track,
+    PLATFORM_DEEZER: _extract_deezer_track,
 }
 
 # ------------------------------------------------------------------
 # Thumbnail picking
 # ------------------------------------------------------------------
+
+# Deezer cover URLs embed the size in the path, e.g.
+# ".../0/500x500-000000-80-0-0.jpg".  The hash part is hex-only, so the
+# first (\d+)x\d+ match is the cover size.
+_COVER_SIZE_RE = re.compile(r"(\d+)x\d+")
+
+
+def _pick_deezer_cover(urls: list) -> Optional[str]:
+    """Pick the smallest Deezer cover URL that is at least 64 px wide.
+
+    Pipe's ``cover.urls`` are ordered largest-first (1200px down to
+    56px).  Prefers the smallest entry >= 64 px (what the 64 px showcase
+    covers need), falling back to the smallest available, then to None -
+    mirroring :func:`_pick_thumbnail`.
+    """
+    if not urls:
+        return None
+    smallest = None
+    smallest_size = None
+    best = None
+    best_size = None
+    for item in urls:
+        link = item.get("link") if isinstance(item, dict) else item
+        if not link:
+            continue
+        m = _COVER_SIZE_RE.search(link)
+        size = int(m.group(1)) if m else 0
+        if size >= 64 and (best_size is None or size < best_size):
+            best, best_size = link, size
+        if not size or smallest_size is None or size < smallest_size:
+            smallest, smallest_size = link, size
+    return best or smallest
+
 
 def _pick_thumbnail(thumbnails: list) -> Optional[str]:
     """Pick the most appropriate thumbnail URL from a platform thumbnail list.
@@ -223,7 +298,9 @@ class SongManager:
         Args:
             playlist_name: Name of the playlist
             tracks: List of track dicts from the platform API
-            platform: Platform identifier ("youtube_music" or "spotify")
+            platform: Platform identifier - plugin-declared id
+                ("youtube_music", "spotify", "soundcloud", "deezer", ...).
+                An unknown platform falls back to the YouTube extractor.
             playlist_id: Stable API identifier - selects this playlist's
                 own database file (see DatabaseManager._db_stem)
 
@@ -250,7 +327,7 @@ class SongManager:
         playlist_id: str = "",
     ) -> int:
         """
-        Core bulk insert - shared by YouTube Music and Spotify.
+        Core bulk insert - shared by all platform extractors.
 
         Args:
             playlist_name: Name of the playlist

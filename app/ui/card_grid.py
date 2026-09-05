@@ -16,7 +16,7 @@ from controllers.keybind_registry import KeybindCallbacks
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
 from services.playlist_url import build_playlist_url
-from services import scrobble_log
+from services import duplicate_queue, scrobble_log
 from ui.card import PlaylistCard
 from ui.close_playlist_dialog import show_close_playlist_dialog
 from ui.tooltip import ToolTip
@@ -416,6 +416,13 @@ class CardGridManager:
             # Scrobble-ledger records are pinned to this playlist's rows -
             # worthless once the playlist + DB are gone.
             scrobble_log.remove_playlist_entries(platform, playlist_id)
+
+            # Pending duplicate decisions, pair-memory and error-log lines
+            # reference this playlist - purge them too, or they linger in
+            # db/extra.json and resurface if the playlist is re-added.
+            duplicate_queue.purge_playlist(
+                platform, playlist_id, playlist_name
+            )
 
             card.frame.grid_forget()
             card.frame.destroy()

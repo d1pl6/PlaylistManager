@@ -82,15 +82,28 @@ class PlaylistStore:
 
         now = time.monotonic()
         if _playlist_cache is None or (now - _cache_timestamp) >= _CACHE_TTL:
-            _playlist_cache = []
             _cache_timestamp = now
             if os.path.exists(playlists_json) and os.path.getsize(playlists_json) > 0:
                 try:
                     with open(playlists_json, "r", encoding="utf-8") as f:
                         _playlist_cache = json.load(f)
-                        _cache_timestamp = now
                 except Exception as e:
+                    # Keep the previous cache on a transient read error
+                    # (torn read on the exFAT drive, JSON corruption, ...).
+                    # Poisoning the cache with [] would make every playlist
+                    # vanish from the UI for the whole TTL and, worse,
+                    # a subsequent add_playlist would dedup against an empty
+                    # list and append a duplicate entry when the file heals.
                     logger.error("Failed to read playlists.json: %s", e)
+                    if _playlist_cache is None:
+                        # First call and the file is unreadable - fall back
+                        # to empty rather than crashing on list(None).
+                        _playlist_cache = []
+            else:
+                # No file (fresh clone) - the cache must become [] so an
+                # ensure_playlists_file() that writes [] underneath us is
+                # not re-read as a "stale" file next call.
+                _playlist_cache = []
         return list(_playlist_cache)
 
     @staticmethod

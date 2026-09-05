@@ -509,91 +509,105 @@ class ShowcaseManager:
         playlist_id = playlist_data.get("playlist_id", "") if playlist_data else ""
         integration = self.integrations.get(platform) if self.integrations else None
 
+        def done() -> None:
+            card.removing = False
+            try:
+                if not card.frame.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            for btn in buttons:
+                try:
+                    btn.config(state="normal")
+                except tk.TclError:
+                    pass
+            if ok:
+                status_label.config(
+                    text="Removed", background=C["label_playlist_good_bg"]
+                )
+                cur_idx = self._card_index(card)
+                if cur_idx is not None:
+                    pname = card.name_label.cget("text")
+                    self._refresh_showcase(cur_idx, pname, card.platform)
+                    self._refresh_stats(cur_idx, pname, card.platform)
+            else:
+                status_label.config(
+                    text="Error", background=C["label_playlist_error_bg"]
+                )
+
         def work() -> None:
             ok = False
-            if not playlist_id:
-                logger.error(
-                    "No playlist_id for '%s' (%s); cannot remove track %s",
-                    playlist_name, platform, track_id,
-                )
-            elif integration is None or not integration.is_authenticated():
-                logger.error(
-                    "Integration %s not authenticated; cannot remove track %s",
-                    platform, track_id,
-                )
-            else:
-                ok = integration.remove_track(playlist_id, track_id)
-                if ok:
-                    self._song_manager.delete_song(
-                        playlist_name,
-                        song_id,
-                        platform=platform,
-                        playlist_id=playlist_id,
-                    )
-                    # Delete the EXACT scrobble this row's add-flow created.  The
-                    # timestamp was recorded in the scrobble ledger when
-                    # the auto-scrobble was accepted at add time; without
-                    # a record (auto-scrobble was off then, the row was
-                    # re-imported by a reload, or the record was pruned)
-                    # the remove path leaves the song's scrobble history
-                    # alone - a timestamp-less delete would remove the
-                    # track's MOST RECENT scrobble, which may be a
-                    # legitimate one the user actually listened to.
-                    if title and artists:
-                        scrobble_integ = next(
-                            (integ for integ in (self.integrations.get_all().values() if self.integrations else [])
-                             if getattr(integ, "delete_scrobble", None) is not None),
-                            None,
-                        )
-                        if scrobble_integ is not None:
-                            artist = artists[0] if isinstance(artists, list) else str(artists)
-                            ts = scrobble_log.lookup_scrobble(
-                                platform, playlist_id, song_id
-                            )
-                            if ts is not None:
-                                try:
-                                    if scrobble_integ.delete_scrobble(artist, title, ts):
-                                        scrobble_log.clear_scrobble(
-                                            platform, playlist_id, song_id
-                                        )
-                                except Exception as e:
-                                    logger.debug(
-                                        "Failed to delete scrobble for %s: %s", title, e
-                                    )
-
-            def done() -> None:
-                card.removing = False
-                try:
-                    if not card.frame.winfo_exists():
-                        return
-                except tk.TclError:
-                    return
-                for btn in buttons:
-                    try:
-                        btn.config(state="normal")
-                    except tk.TclError:
-                        pass
-                if ok:
-                    status_label.config(
-                        text="Removed", background=C["label_playlist_good_bg"]
-                    )
-                    cur_idx = self._card_index(card)
-                    if cur_idx is not None:
-                        pname = card.name_label.cget("text")
-                        self._refresh_showcase(cur_idx, pname, card.platform)
-                        self._refresh_stats(cur_idx, pname, card.platform)
-                else:
-                    status_label.config(
-                        text="Error", background=C["label_playlist_error_bg"]
-                    )
-
             try:
-                self.root.after(0, done)
-            except Exception:
-                logger.debug(
-                    "App is shutting down; dropped remove-done update",
-                    exc_info=True,
+                if not playlist_id:
+                    logger.error(
+                        "No playlist_id for '%s' (%s); cannot remove track %s",
+                        playlist_name, platform, track_id,
+                    )
+                elif integration is None or not integration.is_authenticated():
+                    logger.error(
+                        "Integration %s not authenticated; cannot remove track %s",
+                        platform, track_id,
+                    )
+                else:
+                    ok = integration.remove_track(playlist_id, track_id)
+                    if ok:
+                        self._song_manager.delete_song(
+                            playlist_name,
+                            song_id,
+                            platform=platform,
+                            playlist_id=playlist_id,
+                        )
+                        # Delete the EXACT scrobble this row's add-flow created.  The
+                        # timestamp was recorded in the scrobble ledger when
+                        # the auto-scrobble was accepted at add time; without
+                        # a record (auto-scrobble was off then, the row was
+                        # re-imported by a reload, or the record was pruned)
+                        # the remove path leaves the song's scrobble history
+                        # alone - a timestamp-less delete would remove the
+                        # track's MOST RECENT scrobble, which may be a
+                        # legitimate one the user actually listened to.
+                        if title and artists:
+                            scrobble_integ = next(
+                                (integ for integ in (self.integrations.get_all().values() if self.integrations else [])
+                                 if getattr(integ, "delete_scrobble", None) is not None),
+                                None,
+                            )
+                            if scrobble_integ is not None:
+                                artist = artists[0] if isinstance(artists, list) else str(artists)
+                                ts = scrobble_log.lookup_scrobble(
+                                    platform, playlist_id, song_id
+                                )
+                                if ts is not None:
+                                    try:
+                                        if scrobble_integ.delete_scrobble(artist, title, ts):
+                                            scrobble_log.clear_scrobble(
+                                                platform, playlist_id, song_id
+                                            )
+                                    except Exception as e:
+                                        logger.debug(
+                                            "Failed to delete scrobble for %s: %s", title, e
+                                        )
+            except Exception as e:
+                # A platform API failure (network, token, 5xx) must not
+                # leave the card wedged in "removing" with every button
+                # disabled - fall through with ok=False and let done()
+                # restore the UI.
+                logger.error(
+                    "Failed to remove track %s from '%s' (%s): %s",
+                    track_id, playlist_name, platform, e,
                 )
+            finally:
+                # done() touches tkinter widgets, so it must run on the
+                # main thread - never inline here on the worker thread.
+                # Scheduling it from the finally guarantees the card is
+                # un-wedged on BOTH the success and the exception path.
+                try:
+                    self.root.after(0, done)
+                except Exception:
+                    logger.debug(
+                        "App is shutting down; dropped remove-done update",
+                        exc_info=True,
+                    )
 
         threading.Thread(target=work, daemon=True).start()
 

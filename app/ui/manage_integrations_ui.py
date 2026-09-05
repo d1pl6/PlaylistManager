@@ -20,11 +20,12 @@ import logging
 import threading
 import tkinter as tk
 from tkinter import messagebox
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from plugin_loader import PluginRegistry
 from services import duplicate_queue, integration_manager
 from ui.scrollable import ScrollableFrame
+from utils.icons import IconService
 from utils.logging_config import user_log
 from utils.scaling import ui_font
 from utils.theme import C, btn_colors
@@ -265,6 +266,24 @@ def show_manage_dialog(
 
             row = tk.Frame(rows_frame, background=content_bg, padx=8, pady=4)
             row.pack(fill="x", padx=4, pady=2)
+
+            # Platform logo from the plugin's standard
+            # ``integrations/<dir>/logo.png`` (PluginInfo.logo_path).
+            # Only installed platforms have a local plugin directory, so
+            # downloadable-but-not-installed rows stay text-only.
+            plugin = installed.get(pid)
+            if plugin is not None:
+                logo_path = plugin.logo_path
+                if logo_path is not None:
+                    try:
+                        logo_img = IconService.get(logo_path, 28)
+                    except Exception as e:
+                        logger.debug("Failed to load logo %s: %s", logo_path, e)
+                        logo_img = None
+                    if logo_img is not None:
+                        logo_lbl = tk.Label(row, image=logo_img, background=content_bg)
+                        cast(Any, logo_lbl).image = logo_img
+                        logo_lbl.pack(side="left", padx=(0, 8))
 
             tk.Label(
                 row,

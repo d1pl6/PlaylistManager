@@ -36,7 +36,7 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -323,6 +323,60 @@ def purge_platform(platform: str) -> Tuple[int, int, int]:
             k: v for k, v in songs.items() if not k.startswith(platform + "|")
         }
         kept_errors = [e for e in errors if e.get("platform") != platform]
+
+        if (
+            len(kept_pending) != len(pending)
+            or len(kept_songs) != len(songs)
+            or len(kept_errors) != len(errors)
+        ):
+            data["pending"] = kept_pending
+            data["songs"] = kept_songs
+            data["errors"] = kept_errors
+            _write(data)
+        return (
+            len(pending) - len(kept_pending),
+            len(songs) - len(kept_songs),
+            len(errors) - len(kept_errors),
+        )
+
+
+def purge_playlist(platform: str, playlist_id: str, playlist_name: str) -> Tuple[int, int, int]:
+    """Drop every record referencing one playlist (playlist-delete cleanup).
+
+    Mirrors :func:`purge_platform` scoped to a single playlist.  Without
+    this, deleting a playlist leaves its pending duplicate decisions,
+    pair-memory entries and error-log lines in ``db/extra.json`` forever,
+    resurfacing if the playlist is ever re-added.
+
+    Pending records carry ``playlist_id``; pair-memory keys embed it
+    (``<platform>|<playlist_id>|...``); error-log records only carry
+    ``playlist_name``, so legacy id-less playlist errors are matched by
+    name.  Returns ``(pending, songs, errors)`` removed counts.
+    """
+    with _lock:
+        data = _load()
+        pending = list(data.get("pending", []))
+        songs = dict(data.get("songs", {}))
+        errors = list(data.get("errors", []))
+
+        pid = str(playlist_id or "")
+
+        def _pending_match(r: dict) -> bool:
+            if r.get("platform") != platform:
+                return False
+            # id-less legacy records fall back to name matching
+            r_pid = str(r.get("playlist_id") or "")
+            return r_pid == pid or (not r_pid and r.get("playlist_name") == playlist_name)
+
+        kept_pending = [r for r in pending if not _pending_match(r)]
+        kept_songs = {
+            k: v for k, v in songs.items()
+            if not (k.startswith(platform + "|" + pid + "|"))
+        }
+        kept_errors = [
+            e for e in errors
+            if not (e.get("platform") == platform and e.get("playlist_name") == playlist_name)
+        ]
 
         if (
             len(kept_pending) != len(pending)

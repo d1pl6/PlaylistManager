@@ -27,7 +27,9 @@ from utils.logging_config import user_log
 logger = logging.getLogger(__name__)
 
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets"
-LOGOS_DIR = ASSETS_DIR / "logos"
+
+# Generic placeholder when a plugin ships no logo.
+PLACEHOLDER_LOGO = ASSETS_DIR / "login.png"
 
 
 # ======================================================================
@@ -69,17 +71,17 @@ def show_login_dialog(
     label_bg = C["label_def_bg"]
     label_fg = C["label_def_fg"]
 
-    # platform id -> (login handler, logo file).  The handlers are the
-    # platform-specific UI flows below; a loaded integration without a
-    # flow entry is skipped with a warning instead of rendering a dead
-    # tile.  A plugin whose manifest declares ``login_module`` /
-    # ``login_class`` (and optionally ``login_logo``) supersedes this
-    # built-in table - see rebuild_tiles.
+    # platform id -> login handler for the built-in platforms.  The logo
+    # for every tile (built-in or plugin-declared) comes from the plugin's
+    # standard ``integrations/<dir>/logo.png`` (PluginInfo.logo_path), so
+    # this table only carries the handlers; the icon is resolved in
+    # _login_tile.  A plugin whose manifest declares ``login_module`` /
+    # ``login_class`` supersedes this built-in table - see rebuild_tiles.
     flows = {
-        "youtube_music": (_on_youtube_music, LOGOS_DIR / "youtube-music.png"),
-        "spotify": (_on_spotify, LOGOS_DIR / "spotify.png"),
-        "lastfm": (_on_lastfm, LOGOS_DIR / "lastfm.png"),
-        "soundcloud": (_on_soundcloud, LOGOS_DIR / "soundcloud.png"),
+        "youtube_music": _on_youtube_music,
+        "spotify": _on_spotify,
+        "lastfm": _on_lastfm,
+        "soundcloud": _on_soundcloud,
     }
 
     def _current_integrations() -> list:
@@ -117,31 +119,41 @@ def show_login_dialog(
         A plugin that declares ``login_module``/``login_class`` in its
         plugin.json supplies its own handler (a callable
         ``(parent, on_success)``) - that is how a downloaded third-party
-        plugin gets a login tile without any core change.  The manifest-
-        declared logo (``login_logo``) or a generic placeholder is used
-        with it.  Otherwise the built-in ``flows`` table covers the three
-        bundled platforms.
+        plugin gets a login tile without any core change.  The logo for
+        every tile is the plugin's standard ``integrations/<dir>/logo.png``
+        (``PluginInfo.logo_path``; fallback: the manifest ``login_logo``),
+        or a generic placeholder when the plugin ships no logo.
+        Otherwise the built-in ``flows`` table covers the bundled
+        platforms with the same logo resolution when the plugin is
+        installed.
         """
         plugin = (
             plugin_registry.get(integration.id)
             if plugin_registry is not None
             else None
         )
-        if plugin is not None and plugin.login_class:
-            try:
-                handler = plugin.import_login()
-            except Exception as e:
-                logger.warning(
-                    "Login handler for '%s' failed to load: %s",
-                    integration.id, e,
-                )
-                handler = None
-            if handler is not None:
-                return (
-                    handler,
-                    plugin.login_logo_path or ASSETS_DIR / "login.png",
-                )
-        return flows.get(integration.id)
+        if plugin is not None:
+            logo = plugin.logo_path or PLACEHOLDER_LOGO
+            if plugin.login_class:
+                try:
+                    handler = plugin.import_login()
+                except Exception as e:
+                    logger.warning(
+                        "Login handler for '%s' failed to load: %s",
+                        integration.id, e,
+                    )
+                    handler = None
+                if handler is not None:
+                    return (handler, logo)
+            builtin = flows.get(integration.id)
+            if builtin is not None:
+                return (builtin, logo)
+        # No plugin registry (or platform not discovered): still offer the
+        # bundled handler with the generic placeholder.
+        builtin = flows.get(integration.id)
+        if builtin is not None:
+            return (builtin, PLACEHOLDER_LOGO)
+        return None
 
     def rebuild_tiles() -> None:
         """Re-render the platform tiles from the current integration set.

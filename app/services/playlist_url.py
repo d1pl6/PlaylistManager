@@ -15,6 +15,9 @@ integrations/*/plugin.json); this module matches only generic URL shapes:
 - ``/playlist/<id>`` path form, optionally behind a locale segment
   (``/intl-<xx>/playlist/<id>``) - Spotify
 - ``<platform>:playlist:<id>`` URI form - Spotify
+- ``<host>/<path>`` path form for hosts whose every path is a resource
+  URL (SoundCloud: ``/user/sets/<slug>``, ``/user/<slug>``,
+  ``on.soundcloud.com/<token>``) - see ``_PATH_FORM_PLATFORMS``
 """
 
 from typing import Optional, Tuple
@@ -25,7 +28,16 @@ _SUPPORTED_FORMS = (
     "YouTube: https://www.youtube.com/playlist?list=<id>",
     "Spotify: https://open.spotify.com/playlist/<id>",
     "Spotify URI: spotify:playlist:<id>",
+    "SoundCloud: https://soundcloud.com/<user>/sets/<slug>",
 )
+
+# Platforms whose playlist URLs are just "<host>/<path>" - every path on a
+# declared host is a resource URL, so there is no shared /playlist/ shape
+# to match.  The path (without the leading slash) is returned as the
+# stored playlist id; the integration resolves it via /resolve on first
+# use.  A platform opting in here never reaches the "/playlist" token
+# scan below (a SoundCloud user could legitimately be named "playlist").
+_PATH_FORM_PLATFORMS = frozenset({"soundcloud"})
 
 
 def _unsupported(url: str) -> ValueError:
@@ -119,6 +131,17 @@ def parse_playlist_url(
     # matched case-insensitively, but the ID keeps its original case
     # (Spotify IDs are case-sensitive base62).
     segments = [s for s in path.split("/") if s]
+
+    # Path-form platforms (SoundCloud): skip the /playlist/ token scan -
+    # every path on a declared host is a valid resource URL and the
+    # "playlist" segment would mis-parse hosts where that is just a
+    # username.  The stored id is the full path; the integration resolves
+    # it through /resolve on first use (see _normalize_playlist_id).
+    if pid in _PATH_FORM_PLATFORMS:
+        if not segments:
+            raise ValueError(f"No playlist path in URL '{url}'")
+        return pid, "/".join(segments)
+
     try:
         idx = [s.lower() for s in segments].index("playlist")
     except ValueError:
@@ -158,6 +181,45 @@ _PLATFORM_DEFAULT_HOSTS: dict[str, str] = {
 }
 
 
+# SoundCloud URN prefixes per kind.  The SoundCloud flows store URNs
+# (soundcloud:playlists:123 / soundcloud:tracks:123); the standalone
+# repos follow the same convention.
+_SOUNDCLOUD_URN_PREFIXES = {
+    "playlist": ("soundcloud:playlists:", "soundcloud:playlist:"),
+    "song": ("soundcloud:tracks:", "soundcloud:track:"),
+}
+
+
+def _soundcloud_url(playlist_id: str, kind: str) -> Optional[str]:
+    """Map a NON-path SoundCloud id to a browseable URL, or ``None``.
+
+    SoundCloud ids come in two shapes: URNs (what the official flows
+    store) and ``user/slug`` paths (URL-registered entries).  Path ids
+    map cleanly through the plugin's ``https://{host}/{id}`` template,
+    so only URN / bare-numeric ids are routed here.
+
+    A playlist URN maps to the numeric set page
+    (``https://soundcloud.com/sets/123`` - reachable, verified 2026-09).
+    A track URN has NO numeric page (``https://soundcloud.com/tracks/123``
+    is a 404 that redirects to the charts) - ``None`` means "not
+    browseable" and the caller skips the affordance instead of producing
+    a dead link.
+    """
+    for prefix in _SOUNDCLOUD_URN_PREFIXES[kind]:
+        if playlist_id.startswith(prefix):
+            num = playlist_id[len(prefix):]
+            if not num.isdigit():
+                return None
+            if kind == "playlist":
+                return f"https://soundcloud.com/sets/{num}"
+            return None
+    # Bare numeric id (no "soundcloud:" prefix) - only playlists have a
+    # browseable numeric page.
+    if playlist_id.isdigit() and kind == "playlist":
+        return f"https://soundcloud.com/sets/{playlist_id}"
+    return None
+
+
 def _resolve_host(
     platform: str,
     plugin_registry=None,
@@ -193,6 +255,12 @@ def build_playlist_url(
     """
     if not playlist_id:
         return None
+
+    # SoundCloud stores URNs (soundcloud:playlists:123); the only
+    # browseable numeric page is /sets/<id>.  Path-shaped ids
+    # ("user/sets/slug") fall through to the template machinery below.
+    if platform == "soundcloud" and "/" not in playlist_id:
+        return _soundcloud_url(playlist_id, "playlist")
 
     template = None
 
@@ -237,6 +305,11 @@ def build_song_url(
     """
     if not track_id:
         return None
+
+    # SoundCloud track URNs have no browseable page (see _soundcloud_url);
+    # path-shaped ids fall through to the template machinery below.
+    if platform == "soundcloud" and "/" not in track_id:
+        return _soundcloud_url(track_id, "song")
 
     template = None
 

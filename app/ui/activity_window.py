@@ -64,7 +64,13 @@ def show_activity_window(parent, *, load_data, on_song, on_close=None):
             (used by MainWindow to refresh the badge).
     """
     global _active_window
-    if _active_window is not None and _active_window.winfo_exists():
+    try:
+        alive = _active_window is not None and _active_window.winfo_exists()
+    except tk.TclError:
+        # Window was destroyed (app teardown or external destroy) - treat
+        # as gone and rebuild it fresh.
+        alive = False
+    if alive:
         win = _active_window
     else:
         win = ActivityWindow(

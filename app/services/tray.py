@@ -88,6 +88,7 @@ class TrayService:
 
     def __init__(self, title="PlaylistManager", image=None):
         self._icon = None
+        self._started = False
         if not _PYSTRAY_OK:
             logger.debug("pystray not installed - tray disabled")
             return
@@ -150,6 +151,17 @@ class TrayService:
             items.append(_MenuItem("Quit", lambda icon, item: on_quit()))
         # The Open item is always present, so the menu is never empty.
         self._icon.menu = _Menu(*items)
+        if self._started:
+            # A second start while the icon is already running (e.g. a
+            # Settings toggle + re-login both driving start) must not spawn
+            # a duplicate pystray loop/thread - pystray documents only one
+            # run() per Icon; a second run_detached()/run() on the same
+            # Icon misbehaves.  The menu was just refreshed in place, which
+            # is picked up by the running backend (GLib idle callback on
+            # the appindicator/GTK family).
+            logger.debug("Tray already started - refreshed menu only")
+            return
+        self._started = True
         if _is_gtk_backend():
             # See _is_gtk_backend - the Gtk family needs its own running
             # GLib mainloop; run it in a daemon thread.
@@ -158,6 +170,7 @@ class TrayService:
             self._icon.run_detached()
 
     def stop(self):
+        self._started = False
         if self._icon is not None:
             try:
                 self._icon.stop()

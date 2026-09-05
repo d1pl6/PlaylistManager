@@ -18,11 +18,11 @@ album img	| artists
 
 [x] Last.fm integration to add song to likes
 
-[ ] Deezer integration
+[x] Deezer integration
 
 [x] SoundCloud integration
 
-[ ] profiles (settings, playlists)
+[x] profiles (settings, playlists)
 
 [ ] Docs & Contribution
 

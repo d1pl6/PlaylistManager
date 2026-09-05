@@ -59,6 +59,12 @@ class App:
         # background so they never block first paint of the UI thread.
         threading.Thread(target=self._migrate_playlist_schema, daemon=True).start()
 
+        # Ensure db/playlists.json exists BEFORE the main window reads the
+        # store: MainWindow's card grid does store lookups during setup,
+        # and a missing file would otherwise be reported (and cached) as an
+        # empty registry until ensure_playlists_file() runs after.
+        PlaylistStore.ensure_playlists_file()
+
         self.main_window = MainWindow(
             self.root,
             integrations=self.integrations,
@@ -67,7 +73,6 @@ class App:
             plugin_registry=self.plugin_registry,
         )
 
-        PlaylistStore.ensure_playlists_file()
         if get_setting("center_windows", True):
             center_window(self.root)
 

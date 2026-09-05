@@ -391,6 +391,80 @@ def save_and_verify_soundcloud_credentials(
 
 
 # ---------------------------------------------------------------------------
+# Deezer
+# ---------------------------------------------------------------------------
+
+DEEZER_FILE = AUTH_DIR / "deezer.json"
+
+
+def load_deezer_credentials() -> dict | None:
+    """Read the Deezer ARL from the auth file.  Returns None if absent."""
+    if not DEEZER_FILE.exists():
+        return None
+    try:
+        with open(DEEZER_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        arl = str(data.get("arl", "")).strip()
+        if not arl:
+            return None
+        return {"arl": arl}
+    except Exception as e:
+        logger.error("Failed to load Deezer credentials: %s", e)
+        return None
+
+
+def verify_deezer_credentials(arl: str) -> tuple:
+    """Verify a Deezer ARL with a live Pipe API round trip.
+
+    Returns ``(me, api)`` or ``(None, None)`` on failure.  The *api*
+    is a temporary :class:`DeezerAPI` whose state carried through the
+    check.
+    """
+    try:
+        from integrations.deezer.deezer import (
+            verify_deezer_credentials as verify_impl,
+        )
+        return verify_impl(arl)
+    except ImportError:
+        return None, None
+    except Exception as e:
+        logger.error("Deezer credential verification failed: %s", e)
+        return None, None
+
+
+def save_and_verify_deezer_credentials(arl: str) -> dict:
+    """VERIFY-FIRST credential save for the CLI ``--login deezer`` path.
+
+    The plugin declares ``login_module``/``login_class`` for the GUI tile,
+    so this is the CLI entrypoint that calls into the plugin's own
+    verify-first helper.
+    """
+    try:
+        from integrations.deezer.deezer import (
+            save_and_verify_deezer_credentials as save_impl,
+        )
+        return save_impl(arl)
+    except ImportError:
+        return {"ok": False, "error": "Deezer plugin not found"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def delete_deezer_credentials(plugin_registry=None) -> tuple:
+    """Delete Deezer credential files.  Returns ``(deleted, missing)``."""
+    from services.profile_store import auth_dir as _auth_dir
+    path = _auth_dir() / "deezer.json"
+    deleted = []
+    missing = []
+    if path.exists():
+        path.unlink()
+        deleted.append(path)
+    else:
+        missing.append(path)
+    return deleted, missing
+
+
+# ---------------------------------------------------------------------------
 # Multi-platform credential deletion (CLI --logout)
 # ---------------------------------------------------------------------------
 
@@ -404,6 +478,7 @@ PLATFORM_CREDENTIAL_FILES = {
     "spotify": [SPOTIFY_FILE],
     "lastfm": [AUTH_DIR / "lastfm.json"],
     "soundcloud": [AUTH_DIR / "soundcloud.json"],
+    "deezer": [DEEZER_FILE],
 }
 
 
