@@ -14,11 +14,14 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional
 
-from constants import PLATFORM_YOUTUBE_MUSIC
+# Legacy entries predate the platform field; they were all YouTube Music.
+PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 
 logger = logging.getLogger(__name__)
 
-playlists_json = Path(__file__).resolve().parents[2] / "db" / "playlists.json"
+from services import profile_store as _profile_store
+
+playlists_json = _profile_store.db_dir() / "playlists.json"
 
 # In-memory cache so we don't re-read the file on every operation.
 _playlist_cache: list[dict] | None = None
@@ -79,15 +82,28 @@ class PlaylistStore:
 
         now = time.monotonic()
         if _playlist_cache is None or (now - _cache_timestamp) >= _CACHE_TTL:
-            _playlist_cache = []
             _cache_timestamp = now
             if os.path.exists(playlists_json) and os.path.getsize(playlists_json) > 0:
                 try:
                     with open(playlists_json, "r", encoding="utf-8") as f:
                         _playlist_cache = json.load(f)
-                        _cache_timestamp = now
                 except Exception as e:
-                    logger.error(f"Failed to read playlists.json: {e}")
+                    # Keep the previous cache on a transient read error
+                    # (torn read on the exFAT drive, JSON corruption, ...).
+                    # Poisoning the cache with [] would make every playlist
+                    # vanish from the UI for the whole TTL and, worse,
+                    # a subsequent add_playlist would dedup against an empty
+                    # list and append a duplicate entry when the file heals.
+                    logger.error("Failed to read playlists.json: %s", e)
+                    if _playlist_cache is None:
+                        # First call and the file is unreadable - fall back
+                        # to empty rather than crashing on list(None).
+                        _playlist_cache = []
+            else:
+                # No file (fresh clone) - the cache must become [] so an
+                # ensure_playlists_file() that writes [] underneath us is
+                # not re-read as a "stale" file next call.
+                _playlist_cache = []
         return list(_playlist_cache)
 
     @staticmethod
@@ -428,7 +444,7 @@ class PlaylistStore:
                 json.dump(playlists, f, ensure_ascii=False, indent=2)
             temp.replace(playlists_json)
         except Exception as e:
-            logger.error(f"Failed to write playlists.json: {e}")
+            logger.error("Failed to write playlists.json: %s", e)
         finally:
             # Update the cache even when the write failed so the running
             # session stays consistent - the mutated list was already
@@ -438,3 +454,27 @@ class PlaylistStore:
             # entry that visibly exists.
             _playlist_cache = playlists
             _cache_timestamp = time.monotonic()
+
+
+def playlist_still_registered(
+    playlist_name: str, platform: str, playlist_id: Optional[str]
+) -> bool:
+    """True when the playlist is still registered in the store.
+
+    A playlist frame closed mid-flow deletes the store entry and its
+    local database; without this check a keybind flow would resurrect
+    the deleted DB (song_exists()/add_song() recreate the file on first
+    access) and leave an orphan behind.  Legacy entries (no id) resolve
+    by name.  A store read failure errs on the permissive side - the
+    platform add may already have succeeded and must not be reported as
+    a failure.
+    """
+    try:
+        return (
+            PlaylistStore.find_playlist(
+                playlist_name, platform=platform, playlist_id=playlist_id or ""
+            )
+            is not None
+        )
+    except Exception:
+        return True

@@ -14,12 +14,16 @@ album img	| name  | remove from playlist img
 
 album img	| artists
 
-[ ] Make Flask receiver port configurable (not hardcoded 5000)
+[x] Try to fix stupid ass artists (https://music.youtube.com/watch?v=HD-Atmjk5Kc https://music.youtube.com/watch?v=h-6z7zrr3-I)
 
-[ ] Try to fix stupid ass artists (https://music.youtube.com/watch?v=HD-Atmjk5Kc https://music.youtube.com/watch?v=h-6z7zrr3-I)
+[x] Last.fm integration to add song to likes
 
-[ ] Last.fm integration to add song to likes
+[x] Deezer integration
 
-[ ] Deezer integration
+[x] SoundCloud integration
 
-[ ] SoundCloud integration
+[x] profiles (settings, playlists)
+
+[ ] Docs & Contribution
+
+[ ] Executable

@@ -18,7 +18,6 @@ from tkinter import messagebox
 from typing import Any, Optional, cast
 
 from services import auth_setup
-from constants import PLATFORM_SPOTIFY, PLATFORM_YOUTUBE_MUSIC
 from utils.scaling import ui_font
 from utils.icons import IconService
 from utils.window import center_window
@@ -28,7 +27,9 @@ from utils.logging_config import user_log
 logger = logging.getLogger(__name__)
 
 ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets"
-LOGOS_DIR = ASSETS_DIR / "logos"
+
+# Generic placeholder when a plugin ships no logo.
+PLACEHOLDER_LOGO = ASSETS_DIR / "login.png"
 
 
 # ======================================================================
@@ -36,11 +37,60 @@ LOGOS_DIR = ASSETS_DIR / "logos"
 # ======================================================================
 
 
-def show_login_dialog(parent, on_success=None):
+def show_login_dialog(
+    parent,
+    on_success=None,
+    integrations=None,
+    integration_registry=None,
+    keybind_controller=None,
+    plugin_registry=None,
+    on_uninstall=None,
+    on_plugins_changed=None,
+):
+    """Show the platform-picker login dialog.
+
+    *integrations* is the set of loaded integration objects (anything
+    with ``.id`` / ``.display_name`` - normally
+    ``IntegrationRegistry.get_all().values()``).  Only platforms whose
+    integration actually loaded get a tile: with the plugin directory
+    removed or its optional dependency missing there is no working flow
+    behind the login, so offering it would only end in errors.  When an
+    ``IntegrationRegistry`` is passed (either as *integrations* or as
+    *integration_registry*) the tile list is re-read from it whenever the
+    dialog rebuilds, so the Manage flow's download/uninstall shows up
+    without reopening the dialog.
+
+    The "Manage" button opens the integration manager dialog
+    (:mod:`ui.manage_integrations_ui`) - download / uninstall plugins.
+    *integration_registry*, *keybind_controller*, *plugin_registry*,
+    *on_uninstall* and *on_plugins_changed* are forwarded to it (see that
+    module's docstring).
+    """
     frame_main_bg = C["frame_main_bg"]
     frame_header_bg = C["frame_head_bg"]
     label_bg = C["label_def_bg"]
     label_fg = C["label_def_fg"]
+
+    # platform id -> login handler for the built-in platforms.  The logo
+    # for every tile (built-in or plugin-declared) comes from the plugin's
+    # standard ``integrations/<dir>/logo.png`` (PluginInfo.logo_path), so
+    # this table only carries the handlers; the icon is resolved in
+    # _login_tile.  A plugin whose manifest declares ``login_module`` /
+    # ``login_class`` supersedes this built-in table - see rebuild_tiles.
+    flows = {
+        "youtube_music": _on_youtube_music,
+        "spotify": _on_spotify,
+        "lastfm": _on_lastfm,
+        "soundcloud": _on_soundcloud,
+    }
+
+    def _current_integrations() -> list:
+        """Live integration objects - the registry when we have one."""
+        if integration_registry is not None:
+            return list(integration_registry.get_all().values())
+        if hasattr(integrations, "get_all"):
+            return list(integrations.get_all().values())
+        return list(integrations or [])
 
     win = tk.Toplevel(parent)
     win.title("Login")
@@ -60,22 +110,125 @@ def show_login_dialog(parent, on_success=None):
         font=ui_font(14),
     ).pack(fill="both", pady=5, padx=5)
 
-    platforms_frame = tk.Frame(win, background=label_bg)
-    platforms_frame.pack(pady=20, padx=20)
+    body = tk.Frame(win, background=label_bg)
+    body.pack(pady=20, padx=20)
 
-    _create_platform_button(
-        platforms_frame,
-        "YouTube Music",
-        LOGOS_DIR / "youtube-music.png",
-        lambda: _on_youtube_music(win, on_success),
-    ).pack(side="left", padx=20)
+    def _login_tile(integration) -> Optional[tuple]:
+        """``(handler, logo_path)`` for one integration, or None.
 
-    _create_platform_button(
-        platforms_frame,
-        "Spotify",
-        LOGOS_DIR / "spotify.png",
-        lambda: _on_spotify(win, on_success),
-    ).pack(side="left", padx=20)
+        A plugin that declares ``login_module``/``login_class`` in its
+        plugin.json supplies its own handler (a callable
+        ``(parent, on_success)``) - that is how a downloaded third-party
+        plugin gets a login tile without any core change.  The logo for
+        every tile is the plugin's standard ``integrations/<dir>/logo.png``
+        (``PluginInfo.logo_path``; fallback: the manifest ``login_logo``),
+        or a generic placeholder when the plugin ships no logo.
+        Otherwise the built-in ``flows`` table covers the bundled
+        platforms with the same logo resolution when the plugin is
+        installed.
+        """
+        plugin = (
+            plugin_registry.get(integration.id)
+            if plugin_registry is not None
+            else None
+        )
+        if plugin is not None:
+            logo = plugin.logo_path or PLACEHOLDER_LOGO
+            if plugin.login_class:
+                try:
+                    handler = plugin.import_login()
+                except Exception as e:
+                    logger.warning(
+                        "Login handler for '%s' failed to load: %s",
+                        integration.id, e,
+                    )
+                    handler = None
+                if handler is not None:
+                    return (handler, logo)
+            builtin = flows.get(integration.id)
+            if builtin is not None:
+                return (builtin, logo)
+        # No plugin registry (or platform not discovered): still offer the
+        # bundled handler with the generic placeholder.
+        builtin = flows.get(integration.id)
+        if builtin is not None:
+            return (builtin, PLACEHOLDER_LOGO)
+        return None
+
+    def rebuild_tiles() -> None:
+        """Re-render the platform tiles from the current integration set.
+
+        Runs at open time and again after the Manage dialog closes: a
+        download or uninstall changes the plugin set, and the tiles must
+        reflect it without reopening the dialog.
+        """
+        for widget in body.winfo_children():
+            widget.destroy()
+
+        available = []
+        for integration in _current_integrations():
+            flow = _login_tile(integration)
+            if flow is None:
+                logger.warning(
+                    "No login flow for platform '%s' - hiding its login option",
+                    integration.id,
+                )
+                continue
+            available.append((integration.display_name, *flow))
+
+        if not available:
+            tk.Label(
+                body,
+                text="No music services installed",
+                background=label_bg,
+                foreground=label_fg,
+                font=ui_font(10),
+            ).pack(pady=20, padx=40)
+            return
+
+        for display_name, handler, icon_path in available:
+            _create_platform_button(
+                body,
+                display_name,
+                icon_path,
+                lambda h=handler: h(win, on_success),
+            ).pack(side="left", padx=20)
+
+    rebuild_tiles()
+
+    def _open_manage() -> None:
+        from ui.manage_integrations_ui import show_manage_dialog
+
+        manage = show_manage_dialog(
+            win,
+            plugin_registry=plugin_registry,
+            integration_registry=integration_registry,
+            keybind_controller=keybind_controller,
+            on_uninstall=on_uninstall,
+            on_plugins_changed=on_plugins_changed,
+        )
+        if manage is not None:
+            win.wait_window(manage)
+        # Restore the modal grab (the manage dialog superseded it) and
+        # re-render the tiles - the plugin set may have changed.
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
+        rebuild_tiles()
+        center_window(win)
+
+    btn_manage = tk.Button(
+        win,
+        text="Manage",
+        cursor="hand2",
+        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+        highlightthickness=0,
+        relief="raised",
+        font=ui_font(10),
+        command=_open_manage,
+    )
+    btn_manage.pack(pady=(0, 10))
 
     center_window(win)
 
@@ -140,7 +293,7 @@ def _on_youtube_music(parent, on_success):
         # scoped refresh doesn't re-verify (and possibly deauthenticate)
         # Spotify.
         _poll_for_browser_json(
-            parent, lambda: on_success(PLATFORM_YOUTUBE_MUSIC)
+            parent, lambda: on_success("youtube_music")
         )
 
 
@@ -163,7 +316,7 @@ def _browser_file_ready() -> bool:
     that window.
     """
     try:
-        from integrations.music_youtube.music_youtube import (
+        from integrations.youtube_music.youtube_music import (
             BROWSER_FILE as YT_BROWSER_FILE,
             BROWSER_FILE_FALLBACKS,
         )
@@ -340,7 +493,7 @@ def _on_spotify(parent, on_success):
                     foreground=C["label_playlist_good_fg"],
                 )
                 if on_success:
-                    on_success(PLATFORM_SPOTIFY)
+                    on_success("spotify")
             else:
                 status_label.config(text="No credentials file found", foreground="red")
         except Exception as e:
@@ -417,7 +570,7 @@ def _on_spotify(parent, on_success):
                 foreground=C["label_playlist_good_fg"],
             )
             if on_success:
-                on_success(PLATFORM_SPOTIFY)
+                on_success("spotify")
         else:
             status_label.config(text=result.get("error", "Error"), foreground="red")
 
@@ -463,6 +616,482 @@ def _on_spotify(parent, on_success):
         is in flight - Test and Save must never run concurrently (Spotify's
         refresh-token rotation makes a second concurrent /v1/me fail, and a
         delete mid-verify races the file write)."""
+        state = "disabled" if busy else "normal"
+        cursor = "arrow" if busy else "hand2"
+        btn_test.config(state=state, cursor=cursor)
+        btn_save.config(state=state, cursor=cursor)
+        btn_delete.config(state=state, cursor=cursor)
+
+    center_window(win)
+
+
+def _on_lastfm(parent, on_success):
+    """Show the Last.fm login dialog (API key + secret)."""
+    win = tk.Toplevel(parent)
+    win.title("Last.fm Login")
+    win.configure(background=C["frame_main_bg"])
+    win.transient(parent)
+    win.update_idletasks()
+    win.grab_set()
+
+    # ---------- theme colours ----------
+    header_bg = C["frame_head_bg"]
+    label_fg = C["label_def_fg"]
+    entry_bg = C["entry_default_bg"]
+    entry_fg = C["entry_default_fg"]
+    button_close_bg = C["button_close_bg"]
+    button_close_fg = C["button_close_fg"]
+    button_close_btn = btn_colors(button_close_bg, button_close_fg)
+    btn_test_bg = C["button_main_bg"]
+    btn_test_fg = C["button_main_fg"]
+    btn_test_btn = btn_colors(btn_test_bg, btn_test_fg)
+    button_save_bg = C["button_save_bg"]
+    button_save_fg = C["button_save_fg"]
+    button_save_btn = btn_colors(button_save_bg, button_save_fg)
+    frame_bg = C["frame_main_bg"]
+
+    existing = auth_setup.load_lastfm_credentials()
+
+    header = tk.Frame(win, background=header_bg)
+    header.pack(fill="x", padx=10, pady=10)
+
+    tk.Label(
+        header,
+        text="Last.fm Credentials",
+        background=header_bg,
+        foreground=label_fg,
+        font=ui_font(14),
+    ).pack(fill="both", pady=5, padx=5)
+
+    # ---------- fields ----------
+    fields_frame = tk.Frame(win, background=frame_bg)
+    fields_frame.pack(fill="x", padx=20, pady=10)
+
+    api_key_var = tk.StringVar(value=existing.get("api_key", ""))
+    api_secret_var = tk.StringVar(value=existing.get("api_secret", ""))
+
+    fields = [
+        ("API Key", api_key_var),
+        ("API Secret", api_secret_var),
+    ]
+
+    for i, (label_text, var) in enumerate(fields):
+        tk.Label(
+            fields_frame,
+            text=label_text,
+            background=frame_bg,
+            foreground=label_fg,
+            font=ui_font(10),
+        ).grid(row=i, column=0, sticky="w", pady=5)
+
+        entry = tk.Entry(
+            fields_frame,
+            textvariable=var,
+            background=entry_bg,
+            foreground=entry_fg,
+            insertbackground=entry_fg,
+            font=ui_font(10),
+            width=40,
+            show="*",
+        )
+        entry.grid(row=i, column=1, sticky="ew", pady=5, padx=(10, 0))
+
+    fields_frame.columnconfigure(1, weight=1)
+
+    # ---------- status ----------
+    status_label = tk.Label(
+        win,
+        text="",
+        background=frame_bg,
+        foreground=label_fg,
+        font=ui_font(10),
+    )
+    status_label.pack(padx=20, pady=5)
+
+    # ---------- buttons ----------
+    btn_frame = tk.Frame(win, background=frame_bg)
+    btn_frame.pack(fill="x", padx=20, pady=10)
+
+    def _get_creds():
+        return {
+            "api_key": api_key_var.get().strip(),
+            "api_secret": api_secret_var.get().strip(),
+        }
+
+    def _all_filled(creds) -> bool:
+        return all(v for v in creds.values())
+
+    # ---- Delete ----
+    def delete_credentials():
+        try:
+            deleted = auth_setup.delete_lastfm_credentials()
+            if deleted:
+                api_key_var.set("")
+                api_secret_var.set("")
+                status_label.config(
+                    text="Credentials deleted",
+                    foreground=C["label_playlist_good_fg"],
+                )
+                if on_success:
+                    on_success("lastfm")
+            else:
+                status_label.config(text="No credentials file found", foreground="red")
+        except Exception as e:
+            status_label.config(text=f"Delete failed: {e}", foreground="red")
+
+    # ---- Test ----
+    def test_credentials():
+        creds = _get_creds()
+        if not _all_filled(creds):
+            status_label.config(text="All fields are required", foreground="red")
+            return
+        status_label.config(text="Testing...", foreground=label_fg)
+        _set_busy(True)
+
+        # Test validates the key/secret pair ONLY (a signed auth.getToken
+        # round trip - fast, no browser).  Running the full web-auth flow
+        # here would open a browser and poll up to 120 s for a token the
+        # user would then have to authorize AGAIN on Save.
+        def run():
+            result = auth_setup.validate_lastfm_credentials(**creds)
+            try:
+                win.after(0, _test_done, result)
+            except Exception:
+                logger.debug("Login dialog closed during verification", exc_info=True)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _test_done(result):
+        try:
+            if not win.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        _set_busy(False)
+        if result.get("ok"):
+            status_label.config(
+                text="OK: credentials valid - press Save to authorize",
+                foreground=C["label_playlist_good_fg"],
+            )
+        else:
+            status_label.config(text=result.get("error", "Error"), foreground="red")
+
+    # ---- Save ----
+    def save_credentials():
+        creds = _get_creds()
+        if not _all_filled(creds):
+            status_label.config(text="All fields are required", foreground="red")
+            return
+        status_label.config(text="Verifying...", foreground=label_fg)
+        _set_busy(True)
+
+        def run():
+            result = auth_setup.save_and_verify_lastfm_credentials(**creds)
+            try:
+                win.after(0, _save_done, result)
+            except Exception:
+                logger.debug("Login dialog closed during verification", exc_info=True)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _save_done(result):
+        try:
+            if not win.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        _set_busy(False)
+        if result.get("ok"):
+            status_label.config(
+                text=f"OK: {result.get('username', 'Last.fm')}",
+                foreground=C["label_playlist_good_fg"],
+            )
+            if on_success:
+                on_success("lastfm")
+        else:
+            status_label.config(text=result.get("error", "Error"), foreground="red")
+
+    # ---- layout ----
+    btn_delete = tk.Button(
+        btn_frame,
+        text="Delete",
+        cursor="hand2",
+        **button_close_btn,
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        command=delete_credentials,
+    )
+    btn_delete.pack(side="left")
+
+    btn_test = tk.Button(
+        btn_frame,
+        text="Test",
+        cursor="hand2",
+        **btn_test_btn,
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        command=test_credentials,
+    )
+    btn_test.pack(side="left", padx=5)
+
+    btn_save = tk.Button(
+        btn_frame,
+        text="Save",
+        cursor="hand2",
+        **button_save_btn,
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        command=save_credentials,
+    )
+    btn_save.pack(side="right")
+
+    def _set_busy(busy: bool) -> None:
+        """Disable/enable every credential button while a verify round trip
+        is in flight."""
+        state = "disabled" if busy else "normal"
+        cursor = "arrow" if busy else "hand2"
+        btn_test.config(state=state, cursor=cursor)
+        btn_save.config(state=state, cursor=cursor)
+        btn_delete.config(state=state, cursor=cursor)
+
+    center_window(win)
+
+
+def _on_soundcloud(parent, on_success):
+    """Show the SoundCloud login dialog (client id + secret + refresh token).
+
+    Mirrors the Spotify tile: paste client id / client secret / refresh
+    token, verify-first Test and Save, Delete.  The actual credential
+    i/o and /me verification live in the plugin (via auth_setup), which
+    owns the single-writer contract.
+    """
+    win = tk.Toplevel(parent)
+    win.title("SoundCloud Login")
+    win.configure(background=C["frame_main_bg"])
+    win.transient(parent)
+    win.update_idletasks()
+    win.grab_set()
+
+    # ---------- theme colours ----------
+    header_bg = C["frame_head_bg"]
+    label_fg = C["label_def_fg"]
+    entry_bg = C["entry_default_bg"]
+    entry_fg = C["entry_default_fg"]
+    button_close_bg = C["button_close_bg"]
+    button_close_fg = C["button_close_fg"]
+    button_close_btn = btn_colors(button_close_bg, button_close_fg)
+    btn_test_bg = C["button_main_bg"]
+    btn_test_fg = C["button_main_fg"]
+    btn_test_btn = btn_colors(btn_test_bg, btn_test_fg)
+    button_save_bg = C["button_save_bg"]
+    button_save_fg = C["button_save_fg"]
+    button_save_btn = btn_colors(button_save_bg, button_save_fg)
+    frame_bg = C["frame_main_bg"]
+
+    existing = auth_setup.load_soundcloud_credentials()
+
+    header = tk.Frame(win, background=header_bg)
+    header.pack(fill="x", padx=10, pady=10)
+
+    tk.Label(
+        header,
+        text="SoundCloud Credentials",
+        background=header_bg,
+        foreground=label_fg,
+        font=ui_font(14),
+    ).pack(fill="both", pady=5, padx=5)
+
+    # ---------- fields ----------
+    fields_frame = tk.Frame(win, background=frame_bg)
+    fields_frame.pack(fill="x", padx=20, pady=10)
+
+    client_id_var = tk.StringVar(value=existing.get("client_id", ""))
+    client_secret_var = tk.StringVar(value=existing.get("client_secret", ""))
+    refresh_token_var = tk.StringVar(value=existing.get("refresh_token", ""))
+
+    fields = [
+        ("Client ID", client_id_var),
+        ("Client Secret", client_secret_var),
+        ("Refresh Token", refresh_token_var),
+    ]
+
+    for i, (label_text, var) in enumerate(fields):
+        tk.Label(
+            fields_frame,
+            text=label_text,
+            background=frame_bg,
+            foreground=label_fg,
+            font=ui_font(10),
+        ).grid(row=i, column=0, sticky="w", pady=5)
+
+        entry = tk.Entry(
+            fields_frame,
+            textvariable=var,
+            background=entry_bg,
+            foreground=entry_fg,
+            insertbackground=entry_fg,
+            font=ui_font(10),
+            width=40,
+            show="*",
+        )
+        entry.grid(row=i, column=1, sticky="ew", pady=5, padx=(10, 0))
+
+    fields_frame.columnconfigure(1, weight=1)
+
+    # ---------- status ----------
+    status_label = tk.Label(
+        win,
+        text="",
+        background=frame_bg,
+        foreground=label_fg,
+        font=ui_font(10),
+    )
+    status_label.pack(padx=20, pady=5)
+
+    # ---------- buttons ----------
+    btn_frame = tk.Frame(win, background=frame_bg)
+    btn_frame.pack(fill="x", padx=20, pady=10)
+
+    def _get_creds():
+        return {
+            "client_id": client_id_var.get().strip(),
+            "client_secret": client_secret_var.get().strip(),
+            "refresh_token": refresh_token_var.get().strip(),
+        }
+
+    def _all_filled(creds) -> bool:
+        return all(v for v in creds.values())
+
+    # ---- Delete ----
+    def delete_credentials():
+        try:
+            deleted = auth_setup.delete_soundcloud_credentials()
+            if deleted:
+                client_id_var.set("")
+                client_secret_var.set("")
+                refresh_token_var.set("")
+                status_label.config(
+                    text="Credentials deleted",
+                    foreground=C["label_playlist_good_fg"],
+                )
+                if on_success:
+                    on_success("soundcloud")
+            else:
+                status_label.config(text="No credentials file found", foreground="red")
+        except Exception as e:
+            status_label.config(text=f"Delete failed: {e}", foreground="red")
+
+    # ---- Test ----
+    def test_credentials():
+        creds = _get_creds()
+        if not _all_filled(creds):
+            status_label.config(text="All fields are required", foreground="red")
+            return
+        status_label.config(text="Testing...", foreground=label_fg)
+        _set_busy(True)
+
+        def run():
+            result = auth_setup.verify_soundcloud_credentials(**creds)
+            try:
+                win.after(0, _test_done, result)
+            except Exception:
+                logger.debug("Login dialog closed during verification", exc_info=True)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _test_done(result):
+        try:
+            if not win.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        _set_busy(False)
+        if result.get("ok"):
+            status_label.config(
+                text=f"OK: {result['display_name']}",
+                foreground=C["label_playlist_good_fg"],
+            )
+        else:
+            status_label.config(text=result.get("error", "Error"), foreground="red")
+
+    # ---- Save ----
+    def save_credentials():
+        creds = _get_creds()
+        if not _all_filled(creds):
+            status_label.config(text="All fields are required", foreground="red")
+            return
+        status_label.config(text="Verifying...", foreground=label_fg)
+        _set_busy(True)
+
+        def run():
+            result = auth_setup.save_and_verify_soundcloud_credentials(**creds)
+            try:
+                win.after(0, _save_done, result)
+            except Exception:
+                logger.debug("Login dialog closed during verification", exc_info=True)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _save_done(result):
+        try:
+            if not win.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        _set_busy(False)
+        if result.get("ok"):
+            status_label.config(
+                text=f"OK: {result.get('display_name', 'SoundCloud')}",
+                foreground=C["label_playlist_good_fg"],
+            )
+            if on_success:
+                on_success("soundcloud")
+        else:
+            status_label.config(text=result.get("error", "Error"), foreground="red")
+
+    # ---- layout ----
+    btn_delete = tk.Button(
+        btn_frame,
+        text="Delete",
+        cursor="hand2",
+        **button_close_btn,
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        command=delete_credentials,
+    )
+    btn_delete.pack(side="left")
+
+    btn_test = tk.Button(
+        btn_frame,
+        text="Test",
+        cursor="hand2",
+        **btn_test_btn,
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        command=test_credentials,
+    )
+    btn_test.pack(side="left", padx=5)
+
+    btn_save = tk.Button(
+        btn_frame,
+        text="Save",
+        cursor="hand2",
+        **button_save_btn,
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        command=save_credentials,
+    )
+    btn_save.pack(side="right")
+
+    def _set_busy(busy: bool) -> None:
+        """Disable/enable every credential button while a verify round trip
+        is in flight."""
         state = "disabled" if busy else "normal"
         cursor = "arrow" if busy else "hand2"
         btn_test.config(state=state, cursor=cursor)

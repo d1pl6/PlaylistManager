@@ -336,6 +336,14 @@ class SearchManager:
         return frame
 
     def _dismiss_all_search_results(self) -> None:
+        # Invalidate any in-flight song-search worker: its results would
+        # otherwise re-apply after dismissal (the token guard in
+        # _apply_song_search_results only compares against this counter)
+        # and rebuild orphaned result frames the user can no longer
+        # dismiss (search mode is off, so the close button is gone).
+        # This covers both dismiss() and the empty-query path in
+        # _filter_songs, which returns early without bumping the token.
+        self._song_search_token += 1
         for idx, rf in self._search_results.items():
             try:
                 rf.grid_forget()

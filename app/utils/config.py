@@ -6,7 +6,16 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-SETTINGS_PATH = Path(__file__).resolve().parents[2] / "cfg" / "settings.ini"
+# ---------------------------------------------------------------------------
+# Profile-aware paths: imported early to initialise the active profile
+# before any module-level path constant is bound.  profile_store has no
+# app imports (stdlib only), so this import is cheap and cycle-free.
+# ---------------------------------------------------------------------------
+from services import profile_store as _profile_store
+
+_profile_store.initialize()
+
+SETTINGS_PATH = _profile_store.cfg_dir() / "settings.ini"
 
 DEFAULT_SETTINGS = {
     "update_check": {"is_true": "yes"},
@@ -19,9 +28,27 @@ DEFAULT_SETTINGS = {
     "showcase_log": {"is_true": "yes"},  # show the log_artist/log_name/log_log row
     "playlist_stats": {"is_true": "yes"},  # show the song count / followers / duration row
     "layout": {"columns": "2"},          # int, playlist card grid columns, clamped 1-4
+    # Extra duplicate check: near-duplicate detection on the add path
+    # (same artist + similar title + close duration).  Knobs are read by
+    # services/duplicate_check.py callers.
+    "duplicate_check": {"is_true": "no", "title_threshold": "0.85", "duration_tolerance": "5"},
+    # Last.fm integration settings (service plugin, optional)
+    "like_button": {"is_true": "no"},  # show the ♥/♡ button under "remove from playlist"
+    # Scrobble a song when an add-flow succeeds.  Defaults to no like the
+    # other Last.fm side effects: scrobbling is a privacy/audit-relevant
+    # action and must be opted into, not silently switched on the moment
+    # the plugin is configured.
+    "scrobble_on_add": {"is_true": "no"},
+    "scrobble_keybind": {"keybind": ""},  # standalone "scrobble current song, without adding it" combo
+    # SoundCloud capture mode: how the add-flow acquires the current song.
+    # "api" reads /me/recently-played/tracks[0]; "hybrid" prefers the browser
+    # extension (exact URL + play/pause state) and falls back to the api path
+    # on a receiver miss; "extension" is receiver-only.  Read by
+    # integrations/soundcloud/flow.py.
+    "soundcloud": {"capture_mode": "hybrid"},
 }
 
-THEME_PATH = Path(__file__).resolve().parents[2] / "cfg" / "theme.ini"
+THEME_PATH = _profile_store.cfg_dir() / "theme.ini"
 
 DEFAULT_THEME = {
     "root_background": {"background": "#1A1A1A"},
@@ -42,7 +69,7 @@ DEFAULT_THEME = {
     },
     "button_header": {
         "background": "#6C6C6C",
-        "foreground": "#FFFFFF",
+        "foreground": "#000000",
     },
     "button_main": {
         "background": "#3A3A3A",
@@ -134,26 +161,6 @@ def _safe_read_config(cfg: ConfigParser, path: Path) -> ConfigParser:
     return cfg
 
 
-def _strip_legacy_active_keys(cfg: ConfigParser) -> bool:
-    """Drop dead ``activebackground``/``activeforeground`` theme options.
-
-    The smart hover system (0.2.x, ``btn_colors()`` in utils/theme.py)
-    derives hover colours from the resting colours, so these options in a
-    user's ``cfg/theme.ini`` are dead configuration left over from before
-    the migration.  Runs on every app start via ``ensure_theme_file()``;
-    idempotent, so repeated calls are harmless.
-
-    MIGRATION HELPER - remove together with its call in ``ensure_theme_file``
-    in 0.3.0.
-    """
-    changed = False
-    for section in list(cfg.sections()):
-        for option in ("activebackground", "activeforeground"):
-            if cfg.remove_option(section, option):
-                changed = True
-    return changed
-
-
 def ensure_theme_file() -> None:
     cfg = ConfigParser()
     if THEME_PATH.exists():
@@ -168,7 +175,6 @@ def ensure_theme_file() -> None:
                 if key not in cfg[section]:
                     cfg[section][key] = value
                     changed = True
-    changed = _strip_legacy_active_keys(cfg) or changed
     if not THEME_PATH.exists() or changed:
         _write_ini_file(THEME_PATH, cfg)
 

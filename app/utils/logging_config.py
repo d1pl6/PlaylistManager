@@ -13,16 +13,20 @@ noise is hidden unless verbosity is requested:
 
 Custom levels (so they survive the module-level ``basicConfig`` levels):
 
-  TRACE = 5   ultra-verbose internals (payload dumps) - only with --trace
-  USER  = 25  user-facing status - visible in normal runs
+  TRACE  = 5   ultra-verbose internals (payload dumps) - only with --trace
+  NETWORK= 15  HTTP / network round trips (access logs, fetch errors) -
+               hidden at --verbose, shown from --debug up
+  USER   = 25  user-facing status - visible in normal runs
 """
 
 import logging
 
 TRACE_LEVEL = 5
+NETWORK_LEVEL = 15
 USER_LEVEL = 25
 
 logging.addLevelName(TRACE_LEVEL, "TRACE")
+logging.addLevelName(NETWORK_LEVEL, "NETWORK")
 logging.addLevelName(USER_LEVEL, "USER")
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s: %(message)s"
@@ -58,14 +62,30 @@ def trace_log(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
     logger.log(TRACE_LEVEL, msg, *args, **kwargs)
 
 
+def network_log(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
+    """Emit a network layer line (hidden at --verbose, shown from --debug up).
+
+    Use for HTTP / network round trips and their failures: server access
+    logs, thumbnail/endpoint fetch errors, and similar low-noise-per-value
+    diagnostics.  These are too chatty for an INFO ``--verbose`` run but
+    useful when debugging connectivity, so they sit on their own level
+    between DEBUG and INFO.
+
+    Prefer ``%``-style arguments (``network_log(logger, "%s -> %s",
+    verb, url)``) over f-strings: formatting is skipped entirely when the
+    level is disabled.
+    """
+    logger.log(NETWORK_LEVEL, msg, *args, **kwargs)
+
+
 def configure_logging(verbosity: int = 0) -> None:
     """Configure root logging for the whole app.
 
     Args:
         verbosity:
             0  default - USER and above (errors + user-facing status)
-            1  (-v)    - INFO and above
-            2  (--debug / -vv) - DEBUG and above
+            1  (-v)    - INFO and above (NETWORK+TRACE hidden)
+            2  (--debug / -vv) - DEBUG and above (NETWORK visible)
             3  (--trace / -vvv) - TRACE and above + third-party debug
     """
     levels = (USER_LEVEL, logging.INFO, logging.DEBUG, TRACE_LEVEL)

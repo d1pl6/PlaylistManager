@@ -149,6 +149,7 @@ def show_theme_dialog(parent, on_theme_change=None):
         _refresh_all()
 
     _restore_btn = None  # populated below; referenced by _refresh_all
+    button_frame = tk.Frame(inner, background=win_bg)
 
     def _refresh_all() -> None:
         """Sync swatch buttons and dialog chrome after a preset or defaults restore."""
@@ -229,7 +230,15 @@ def show_theme_dialog(parent, on_theme_change=None):
     _create_theme_button("Entry playlist foreground", "entry_playlist", "foreground")
     _create_theme_button("Entry playlist readonlybackground", "entry_playlist", "readonlybackground")
 
-    button_frame = tk.Frame(inner, background=win_bg)
+    _create_theme_button("Playlist stats background", "label_playlist_stats", "background")
+    _create_theme_button("Playlist stats foreground", "label_playlist_stats", "foreground")
+
+    _create_theme_button("Search bar background", "search_bar", "background")
+    _create_theme_button("Search bar foreground", "search_bar", "foreground")
+
+    _create_theme_button("Search result background", "search_result", "background")
+    _create_theme_button("Search result foreground", "search_result", "foreground")
+
     button_frame.pack(fill="x", pady=6)
 
     tk.Button(
