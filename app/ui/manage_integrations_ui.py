@@ -617,7 +617,7 @@ def show_manage_dialog(
         _uninstall_platform(pid, plugin, teardown_errors)
 
     # ------------------------------------------------------------------
-    # Update (per-platform) — re-download replaces the plugin in-place
+    # Update (per-platform) - re-download replaces the plugin in-place
     # ------------------------------------------------------------------
 
     def _start_update(pid: str, row: tk.Frame, status_lbl: tk.Label) -> None:

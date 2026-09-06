@@ -18,7 +18,6 @@ from PIL import Image
 from services.playlist_store import PlaylistStore
 from services.playlist_url import build_song_url
 from services import scrobble_log
-from services.song_manager import SongManager
 from ui.tooltip import ToolTip
 from utils.config import get_setting
 from utils.icons import IconService
@@ -43,10 +42,6 @@ class ShowcaseManager:
         close_playlist_img=None,
         heart_empty_img=None,
         heart_full_img=None,
-        make_keybind_callbacks=None,
-        on_reload_requested=None,
-        get_search_results_height=None,
-        on_remove_done=None,
         integrations=None,
         card_index_fn=None,
         search_results=None,
@@ -60,10 +55,6 @@ class ShowcaseManager:
         self._close_playlist_img = close_playlist_img
         self._heart_empty_img = heart_empty_img
         self._heart_full_img = heart_full_img
-        self._make_keybind_callbacks = make_keybind_callbacks
-        self._on_reload_requested = on_reload_requested
-        self._get_search_results_height = get_search_results_height
-        self._on_remove_done = on_remove_done
         self.integrations = integrations
         self._card_index_fn = card_index_fn
         self._search_results = search_results or {}
@@ -242,7 +233,7 @@ class ShowcaseManager:
         showcase = tk.Frame(main_frame, background=frame_playlist_bg)
         showcase.grid_columnconfigure(1, weight=1)
 
-        # Resolve the owning card once — constant for the entire showcase.
+        # Resolve the owning card once - constant for the entire showcase.
         card = next(
             (c for c in self._card_grid.cards if c.frame is main_frame), None
         )
@@ -304,7 +295,7 @@ class ShowcaseManager:
             remove_btn.grid(row=grid_row, column=2, sticky="ne")
             song_artists.grid(row=grid_row + 1, column=1, sticky="nsew")
 
-            # Like button (♥/♡) — shown only if like_button setting is enabled
+            # Like button (♥/♡) - shown only if like_button setting is enabled
             if get_setting("like_button"):
                 like_btn = tk.Button(
                     showcase,
@@ -508,6 +499,7 @@ class ShowcaseManager:
         )
         playlist_id = playlist_data.get("playlist_id", "") if playlist_data else ""
         integration = self.integrations.get(platform) if self.integrations else None
+        ok = False  # shared with work(); read by done() on the main thread
 
         def done() -> None:
             card.removing = False
@@ -536,6 +528,7 @@ class ShowcaseManager:
                 )
 
         def work() -> None:
+            nonlocal ok
             ok = False
             try:
                 if not playlist_id:

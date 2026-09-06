@@ -232,20 +232,24 @@ class SearchManager:
         token = self._song_search_token
 
         sm = self._song_manager
-        cards: list[tuple[int, str, str, str]] = []
-        for i, card in enumerate(self._card_grid.cards):
+        # Capture the live card WIDGETs (not just indices) so the worker can
+        # hand the results back keyed by card while still resolving to the
+        # right card: a card can be closed/re-numbered while the search is
+        # in flight (same hazard _make_keybind_callbacks guards against).
+        cards: list[tuple[object, str, str, str]] = []
+        for card in self._card_grid.cards:
             try:
                 name = card.name_label.cget("text")
                 platform = card.platform
             except (IndexError, tk.TclError):
                 continue
             playlist_id = card.playlist_id
-            cards.append((i, name, platform, playlist_id))
+            cards.append((card, name, platform, playlist_id))
 
         def _search_worker() -> None:
-            results: dict[int, list] = {}
-            for i, name, platform, playlist_id in cards:
-                results[i] = sm.search_songs(
+            results: dict[object, list] = {}
+            for card, name, platform, playlist_id in cards:
+                results[card] = sm.search_songs(
                     name, q, platform=platform, playlist_id=playlist_id
                 )
             try:
@@ -274,12 +278,22 @@ class SearchManager:
     # ------------------------------------------------------------------
 
     def _apply_song_search_results(
-        self, query: str, token: int, results: dict[int, list]
+        self, query: str, token: int, results: dict[object, list]
     ) -> None:
         if token != self._song_search_token:
             return
-        for i, card in enumerate(self._card_grid.cards):
-            matches = results.get(i)
+        for card, matches in results.items():
+            # Resolve the live index from the captured card widget so a card
+            # closed/re-numbered while the search was in flight doesn't apply
+            # its results to the wrong neighbour.
+            try:
+                i = self._card_grid.cards.index(card)
+            except ValueError:
+                # Card (or its whole platform) closed mid-search - its
+                # results are stale, drop them.
+                continue
+            if not self._card_grid.cards[i].frame.winfo_exists():
+                continue
             old = self._search_results.pop(i, None)
             if old is not None:
                 try:
@@ -287,8 +301,6 @@ class SearchManager:
                     old.destroy()
                 except tk.TclError:
                     pass
-            if matches is None:
-                continue
             results_frame = self._build_search_results_frame(card.frame, matches)
             self._search_results[i] = results_frame
             results_frame.grid(row=3, column=0, sticky="nsew", padx=2)

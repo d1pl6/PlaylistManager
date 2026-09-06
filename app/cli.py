@@ -244,6 +244,8 @@ def _init_platform(plugin_registry, platform_id: str):
 
 def _auth_error(plugin) -> str:
     """Message for an unconfigured platform, matching the song-add path."""
+    if plugin is None:
+        return "platform plugin not installed - run the plugin install first"
     return f"{plugin.display_name} not configured - run the GUI auth setup first"
 
 
@@ -431,7 +433,8 @@ def run_add_url(url: str) -> int:
     integrations = _build_integrations()
     integration = integrations.get(platform)
     if integration is None or not integration.is_authenticated():
-        print(f"error: {_auth_error(platform)}", file=sys.stderr)
+        plugin = get_default_registry().get(platform)
+        print(f"error: {_auth_error(plugin)}", file=sys.stderr)
         return 1
 
     # Platform-first: never register a playlist the platform cannot
@@ -626,7 +629,7 @@ def run_scrobble() -> int:
         return 1
 
     # Try each authenticated platform's capture path until one produces a
-    # song — mirrors keybind_controller._scrobble_current_action.
+    # song - mirrors keybind_controller._scrobble_current_action.
     for platform_id, integration in integrations.get_all().items():
         if not integration.is_authenticated():
             continue
@@ -652,7 +655,7 @@ def run_scrobble() -> int:
                 print(f"error: scrobble failed for "
                       f"{song_data.get('title', 'unknown')}", file=sys.stderr)
                 return 1
-            # Nothing playing on this platform — try the next.
+            # Nothing playing on this platform - try the next.
             logger.debug("No song playing on %s: %s", platform_id, error)
         except Exception as e:
             logger.debug("Capture failed on %s: %s", platform_id, e)
@@ -1126,10 +1129,10 @@ def _run_flow(
         # the scrobble ledger so the remove-song path can later delete
         # THIS exact scrobble (not the track's most recent one).
         if status == "added" and scrobble_integ is not None:
-            song_data = result.get("song", {})
-            if song_data:
+            result_song = result.get("song", {})
+            if result_song:
                 try:
-                    ts = scrobble_integ.scrobble(song_data)
+                    ts = scrobble_integ.scrobble(result_song)
                     song_id = result.get("song_id")
                     if ts is not None and song_id is not None:
                         scrobble_log.record_scrobble(

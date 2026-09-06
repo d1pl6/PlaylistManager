@@ -249,8 +249,11 @@ def _pick_thumbnail(thumbnails: list) -> Optional[str]:
     return picked.get("url")
 
 
-# Normalisation helper
-def _normalize_text(text: str) -> str:
+# Normalisation helper - builds the SQL comparison key for the
+# ``LOWER(TRIM(title)) = ?`` lookups below. NOT the rich duplicate-check
+# normaliser (duplicate_check.py has its own); keep the names distinct so
+# they are never swapped by accident.
+def _normalize_title_key(text: str) -> str:
     return text.strip().lower()
 
 # ------------------------------------------------------------------
@@ -409,7 +412,7 @@ class SongManager:
             ) as conn:
                 cursor = conn.cursor()
 
-                norm_title = _normalize_text(title)
+                norm_title = _normalize_title_key(title)
                 # Artists are stored as the raw list JSON, so compare against
                 # the same JSON rather than a normalised variant.
                 artists_json = json.dumps(artists)
@@ -451,7 +454,7 @@ class SongManager:
                 cursor = conn.cursor()
 
                 artists_json = json.dumps(artists)
-                norm_title = _normalize_text(title)
+                norm_title = _normalize_title_key(title)
 
                 # Atomic transaction: check + insert to prevent TOCTOU.
                 # Only open a transaction when none is active on this

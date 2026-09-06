@@ -107,7 +107,6 @@ class PluginInfo:
     # "api" = the flow reads the platform API directly, "" = declared
     # but not wired into flows yet.
     flow_type: str = ""
-    integration_module: str = "integration"
     integration_class: str = ""
     # Auth-manager singleton inside the plugin package (module + attribute),
     # e.g. youtube_music.youtube_auth. Resolved lazily like every class ref.
@@ -168,8 +167,17 @@ class PluginInfo:
         return getattr(module, class_name)
 
     def import_integration(self):
-        """Lazily import and return the integration class."""
-        return self._class("integration_module", "integration_class")
+        """Lazily import and return the integration class.
+
+        The integration class always lives in ``integration.py`` (a fixed
+        plugin convention, hardcoded here, not a manifest field).
+        """
+        class_name = self.integration_class
+        if not class_name:
+            raise AttributeError(
+                f"plugin '{self.id}': 'integration_class' not set in plugin.json"
+            )
+        return getattr(self._import("integration"), class_name)
 
     def import_auth_attr(self):
         """Return the plugin's auth-manager singleton (e.g. youtube_auth)."""
@@ -303,25 +311,32 @@ class PluginRegistry:
         the remaining platforms stay usable. Import errors are deferred
         to first use - see PluginInfo. A missing integrations folder is
         zero plugins, not an error.
+
+        The registry is swapped in atomically (built into a fresh dict then
+        assigned) so a concurrent ``get()`` while re-scanning (e.g. App's
+        hot reload) never observes a temporarily-empty registry.
         """
-        self._plugins.clear()
         base = base_dir if base_dir is not None else self.base_dir
         if not base.is_dir():
             logger.warning("No integrations directory at %s", base)
+            self._plugins = {}
             return self
 
+        new_plugins: Dict[str, PluginInfo] = {}
         for manifest_path in sorted(base.glob("*/plugin.json")):
             info = self._load_manifest(manifest_path)
             if info is None:
                 continue
-            if info.id in self._plugins:
+            if info.id in new_plugins:
                 logger.warning(
                     "Duplicate plugin id '%s' (%s) - keeping the first "
                     "declaration found",
                     info.id, manifest_path.parent.name,
                 )
                 continue
-            self._plugins[info.id] = info
+            new_plugins[info.id] = info
+
+        self._plugins = new_plugins
 
         logger.info(
             "Discovered plugins: %s",
@@ -355,8 +370,9 @@ class PluginRegistry:
 
         # Optional class references need their module and class name
         # together; half-declared pairs would only fail later at
-        # lazy-import time. (integration.py is implicit - its module key
-        # defaults - so only integration_class is checked above.)
+        # lazy-import time. The integration class is a fixed convention
+        # (always integration.py - hardcoded, not a manifest field), so
+        # only integration_class is checked above.
         pairs = (
             ("auth_module", "auth_attr"),
             ("flow_module", "flow_class"),
@@ -426,7 +442,6 @@ class PluginRegistry:
             auth_file_fallbacks=self._validate_fallback_paths(plugin_id, raw.get("auth_file_fallbacks", [])),
             url_hosts=list(raw.get("url_hosts", [])),
             flow_type=flow_type,
-            integration_module=raw.get("integration_module") or "integration",
             integration_class=raw["integration_class"],
             auth_module=raw.get("auth_module", ""),
             auth_attr=raw.get("auth_attr", ""),

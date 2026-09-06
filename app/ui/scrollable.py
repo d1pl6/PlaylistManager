@@ -235,16 +235,3 @@ class ScrollableFrame(tk.Frame):
         except tk.TclError:
             return None
         return "break"
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def grid_configure_children(self, **kw) -> None:
-        """Pass ``grid_columnconfigure`` to the content frame."""
-        self.content.grid_columnconfigure(**kw)
-
-    def destroy_content(self) -> None:
-        """Destroy all children inside the content frame."""
-        for child in self.content.winfo_children():
-            child.destroy()
