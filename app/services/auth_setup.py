@@ -74,9 +74,15 @@ def save_spotify_credentials(
 
     Raises ``OSError`` on write failure.
     """
-    from integrations.spotify.spotify import (
-        save_spotify_credentials_file,
-    )
+    try:
+        from integrations.spotify.spotify import (
+            save_spotify_credentials_file,
+        )
+    except ImportError:
+        logger.warning("Spotify plugin not found - cannot save credentials")
+        raise OSError(
+            "Spotify plugin not found - cannot save credentials"
+        ) from None
 
     save_spotify_credentials_file(client_id, client_secret, refresh_token)
 

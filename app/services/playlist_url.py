@@ -8,8 +8,11 @@ metadata (:func:`build_playlist_url`, :func:`build_song_url`).
 Used by ``playlistmanager -p add <URL>``, by ``del`` / ``ref`` URL
 targets, and by the UI (click-to-open in card_grid / showcase_manager).
 
-Host knowledge lives in the plugin manifests (``url_hosts`` in each
-integrations/*/plugin.json); this module matches only generic URL shapes:
+Host knowledge and URL templates both live in the plugin manifests
+(``url_hosts``, ``playlist_url_template``, ``song_url_template`` in each
+integrations/*/plugin.json) - the manifest is the single source of truth
+and this module never hardcodes per-platform data. It matches only
+generic URL shapes:
 
 - ``/playlist?list=<id>`` query-parameter form (YouTube Music and friends)
 - ``/playlist/<id>`` path form, optionally behind a locale segment
@@ -158,29 +161,6 @@ def parse_playlist_url(
 # URL building (inverse of parsing)
 # ------------------------------------------------------------------
 
-# Per-platform URL templates — fallback for plugins that don't declare
-# their own in plugin.json.  The first path segment is the playlist
-# URL shape, the second is the song/track URL shape.  ``None`` means
-# "use the plugin host with a generic ``/<id>`` fallback".
-_PLATFORM_URL_TEMPLATES: dict[str, tuple[str | None, str | None]] = {
-    "youtube_music": (
-        "https://{host}/playlist?list={id}",
-        "https://{host}/watch?v={id}",
-    ),
-    "spotify": (
-        "https://{host}/playlist/{id}",
-        "https://{host}/track/{id}",
-    ),
-}
-
-# Hardcoded fallback hosts (used when the plugin manifest doesn't declare
-# url_hosts or the registry can't be loaded).
-_PLATFORM_DEFAULT_HOSTS: dict[str, str] = {
-    "youtube_music": "music.youtube.com",
-    "spotify": "open.spotify.com",
-}
-
-
 # SoundCloud URN prefixes per kind.  The SoundCloud flows store URNs
 # (soundcloud:playlists:123 / soundcloud:tracks:123); the standalone
 # repos follow the same convention.
@@ -224,7 +204,12 @@ def _resolve_host(
     platform: str,
     plugin_registry=None,
 ) -> str | None:
-    """Return the best-guess host for *platform* from the plugin registry."""
+    """Return the best-guess host for *platform* from the plugin manifest.
+
+    Hosts are manifest-declared (``url_hosts``) - there is no hardcoded
+    fallback list. Returns ``None`` when the plugin is unknown or declares
+    no hosts.
+    """
     try:
         if plugin_registry is None:
             from plugin_loader import get_default_registry
@@ -234,7 +219,7 @@ def _resolve_host(
             return plugin.url_hosts[0]
     except Exception:
         pass
-    return _PLATFORM_DEFAULT_HOSTS.get(platform)
+    return None
 
 
 def build_playlist_url(
@@ -246,12 +231,10 @@ def build_playlist_url(
 
     Returns ``None`` when *playlist_id* is empty or the platform is unknown.
 
-    Template resolution order:
-
-    1. Plugin-declared ``playlist_url_template`` in plugin.json
-       (new platforms declare their own URL shape).
-    2. Hardcoded ``_PLATFORM_URL_TEMPLATES`` (backward-compatible).
-    3. Generic ``https://<host>/<id>`` with the resolved host.
+    Template resolution (the ONLY source of URL shapes is plugin.json):
+    1. Plugin-declared ``playlist_url_template`` in plugin.json.
+    2. Generic ``https://<host>/<id>`` when the plugin declares hosts but
+       no template (a convention default, not a per-platform data copy).
     """
     if not playlist_id:
         return None
@@ -264,7 +247,7 @@ def build_playlist_url(
 
     template = None
 
-    # 1. Try plugin-declared template.
+    # 1. Plugin-declared template (the single source of URL shapes).
     try:
         if plugin_registry is None:
             from plugin_loader import get_default_registry
@@ -275,17 +258,11 @@ def build_playlist_url(
     except Exception:
         pass
 
-    # 2. Fall back to hardcoded template.
-    if not template:
-        templates = _PLATFORM_URL_TEMPLATES.get(platform)
-        if templates and templates[0]:
-            template = templates[0]
-
     if template:
         host = _resolve_host(platform, plugin_registry) or ""
         return template.format(host=host, id=playlist_id)
 
-    # 3. Unknown platform — try generic ``/<id>`` with the resolved host.
+    # 2. Plugin with hosts but no template - generic ``/<id>`` default.
     host = _resolve_host(platform, plugin_registry)
     if host:
         return f"https://{host}/{playlist_id}"
@@ -313,7 +290,7 @@ def build_song_url(
 
     template = None
 
-    # 1. Try plugin-declared template.
+    # 1. Plugin-declared template (the single source of URL shapes).
     try:
         if plugin_registry is None:
             from plugin_loader import get_default_registry
@@ -324,16 +301,11 @@ def build_song_url(
     except Exception:
         pass
 
-    # 2. Fall back to hardcoded template.
-    if not template:
-        templates = _PLATFORM_URL_TEMPLATES.get(platform)
-        if templates and templates[1]:
-            template = templates[1]
-
     if template:
         host = _resolve_host(platform, plugin_registry) or ""
         return template.format(host=host, id=track_id)
 
+    # 2. Plugin with hosts but no template - generic ``/<id>`` default.
     host = _resolve_host(platform, plugin_registry)
     if host:
         return f"https://{host}/{track_id}"

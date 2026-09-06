@@ -93,7 +93,7 @@ python -m app -s                   # scrobble the currently-playing song
 python -m app --scrobble           # (long form)
 ```
 
-`-s` scrobbles the current song without adding it to any playlist — `api`-type
+`-s` scrobbles the current song without adding it to any playlist - `api`-type
 platforms (Spotify) read the currently-playing track, `extension`-type
 platforms (YouTube Music) capture via the browser extension. It requires the
 Last.fm plugin and credentials to be configured (see the Settings dialog's

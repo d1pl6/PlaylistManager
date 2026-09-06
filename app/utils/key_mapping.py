@@ -8,7 +8,6 @@ tested and reused independently of the pynput listener loop.
 from typing import Optional, Set
 
 from pynput import keyboard
-from utils.config import get_setting
 
 # -- pynput key → normalised name -------------------------------------------------
 _KEY_MAP = {
@@ -87,8 +86,3 @@ def normalize_tk_key(keysym: str) -> Optional[str]:
 def parse_keybind(keybind_str: str) -> Set[str]:
     """Split ``"ctrl+shift+a"`` into ``{'ctrl', 'shift', 'a'}``."""
     return {k.strip().lower() for k in keybind_str.split("+") if k.strip()}
-
-
-def read_global_listener_setting() -> bool:
-    """Read the ``global_listener`` boolean from settings.ini (default: True)."""
-    return get_setting("global_listener", True)

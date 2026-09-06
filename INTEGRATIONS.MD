@@ -53,7 +53,7 @@ The extension is optional but recommended for exact captures:
 1. Add the extension [here](about:debugging#/runtime/this-firefox) (i won't sign extension)
 2. Enable "Hybird" mode in settings (default)
 
-Note: SoundCloud has no "append to playlist" endpoint — each add rewrites the whole playlist's track array (read-modify-write), so adds are a bit slower.
+Note: SoundCloud has no "append to playlist" endpoint - each add rewrites the whole playlist's track array (read-modify-write), so adds are a bit slower.
 
 Note 2: "Now playing" comes from `/me/recently-played/tracks`[0] so it need confirmation that it can be used as "Now playing" so i could remove extension.
 

@@ -17,7 +17,6 @@ from utils import updater
 from utils.config import get_setting
 from utils.logging_config import user_log
 from utils import scaling
-from _version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -458,9 +457,10 @@ class App:
         if tray is not None:
             tray.stop()
         if hasattr(self, "main_window") and self.main_window:
-            self.main_window.kc.stop_receiver()
-            self.main_window.kc.stop_listener(wait=False)
-            self.main_window.cleanup()
+            # cleanup() stops the listener (wait=False - never join it at
+            # quit) and receiver, clears flows/recording state, and nulls
+            # the SongManager, then delegates to MainWindow.cleanup().
+            self.main_window.kc.cleanup()
 
     def quit_app(self):
         logger.info("Stopping app")

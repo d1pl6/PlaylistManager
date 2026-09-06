@@ -529,7 +529,7 @@ class MainWindow:
         cards open - the disk cleanup that follows would then delete the
         db files out from under their widgets.
         """
-        failure: Optional[str] = None
+        failure: str | None = None
         for card in list(self.card_grid.cards):
             platform = (getattr(card, "platform", None) or "").strip()
             if platform and platform == platform_id:

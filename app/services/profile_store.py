@@ -333,6 +333,7 @@ def delete(name: str) -> None:
             raise ValueError(f"Profile {name!r} does not exist")
         if name == active_profile():
             raise ValueError("Cannot delete the active profile -- switch first")
+        captured_logins = bool(progs[name].get("logins", False))
         progs.pop(name)
         _save_profiles(profiles)
     # Remove owned playlists directory.
@@ -345,6 +346,12 @@ def delete(name: str) -> None:
     owned_cfg = _DEFAULT_CFG_DIR / "profiles" / name
     if owned_cfg.is_dir():
         shutil.rmtree(owned_cfg, ignore_errors=True)
+    # Remove the profile's captured auth credentials too - leaving them
+    # behind would keep the dead profile's login tokens on disk forever.
+    if captured_logins:
+        owned_auth = _AUTH_ROOT / name
+        if owned_auth.is_dir():
+            shutil.rmtree(owned_auth, ignore_errors=True)
 
 
 def rename(old: str, new: str) -> None:
@@ -360,6 +367,7 @@ def rename(old: str, new: str) -> None:
             raise ValueError(f"Profile {old!r} does not exist")
         if new in progs:
             raise ValueError(f"Profile {new!r} already exists")
+        captured_logins = bool(progs[old].get("logins", False))
         progs[new] = progs.pop(old)
         _save_profiles(profiles)
         # Move owned data on disk.
@@ -369,6 +377,15 @@ def rename(old: str, new: str) -> None:
                 dst = base / new
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 src.rename(dst)
+        # A profile that captured the Logins bucket owns
+        # <platformdirs>/auth/<old> - move it along, or the next login
+        # resolves to the empty <new> dir and the old credentials are lost.
+        if captured_logins:
+            src_auth = _AUTH_ROOT / old
+            if src_auth.is_dir():
+                dst_auth = _AUTH_ROOT / new
+                dst_auth.parent.mkdir(parents=True, exist_ok=True)
+                src_auth.rename(dst_auth)
         # If this was the active profile, update the pointer.
         global _active
         if old == active_profile():
