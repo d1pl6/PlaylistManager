@@ -1,4 +1,4 @@
-"""Unit tests for plugin_loader.py — manifest validation and discovery.
+"""Unit tests for plugin_loader.py - manifest validation and discovery.
 
 Manifests live in a fresh tmp_path tree per test (never the real
 ``integrations/``).  Discovery is import-free (only plugin.json is read),

@@ -1,4 +1,4 @@
-"""Unit tests for services/duplicate_queue.py — db/extra.json state.
+"""Unit tests for services/duplicate_queue.py - db/extra.json state.
 
 All I/O is sandboxed: the module's ``extra_json`` constant is re-pointed
 at a fresh tmp_path per test.  The default prune-on-read path is

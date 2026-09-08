@@ -1,4 +1,4 @@
-"""Unit tests for services/song_manager.py — SQLite song CRUD.
+"""Unit tests for services/song_manager.py - SQLite song CRUD.
 
 SongManager is a thread-safe singleton whose ``db_manager`` is created in
 ``__new__``; the singleton and the class-level connection registry are

@@ -1,10 +1,10 @@
-"""Unit tests for services/database.py — SQLite connection management.
+"""Unit tests for services/database.py - SQLite connection management.
 
 All file I/O is sandboxed: the static ``_get_db_directory`` is re-pointed
 at a fresh tmp_path per test, and the class-level connection registry is
 reset so no test sees another test's open handles.  Deleting DB files
 uses the canonical ``delete_playlist_db`` / ``delete_platform_databases``
-paths — against temp dirs only.
+paths - against temp dirs only.
 """
 
 import hashlib
@@ -34,7 +34,7 @@ class TestSanitizeName:
         assert _sanitize_name("Mix: Vol. 1 [Sup]") == "Mix__Vol__1__Sup_"
 
     def test_unicode_kept(self):
-        # isalnum() accepts unicode letters — only non-alnum/punct chars
+        # isalnum() accepts unicode letters - only non-alnum/punct chars
         # are replaced.
         assert _sanitize_name(" 日本語 Playlist! ") == "_日本語_Playlist__"
 
@@ -102,7 +102,7 @@ class TestLegacyMigration:
         hashed = db_dir / f"Chill_Mix_{hashlib.md5(b'pl1').hexdigest()[:8]}.db"
         hashed.write_bytes(b"b")
         DatabaseManager._migrate_legacy_db_file(db_dir, "Chill Mix", "pl1")
-        assert legacy.exists()  # untouched — hashed file wins
+        assert legacy.exists()  # untouched - hashed file wins
 
     def test_get_playlist_db_path_triggers_migration(self, dbman, tmp_path):
         db_dir = tmp_path / "db" / "spotify"

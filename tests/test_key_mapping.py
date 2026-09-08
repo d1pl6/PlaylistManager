@@ -1,6 +1,6 @@
-"""Unit tests for utils/key_mapping.py — key normalization and parsing.
+"""Unit tests for utils/key_mapping.py - key normalization and parsing.
 
-Pure string/enum functions — no listener needed, no display required.
+Pure string/enum functions - no listener needed, no display required.
 """
 
 import pytest

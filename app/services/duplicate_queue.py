@@ -94,7 +94,7 @@ def _load() -> dict:
 def _write(data: dict) -> None:
     """Atomically persist the store (caller holds *_lock*).
 
-    exFAT-safe: unique temp file in the same directory + rename, like
+    removable filesystems-safe: unique temp file in the same directory + rename, like
     playlist_store._write.  Uses :func:`tempfile.mkstemp` so concurrent
     processes never clobber the same temp file.
     """

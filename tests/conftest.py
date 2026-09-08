@@ -13,8 +13,8 @@ Two jobs:
    before importing any app module whose import-time code binds paths
    (``services.playlist_store.playlists_json``,
    ``utils.config.SETTINGS_PATH``/``THEME_PATH``, ...).  Without this,
-   merely importing those modules would touch — and on a fresh clone,
-   CREATE — files in the real ``db/`` / ``cfg/``.  Per-test isolation is
+   merely importing those modules would touch - and on a fresh clone,
+   CREATE - files in the real ``db/`` / ``cfg/``.  Per-test isolation is
    handled by per-module monkeypatches on top of this global redirect.
 """
 

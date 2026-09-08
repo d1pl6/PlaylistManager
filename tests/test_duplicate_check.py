@@ -1,4 +1,4 @@
-"""Unit tests for services/duplicate_check.py — near-duplicate matching.
+"""Unit tests for services/duplicate_check.py - near-duplicate matching.
 
 Pure functions (no tkinter, no config needed for the matching core);
 ``resolve_near_duplicate`` tests monkeypatch ``read_settings`` and point

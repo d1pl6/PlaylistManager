@@ -1,4 +1,4 @@
-"""Unit tests for services/playlist_store.py — the playlist registry.
+"""Unit tests for services/playlist_store.py - the playlist registry.
 
 The module binds ``playlists_json`` at import (conftest already pointed
 it at the temp tree); each test here re-points it at a fresh tmp_path
@@ -32,7 +32,7 @@ class TestAddPlaylist:
 
     def test_add_duplicate_by_id_updates_in_place(self, store):
         store.PlaylistStore.add_playlist("Chill Mix", "spotify", "pl1")
-        # Same id, changed name/thumbnail — updated, not duplicated.
+        # Same id, changed name/thumbnail - updated, not duplicated.
         store.PlaylistStore.add_playlist(
             "Chill Mix Updated", "spotify", "pl1", thumbnail_url="t.jpg"
         )
@@ -157,7 +157,7 @@ class TestMisc:
 
     def test_reload_after_external_change(self, store, monkeypatch):
         import time
-        # Simulate another process rewriting the file — cache TTL expiry
+        # Simulate another process rewriting the file - cache TTL expiry
         # must pick it up.
         store.PlaylistStore.add_playlist("A", "spotify", "1")
         store.playlists_json.write_text(

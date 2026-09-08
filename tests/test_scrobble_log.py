@@ -1,4 +1,4 @@
-"""Unit tests for services/scrobble_log.py — db/scrobbles.json ledger.
+"""Unit tests for services/scrobble_log.py - db/scrobbles.json ledger.
 
 All I/O is sandboxed: the module's ``scrobbles_json`` constant is
 re-pointed at a fresh tmp_path per test.

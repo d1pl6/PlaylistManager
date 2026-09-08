@@ -51,7 +51,7 @@ _DEFAULT_DB_DIR = _APP_ROOT / "db"
 _DEFAULT_CFG_DIR = _APP_ROOT / "cfg"
 _AUTH_ROOT = _APP_ROOT / "auth"
 
-# Legacy paths (repo-root db/cfg) — one-time migration source.
+# Legacy paths (repo-root db/cfg) - one-time migration source.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LEGACY_DB_DIR = _REPO_ROOT / "db"
 _LEGACY_CFG_DIR = _REPO_ROOT / "cfg"
@@ -62,7 +62,7 @@ _LEGACY_CFG_DIR = _REPO_ROOT / "cfg"
 _MIGRATE_LEGACY = True
 
 # ---------------------------------------------------------------------------
-# File I/O helpers (atomic, exFAT-safe)
+# File I/O helpers (atomic, removable filesystems-safe)
 # ---------------------------------------------------------------------------
 
 
@@ -224,7 +224,7 @@ def _migrate_legacy_dirs() -> None:
 
     Runs once: a sentinel file in the new ``db/`` dir gates the
     operation.  Only migrates when the **new** dir is empty (or absent)
-    and the **legacy** dir has content — a downgrade that leaves both
+    and the **legacy** dir has content - a downgrade that leaves both
     populated means the user chose to keep the old layout.
     """
     import shutil
@@ -239,7 +239,7 @@ def _migrate_legacy_dirs() -> None:
         dest.mkdir(parents=True, exist_ok=True)
         if legacy.is_dir() and any(legacy.iterdir()):
             if not dest.exists() or not any(dest.iterdir()):
-                # Destination is empty — safe to migrate.
+                # Destination is empty - safe to migrate.
                 for item in legacy.iterdir():
                     if item.name == _SENTINEL:
                         continue

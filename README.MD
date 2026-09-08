@@ -108,9 +108,54 @@ See [CLI.MD](CLI.MD)
 - Uninstall python dependencies
 
 # Help needed
-- Spotify (with real account)
-- Deezer
-- SoundCloud (with real account)
+
+Everyone here needs a real account on the platform. Report what worked,
+what failed, and paste the exact error from the log/status row.
+
+**Liked-songs virtual playlists** (Spotify "Liked Songs", SoundCloud
+"Liked Tracks", Deezer "Loved Tracks"): none of these is a real playlist
+- the app shows them in the add dialog as a regular entry and routes the
+keybind add to the platform's *like* API. Things to test on each platform:
+
+* Add dialog shows the virtual entry and selectable tiles; pick it, the
+  card appears and registers a keybind (GUI picker only - these have no
+  URL, so `-p add` cannot register them).
+* Keybind/`-a` add of the currently playing song: does the track actually
+  get liked on the platform (check in the platform app)? Does a second
+  add of the same song get blocked as a duplicate?
+* Card reload (right-click -> reload): expected to FAIL - the reload path
+  fetches playlist details/tracks by the sentinel id and the platform
+  rejects it. Confirm the failure is a clean error, not a crash.
+* Song remove on the card (right-click -> remove a row): expected to FAIL
+  with a platform error (fake playlist id) and the row stays; the local
+  entry is only deleted when the platform call succeeds. Report the exact
+  error line.
+* YouTube Music needs no testing here - "Liked songs" (LM) is a real
+  playlist.
+
+Specific per platform:
+
+- **Spotify (real account)** - RE-AUTH FIRST: `python main.py --login
+  spotify ...` (the new `user-library-modify` scope only applies after a
+  fresh login; an old token makes the like call 403, not a code bug).
+  - "Liked Songs" shows in the add dialog; adding likes the song in the
+    Spotify app (`PUT /v1/me/tracks`).
+  - Followed playlists (ones you don't own) must NOT appear in the add
+    dialog - currently guaranteed by the owned/collaborative filter;
+    confirm the picker has no non-owned entries.
+  - Initial card import shows "No tracks" (known gap - the virtual entry
+    has no `/v1/playlists/<id>/tracks`).
+- **SoundCloud (real account)** - playlists you follow but don't own must
+  be absent from the add dialog (new `user.id` ownership filter - confirm
+  a followed playlist is gone). "Liked Tracks" adds must like via
+  `PUT /me/track-likes/<numeric id>` - confirm in the SoundCloud app.
+- **Deezer** - "Loved Tracks" likes go through the public REST
+  `PUT /user/me/tracks` with the ARL cookie - this endpoint is UNVERIFIED
+  against the live API. Key test: does adding a song to "Loved Tracks"
+  return 2xx and show up in the Deezer favorites? If it 4xxs, we need to
+  find the Pipe GraphQL favorite mutation instead - report the status code
+  and response body. Also confirm no non-owned playlists appear
+  (`me.playlists` is own-only, but verify nothing unexpected shows).
 
 # License
 PlaylistManager is licensed under the GNU-GPL-2.0-or-later. If you did not get a copy, please see <https://www.gnu.org/licenses/>.
@@ -118,7 +163,7 @@ PlaylistManager is licensed under the GNU-GPL-2.0-or-later. If you did not get a
 # Q & A
 Q: Current state?
 
-A: Beta.
+A: Pseudo-release.
 
 Q: Why AI?
 
@@ -127,7 +172,3 @@ A: I hate programming.
 Q: Will _platform_ be added?
 
 A: See [TODO](TODO.MD), if it doesn't exist there - open `Platform integration request` on [Issue](https://github.com/d1pl6/PlaylistManager/issues) page.
-
-Q: 1.0.0 when?
-
-A: After todo and more tests

@@ -147,7 +147,7 @@ def _safe_read_config(cfg: ConfigParser, path: Path) -> ConfigParser:
     headers, missing section headers) and - worse - keeps the sections it
     parsed *before* the error, so the caller must never reuse the partial
     parser.  A corrupt theme.ini/settings.ini (hand edit, external tool,
-    drive glitch on the exFAT disk) must not take the app down - the
+    drive glitch on the removable disk) must not take the app down - the
     settings are cosmetic and every ``ensure_*`` caller self-heals by
     merging defaults over the returned parser and rewriting the file.
     """

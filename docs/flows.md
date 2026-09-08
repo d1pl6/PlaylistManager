@@ -98,6 +98,19 @@ re-imports tracks through `PlaylistSyncService` helpers.
 4. Done-callback inserts the card on the UI thread;
    `CardGridManager.create_main_frame` renders it.
 
+Each browse-compatible integration also exposes a *virtual* "Liked songs"
+entry (Spotify "Liked Songs", SoundCloud "Liked Tracks", Deezer "Loved
+Tracks") even though none of them is a real playlist — the platform keeps
+these under a library/like collection, not a playlist object.  The picker
+shows them with a sentinel `playlistId` (``__liked__``); selecting one
+registers it in the store like any other playlist, and the keybind flow
+routes the Sync step to the platform's *like/save track* API
+(``PUT /me/tracks`` / ``PUT /me/track-likes/{id}`` / ``PUT /user/me/tracks``)
+instead of a playlist-add call, keeping the add-flow invariant (platform
+first, abort on failure).  The local per-playlist DB still mirrors the
+liked set so the duplicate/remove paths work unchanged.  YouTube Music
+is the exception — its "Liked songs" (id ``LM``) is a real playlist.
+
 ## 6. Reload playlist card
 
 Card menu -> `PlaylistSyncService.reload_database_sync`: main thread

@@ -1,4 +1,4 @@
-"""Unit tests for services/profile_store.py — profile metadata and paths.
+"""Unit tests for services/profile_store.py - profile metadata and paths.
 
 All state and file constants are sandboxed: ``ACTIVE_JSON``,
 ``PROFILES_JSON``, ``_DEFAULT_DB_DIR``, ``_DEFAULT_CFG_DIR`` and
@@ -80,7 +80,7 @@ class TestSetActive:
     def test_set_active_persists(self, sandbox):
         sandbox.create("work", logins=False, playlists=False, settings=False)
         sandbox.set_active("work")
-        # Persisted to disk — re-initialize reads it back.
+        # Persisted to disk - re-initialize reads it back.
         sandbox._active = ""
         sandbox.initialize()
         assert sandbox.active_profile() == "work"

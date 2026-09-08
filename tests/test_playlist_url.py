@@ -1,4 +1,4 @@
-"""Unit tests for services/playlist_url.py — URL parsing and building.
+"""Unit tests for services/playlist_url.py - URL parsing and building.
 
 Uses a fake plugin_registry (real manifests need no imports; a stub with
 url_hosts / templates suffices) so no real integrations dir is touched.

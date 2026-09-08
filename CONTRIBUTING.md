@@ -94,24 +94,7 @@ a contribution.
 - **No linter or typechecker is configured** - match the surrounding
   style and verify with the [Testing](#testing) checks instead. There
   is a pytest suite for the service layer; the GUI layer has no tests.
-  Dependencies are `pillow`, `requests`, `platformdirs`, `flask`,
-  `flask-cors`, `pynput`, plus optional `ytmusicapi` and `pystray`
-  (and `pytest` for the test suite).
-- **Dependency changes go in `pyproject.toml`** - the tracked
-  manifest. `requirements.txt` is an untracked mirror: update it by
-  hand, but it cannot be committed.
-- **Update `docs/` in the same commit as the code change.** `docs/`
-  is the structural reference: `modules.md` for moved/renamed modules,
-  `plugins.md` for manifest keys, `flows.md` for changed call chains
-  (see [Documentation](#documentation)). A code change that leaves its
-  docs stale is an incomplete change.
-- **`docs/`, `integrations/`, `AGENTS.md` and `requirements.txt` are
-  gitignored** - their working-tree state never shows in `git status`,
-  so don't judge them by `git diff`. Keep them current on disk anyway;
-  they are the source of truth locally.
-- **exFAT drive: filenames are case-insensitive.** `README.MD`,
-  `CLI.MD`, `TODO.MD`, and `README.md` all name the same file. Always
-  match the existing casing when creating or referencing files.
+- **Dependency changes go in `pyproject.toml`**.
 - **A theme color touches four places**: `THEME_MAP`
   (`app/utils/theme.py`), `DEFAULT_THEME` (`app/utils/config.py`),
   `theme.txt`, and `cfg/theme.ini` (the ini is the source of truth
@@ -122,14 +105,6 @@ a contribution.
   id raises and nothing is written only to the local DB. Keep this
   ordering in any new flow; a platform failure must never leave a
   "successful" local entry.
-- **Threading**: background work (keybind flows, imports, thumbnails)
-  runs in daemon threads. Those threads must not touch tkinter
-  widgets, and every `root.after(0, ...)` crossing from a worker
-  needs a `try/except` guard (see AGENTS.md "Threading and the pynput
-  listener").
-- **Version**: `app/_version.py` is the single source;
-  `pyproject.toml` reads it dynamically. Keep both in sync when
-  adding a build.
 
 ## Documentation
 
@@ -144,8 +119,6 @@ a contribution.
 - **`README.MD`** is the user guide, **`CLI.MD`** the CLI reference,
   **`INTEGRATIONS.MD`** the per-platform user setup. A change with
   user-visible effects should update the matching one.
-- Keep `docs/` entries to one line per fact; a fact that needs a
-  paragraph belongs in the module's docstring.
 
 ## Adding an integration
 
@@ -155,7 +128,7 @@ guide - plugin system contract, `plugin.json` schema, and lifecycle.
 If you wish to maintain your integration add it to `INTEGRATION_REPOS`
 in `services/integration_manager.py`.
 
-## plugin.json reference
+### plugin.json reference
 
 See [`docs/plugins.md`](docs/plugins.md#pluginjson-schema) for the
 `plugin.json` schema, field types, loader validation rules, and

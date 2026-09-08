@@ -1,4 +1,4 @@
-"""Unit tests for utils/config.py — settings/theme INI management.
+"""Unit tests for utils/config.py - settings/theme INI management.
 
 All file I/O runs against temp paths via the module's ``SETTINGS_PATH``
 and ``THEME_PATH`` constants, monkeypatched per test.  utils.config's

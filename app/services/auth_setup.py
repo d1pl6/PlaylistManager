@@ -179,7 +179,7 @@ def save_and_verify_spotify_credentials(
             )
         except OSError as e:
             # Match the Last.fm/SoundCloud/Deezer contract: verification
-            # succeeded but the write failed — report it as a failure so
+            # succeeded but the write failed - report it as a failure so
             # the CLI login handler can surface the error instead of
             # crashing on an unhandled exception.
             result = {"ok": False, "error": f"Failed to save credentials: {e}"}
