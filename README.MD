@@ -35,7 +35,7 @@ Requires Python 3.10+
 ```bash
 git clone https://github.com/d1pl6/PlaylistManager.git
 ```
-Or Code > Download ZIP
+Or Download ZIP from [Releases](https://github.com/d1pl6/PlaylistManager/releases/latest) page
 
 To Update:
 GUI: `Settings -> Check for updates`
