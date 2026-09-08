@@ -4,7 +4,7 @@ Add songs that you're currently listening to your chosen playlists or liked trac
 <img width="326" height="249" alt="screenshot2" src="https://github.com/user-attachments/assets/06ec2ba7-d826-4484-8fba-136ae36493d8" />
 <img width="326" height="249" alt="screenshot3" src="https://github.com/user-attachments/assets/18873a88-2a09-4d1c-b881-5f50e6933d65" />
 
-# Content
+## Table of Contents
 - [Why?](#why)
 - [Integrations](#integrations)
 - [Install](#install)
@@ -12,37 +12,38 @@ Add songs that you're currently listening to your chosen playlists or liked trac
   - [Linux](#linux)
     - [Arch](#arch)
     - [Debian / Ubuntu](#debian--ubuntu)
-  - [Optional dependencies](#optional-dependencies)
 - [Usage](#usage)
-  - [CLI](CLI.MD#cli)
-    - [Global install (linux)](CLI.MD#global-install-for-compositor-shortcuts)
+  - [CLI](CLI.MD)
 - [Uninstall](#uninstall)
 - [License](#license)
 - [Q&A](#q--a)
 
 # Why?
-I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage. Since i'm not using streaming platforms much, i'm using ai to create same app but on pyton.
+I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage. Since i'm not using streaming platforms much, i'm using ai to create same app but on Python.
 
 # Integrations
 Currently supported:
 - YouTube Music
 - Spotify (not tested)
 - SoundCloud (not tested)
-- Deezer
+- Deezer ([should be working fine](#help-needed))
 
 See [INTEGRATIONS.MD](INTEGRATIONS.MD)
 
 # Install
 Requires Python 3.10+
-```
-git clone https://github.com/d1pl6/PlaylistManager.git && cd PlaylistManager
+```bash
+git clone https://github.com/d1pl6/PlaylistManager.git
 ```
 Or Code > Download ZIP
 
-Update `git pull`
+To Update:
+GUI: `Settings -> Check for updates`
+
+CLI: `git pull`
 
 ## Windows / Mac OS
-```
+```bash
 # to install basic dependencies
 pip install .
 
@@ -50,7 +51,9 @@ pip install .
 pip install ".[all]"
 
 # to install basic & specify optional dependencies
-pip install ".[youtubemusic,tray]"
+pip install ".[tray]"
+# or
+pip install pystray
 ```
 
 ## Linux
@@ -58,38 +61,16 @@ pip install ".[youtubemusic,tray]"
 > It's not recommended to install dependencies through `pip` because it can break system packages.
 
 ### Arch
-```
+```bash
 pacman -S tk python-pillow python-requests python-platformdirs python-flask python-flask-cors python-pynput
-```
-
-### Debian / Ubuntu
-```
-apt install -y python3-tk python3-pil python3-requests python3-platformdirs python3-flask python3-flask-cors python3-pynput
-```
-
-## Optional dependencies
-**Windows / macOS**:
-```
-# Integrations
-pip install ytmusicapi
-
-# Tray
-pip install pystray
-```
-**Linux**:
-
-Arch
-```
-# Integrations
-pacman -S python-ytmusicapi
 
 # Tray
 pacman -S python-pystray
 ```
-Debian / Ubuntu
-```
-# Integrations
-pip install ytmusicapi
+
+### Debian / Ubuntu
+```bash
+apt install -y python3-tk python3-pil python3-requests python3-platformdirs python3-flask python3-flask-cors python3-pynput
 
 # Tray
 apt install -y python3-pystray
@@ -99,11 +80,11 @@ apt install -y python3-pystray
 > **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
 
 > [!NOTE]
-> **Tray behavior**: restoring the window from the tray ("Open PlaylistManager") is best-effort - compositors may refuse unsolicited raise/focus requests (focus-stealing prevention), so the window can appear unfocused or behind other windows. A maximized window may also restore unmaximized after hide-to-tray (the compositor clears the maximized state when the window is hidden). Both are compositor policy, may be fixed in the future.
+> **Tray behavior**: restoring the window from the tray ("Open PlaylistManager") is best-effort - compositors may refuse unsolicited raise/focus requests (focus-stealing prevention), so the window can appear unfocused or behind other windows. A maximized window may also restore unmaximized after hide-to-tray (the compositor clears the maximized state when the window is hidden). May be fixed in the future.
 
 # Usage
 > [!NOTE]
-> **Wayland**: applications cannot grab global keyboard events (the compositor owns input - a security design decision), so pynput keybinds only capture XWayland apps. Bind compositor shortcuts to the CLI instead - see [CLI](CLI.MD#cli) and [Global command](CLI.MD#global-install-for-compositor-shortcuts).
+> **Wayland**: applications cannot grab global keyboard events (the compositor owns input - a security design decision), so pynput keybinds only capture XWayland apps. Bind compositor shortcuts to the CLI instead - see [CLI](CLI.MD) and [Global command](CLI.MD#global-install-for-compositor-shortcuts).
 ```
 python -m main
 
@@ -119,9 +100,17 @@ python main.py
 7. Wait database creation (might take longer if you have a lot of songs in playlist)
 8. Create keybind (click on 2nd line after playlist name)
 
+## CLI
+See [CLI.MD](CLI.MD)
+
 # Uninstall
 - Delete `~/.config/playlistmanager`
-- Unisntall python dependencies
+- Uninstall python dependencies
+
+# Help needed
+- Spotify (with real account)
+- Deezer
+- SoundCloud (with real account)
 
 # License
 PlaylistManager is licensed under the GNU-GPL-2.0-or-later. If you did not get a copy, please see <https://www.gnu.org/licenses/>.
@@ -135,7 +124,7 @@ Q: Why AI?
 
 A: I hate programming.
 
-Q: Will _patform_ be added?
+Q: Will _platform_ be added?
 
 A: See [TODO](TODO.MD), if it doesn't exist there - open `Platform integration request` on [Issue](https://github.com/d1pl6/PlaylistManager/issues) page.
 
