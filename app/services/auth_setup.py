@@ -74,9 +74,15 @@ def save_spotify_credentials(
 
     Raises ``OSError`` on write failure.
     """
-    from integrations.spotify.spotify import (
-        save_spotify_credentials_file,
-    )
+    try:
+        from integrations.spotify.spotify import (
+            save_spotify_credentials_file,
+        )
+    except ImportError:
+        logger.warning("Spotify plugin not found - cannot save credentials")
+        raise OSError(
+            "Spotify plugin not found - cannot save credentials"
+        ) from None
 
     save_spotify_credentials_file(client_id, client_secret, refresh_token)
 
@@ -165,11 +171,18 @@ def save_and_verify_spotify_credentials(
     """
     result = verify_spotify_credentials(client_id, client_secret, refresh_token)
     if result.get("ok"):
-        save_spotify_credentials(
-            client_id,
-            client_secret,
-            result.get("refresh_token") or refresh_token,
-        )
+        try:
+            save_spotify_credentials(
+                client_id,
+                client_secret,
+                result.get("refresh_token") or refresh_token,
+            )
+        except OSError as e:
+            # Match the Last.fm/SoundCloud/Deezer contract: verification
+            # succeeded but the write failed - report it as a failure so
+            # the CLI login handler can surface the error instead of
+            # crashing on an unhandled exception.
+            result = {"ok": False, "error": f"Failed to save credentials: {e}"}
     return result
 
 

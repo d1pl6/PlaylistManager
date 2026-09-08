@@ -20,7 +20,6 @@ from utils.key_mapping import (
     MODIFIER_NAMES,
     normalize_key,
     normalize_tk_key,
-    read_global_listener_setting,
 )
 from utils.config import get_setting
 from utils.platform import is_wayland_session
@@ -81,7 +80,7 @@ class KeybindController:
         self._recording_callback: Optional[Callable[[str], None]] = None
         self._recording_stop_callback: Optional[Callable[[], None]] = None
 
-        self._global_mode = read_global_listener_setting()
+        self._global_mode = get_setting("global_listener", True)
 
     # ------------------------------------------------------------------
     # Credentials
@@ -102,19 +101,25 @@ class KeybindController:
         The affected URL receivers are stopped to free their ports before
         a new receiver is created on the next keybind.
         """
-        if refreshed_ids is not None:
-            for pid in refreshed_ids:
-                self._flows.pop(pid, None)
-                receiver = self._receivers.pop(pid, None)
-                if receiver is not None:
-                    try:
-                        receiver.stop()
-                    except Exception as e:
-                        logger.error("Error stopping URL receiver: %s", e)
-        else:
-            self.stop_receiver()
-            self._flows.clear()
-            self._receivers.clear()
+        # Take _init_lock so we don't pop a flow/receiver that a concurrent
+        # worker (activity-window Add, keybind/scrobble path via
+        # _ensure_initialized) is mid-construction under it - otherwise the
+        # receiver could be stopped while it is being registered, or a
+        # just-built flow invalidated immediately.
+        with self._init_lock:
+            if refreshed_ids is not None:
+                for pid in refreshed_ids:
+                    self._flows.pop(pid, None)
+                    receiver = self._receivers.pop(pid, None)
+                    if receiver is not None:
+                        try:
+                            receiver.stop()
+                        except Exception as e:
+                            logger.error("Error stopping URL receiver: %s", e)
+            else:
+                self.stop_receiver()
+                self._flows.clear()
+                self._receivers.clear()
         logger.info("KeybindController credentials updated, flows invalidated")
 
     # ------------------------------------------------------------------
@@ -334,6 +339,9 @@ class KeybindController:
         combo = self._last_recording_combo
         self._last_recording_combo = ""
         self._recording_callback = None
+        # Clear the paired stop callback too - it is only meaningful while
+        # recording is active (see start_recording).
+        self._recording_stop_callback = None
         logger.debug("Stopped recording keybind: %s", combo)
         return combo
 
@@ -554,11 +562,7 @@ class KeybindController:
 
                             def scrobble_async():
                                 try:
-                                    scrobble_integ = next(
-                                        (integ for integ in self.integrations.get_all().values()
-                                         if getattr(integ, "scrobble", None) is not None),
-                                        None,
-                                    )
+                                    scrobble_integ = self._scrobble_integration()
                                     if scrobble_integ is not None:
                                         ts = scrobble_integ.scrobble(song_data)
                                         if ts is not None and song_id is not None:
@@ -621,6 +625,16 @@ class KeybindController:
         """
         return self._flow_busy
 
+    def _scrobble_integration(self):
+        """The single ScrobbleCapable integration, or ``None``."""
+        if not self.integrations:
+            return None
+        return next(
+            (integ for integ in self.integrations.get_all().values()
+             if getattr(integ, "scrobble", None) is not None),
+            None,
+        )
+
     def _handle_action_keybind(self, info: dict) -> None:
         """Dispatch an action-type keybind (e.g., scrobble).
 
@@ -653,11 +667,7 @@ class KeybindController:
                 logger.warning("Flow already in progress, ignoring scrobble action")
                 return
             try:
-                scrobble_integ = next(
-                    (integ for integ in self.integrations.get_all().values()
-                     if getattr(integ, "scrobble", None) is not None),
-                    None,
-                )
+                scrobble_integ = self._scrobble_integration()
                 if scrobble_integ is None:
                     logger.info("Last.fm integration not available for scrobble")
                     return

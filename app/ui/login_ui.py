@@ -374,7 +374,12 @@ def _poll_for_browser_json(parent, on_success, attempts: int = 0) -> None:
         )
         return
 
-    parent.after(2000, lambda: _poll_for_browser_json(parent, on_success, attempts + 1))
+    try:
+        parent.after(2000, lambda: _poll_for_browser_json(parent, on_success, attempts + 1))
+    except (tk.TclError, RuntimeError):
+        # Parent destroyed between the winfo_exists check and the reschedule
+        # (login dialog closed / app quitting) - stop polling silently.
+        return
 
 
 # ======================================================================

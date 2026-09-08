@@ -33,10 +33,17 @@ dependencies = [
 [project.optional-dependencies]
 youtubemusic = ["ytmusicapi"]
 tray = ["pystray"]
+test = ["pytest"]
 all = [
     "ytmusicapi",
     "pystray",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Tests run headless: the suite scopes every file-backed module to a
+# temp dir in tests/conftest.py, so `db/`, `cfg/`, and `auth/` in the
+# repo are never read or written on a test run.
 
 [project.urls]
 Homepage = "https://github.com/d1pl6/PlaylistManager"

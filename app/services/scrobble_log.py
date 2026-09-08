@@ -26,6 +26,7 @@ cannot grow without bound.
 
 import json
 import logging
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -80,16 +81,26 @@ def _load() -> dict:
 def _write(data: dict) -> None:
     """Atomically persist the ledger (caller holds *_lock*).
 
-    exFAT-safe: temp file in the same directory + rename, like
-    duplicate_queue._write.  The db/ directory does not exist on a fresh
-    clone and is created defensively here.
+    removable filesystems-safe: unique temp file in the same directory + rename, like
+    duplicate_queue._write.  Uses :func:`tempfile.mkstemp` so concurrent
+    processes never clobber the same temp file.
     """
+    import tempfile as _tempfile
     try:
         scrobbles_json.parent.mkdir(parents=True, exist_ok=True)
-        temp = scrobbles_json.with_suffix(".json.tmp")
-        with open(temp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        temp.replace(scrobbles_json)
+        fd, tmp = _tempfile.mkstemp(
+            dir=str(scrobbles_json.parent), suffix=".json"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, str(scrobbles_json))
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     except Exception as e:
         logger.error("Failed to write %s: %s", scrobbles_json, e)
 

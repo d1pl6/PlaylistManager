@@ -8,7 +8,6 @@ tested and reused independently of the pynput listener loop.
 from typing import Optional, Set
 
 from pynput import keyboard
-from utils.config import get_setting
 
 # -- pynput key → normalised name -------------------------------------------------
 _KEY_MAP = {
@@ -81,14 +80,48 @@ def normalize_tk_key(keysym: str) -> Optional[str]:
         "Next",
     ):
         return keysym.lower()
-    return None
+    # Punctuation/typography keysyms: Tk reports named keysyms ("," is
+    # "comma", "/" is "slash"), while pynput reports the literal character.
+    # Normalising both sides to the literal char keeps local (Tk) and
+    # global (pynput) keybinds interchangeable, e.g. "ctrl+," matches in
+    # both modes.
+    _PUNCT_KEYSYM = {
+        "comma": ",",
+        "period": ".",
+        "slash": "/",
+        "backslash": "\\",
+        "semicolon": ";",
+        "colon": ":",
+        "apostrophe": "'",
+        "quotedbl": '"',
+        "minus": "-",
+        "equal": "=",
+        "plus": "+",
+        "asterisk": "*",
+        "numbersign": "#",
+        "percent": "%",
+        "question": "?",
+        "exclam": "!",
+        "at": "@",
+        "dollar": "$",
+        "asciicircum": "^",
+        "ampersand": "&",
+        "parenleft": "(",
+        "parenright": ")",
+        "underscore": "_",
+        "bracketleft": "[",
+        "bracketright": "]",
+        "braceleft": "{",
+        "braceright": "}",
+        "less": "<",
+        "greater": ">",
+        "bar": "|",
+        "grave": "`",
+        "asciitilde": "~",
+    }
+    return _PUNCT_KEYSYM.get(keysym)
 
 
 def parse_keybind(keybind_str: str) -> Set[str]:
     """Split ``"ctrl+shift+a"`` into ``{'ctrl', 'shift', 'a'}``."""
     return {k.strip().lower() for k in keybind_str.split("+") if k.strip()}
-
-
-def read_global_listener_setting() -> bool:
-    """Read the ``global_listener`` boolean from settings.ini (default: True)."""
-    return get_setting("global_listener", True)

@@ -1,12 +1,20 @@
-## CLI
+## Content
+- [Debugging](#debugging)
+- [Authentication](#authentication)
+- [Plugins](#plugins)
+- [Playlist management](#playlist-management)
+- [Song add](#song-add)
+- [Scrobble](#scrobble-lastfm-backend-independent-of-any-playlist)
+- [Global install](#global-install-for-compositor-shortcuts)
+
+### Debugging:
 ```
 --verbose / -v  # for verbose logging.
 --debug / -vv   # DEBUG and above (everything)
 --trace / -vvv  # TRACE and above + third-party debug loggers (requests / urllib3 / ytmusicapi / etc)
 ```
 
-Authentication (`--login` / `--logout`) - the headless equivalent of the GUI login tiles:
-
+### Authentication:
 ```
 python -m app --login youtube_music       # open auth folder + terminal ('ytmusicapi browser')
 python -m app --login spotify --client-id <ID> --client-secret <SECRET> --refresh-token <TOKEN>
@@ -29,8 +37,7 @@ python -m app --logout spotify            # delete spotify.json + registry entri
   your screen during login.
 - Unknown platform names exit with code 2.
 
-Plugins (`--install` / `--uninstall`) - install or remove a platform's plugin package:
-
+### Plugins:
 ```
 python -m app --install spotify            # download + install the Spotify plugin
 python -m app --install all                # install every supported platform
@@ -48,8 +55,7 @@ python -m app --uninstall all              # remove every installed platform
   "not installed" and is not an error.
 - Both accept `all` to act on every supported platform. Unknown platform names exit with code 2.
 
-Playlist management (`-p` / `--playlist`, verbs: `add`, `del`/`delete`, `ref`/`refresh`):
-
+### Playlist management:
 ```
 python -m app -p add "https://music.youtube.com/playlist?list=PL..."
 python -m app -p add "https://open.spotify.com/playlist/<id>"
@@ -76,8 +82,7 @@ python -m app -p refresh all                # refresh every playlist
   (malformed/out-of-range/unknown targets, unrecognized URLs or verbs).
 - `-p` consumes the rest of the command line: put it after any other options.
 
-Song add:
-
+### Song add:
 ```
 python -m app -a 1,2,3            # playlists #1, #2 and #3
 python -m app -a 1-3              # range
@@ -86,20 +91,20 @@ python -m app -a 1,"Chill Mix",3  # mixed numbers and names
 python -m app --list              # show the numbered playlist list
 ```
 
-Scrobble (Last.fm backend, independent of any playlist):
+### Scrobble (Last.fm backend, independent of any playlist):
 
 ```
 python -m app -s                   # scrobble the currently-playing song
 python -m app --scrobble           # (long form)
 ```
 
-`-s` scrobbles the current song without adding it to any playlist — `api`-type
+`-s` scrobbles the current song without adding it to any playlist - `api`-type
 platforms (Spotify) read the currently-playing track, `extension`-type
 platforms (YouTube Music) capture via the browser extension. It requires the
 Last.fm plugin and credentials to be configured (see the Settings dialog's
 Last.fm section); otherwise it prints an error and exits non-zero.
 
-### Global install (for compositor shortcuts)
+## Global install (for compositor shortcuts)
 `python -m app ...` only works from the repo root. To bind the command from anywhere
 (i3 / hyprland / etc), install a global `playlistmanager` command.
 

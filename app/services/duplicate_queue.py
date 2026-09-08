@@ -32,6 +32,7 @@ cache-invalidation bugs by construction.
 
 import json
 import logging
+import os
 import threading
 import uuid
 from datetime import datetime
@@ -93,16 +94,24 @@ def _load() -> dict:
 def _write(data: dict) -> None:
     """Atomically persist the store (caller holds *_lock*).
 
-    exFAT-safe: temp file in the same directory + rename, like
-    playlist_store._write.  The db/ directory does not exist on a fresh
-    clone and is created defensively here.
+    removable filesystems-safe: unique temp file in the same directory + rename, like
+    playlist_store._write.  Uses :func:`tempfile.mkstemp` so concurrent
+    processes never clobber the same temp file.
     """
+    import tempfile as _tempfile
     try:
         extra_json.parent.mkdir(parents=True, exist_ok=True)
-        temp = extra_json.with_suffix(".json.tmp")
-        with open(temp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        temp.replace(extra_json)
+        fd, tmp = _tempfile.mkstemp(dir=str(extra_json.parent), suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, str(extra_json))
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     except Exception as e:
         logger.error("Failed to write %s: %s", extra_json, e)
 

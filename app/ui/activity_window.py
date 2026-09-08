@@ -145,6 +145,7 @@ class ActivityWindow(tk.Toplevel):
                 highlightthickness=0,
                 relief="flat",
                 command=lambda n=name: self._select_tab(n),
+                **btn_colors(C["button_head_bg"], C["button_head_fg"]),
             )
             btn.pack(side="left", padx=(8, 0), pady=4)
             self._tab_buttons[name] = btn
@@ -170,13 +171,10 @@ class ActivityWindow(tk.Toplevel):
         )
         for label, btn in self._tab_buttons.items():
             selected = label == name
+            bg = active_bg if selected else inactive_bg
+            fg = fg_active if selected else fg_inactive
             try:
-                btn.configure(
-                    background=active_bg if selected else inactive_bg,
-                    foreground=fg_active if selected else fg_inactive,
-                    activebackground=active_bg if selected else inactive_bg,
-                    activeforeground=fg_active if selected else fg_inactive,
-                )
+                btn.configure(**btn_colors(bg, fg))
             except tk.TclError:
                 pass
         self._errors_view.pack_forget()

@@ -1,6 +1,5 @@
 requirements.txt
 *.pyc
-AGENTS.md
 opencode.jsonc
 0.3.0.md
 
@@ -17,9 +16,4 @@ cfg/
 0.3.0/
 integrations/*
 !integrations/__init__.py
-docs/*
-
-close.png
-closeWindow.png
-hide.png
-logout.png
+.pytest_cache/

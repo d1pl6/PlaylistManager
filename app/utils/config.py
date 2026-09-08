@@ -147,7 +147,7 @@ def _safe_read_config(cfg: ConfigParser, path: Path) -> ConfigParser:
     headers, missing section headers) and - worse - keeps the sections it
     parsed *before* the error, so the caller must never reuse the partial
     parser.  A corrupt theme.ini/settings.ini (hand edit, external tool,
-    drive glitch on the exFAT disk) must not take the app down - the
+    drive glitch on the removable disk) must not take the app down - the
     settings are cosmetic and every ``ensure_*`` caller self-heals by
     merging defaults over the returned parser and rewriting the file.
     """
@@ -314,7 +314,7 @@ def set_setting(section: str, enabled: bool) -> None:
     """
     ensure_settings_file()
     cfg = ConfigParser()
-    cfg.read(str(SETTINGS_PATH))
+    cfg = _safe_read_config(cfg, SETTINGS_PATH)
     if section not in cfg:
         cfg[section] = {}
     cfg[section]["is_true"] = "yes" if enabled else "no"
@@ -343,7 +343,7 @@ def set_setting_value(section: str, option: str, value: str) -> None:
     """
     ensure_settings_file()
     cfg = ConfigParser()
-    cfg.read(str(SETTINGS_PATH))
+    cfg = _safe_read_config(cfg, SETTINGS_PATH)
     if section not in cfg:
         cfg[section] = {}
     cfg[section][option] = value

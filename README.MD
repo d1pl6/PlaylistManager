@@ -4,7 +4,7 @@ Add songs that you're currently listening to your chosen playlists or liked trac
 <img width="326" height="249" alt="screenshot2" src="https://github.com/user-attachments/assets/06ec2ba7-d826-4484-8fba-136ae36493d8" />
 <img width="326" height="249" alt="screenshot3" src="https://github.com/user-attachments/assets/18873a88-2a09-4d1c-b881-5f50e6933d65" />
 
-# Content
+## Table of Contents
 - [Why?](#why)
 - [Integrations](#integrations)
 - [Install](#install)
@@ -12,37 +12,38 @@ Add songs that you're currently listening to your chosen playlists or liked trac
   - [Linux](#linux)
     - [Arch](#arch)
     - [Debian / Ubuntu](#debian--ubuntu)
-  - [Optional dependencies](#optional-dependencies)
 - [Usage](#usage)
-  - [CLI](CLI.MD#cli)
-    - [Global install (linux)](CLI.MD#global-install-for-compositor-shortcuts)
+  - [CLI](CLI.MD)
 - [Uninstall](#uninstall)
 - [License](#license)
 - [Q&A](#q--a)
 
 # Why?
-I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage. Since i'm not using streaming platforms much, i'm using ai to create same app but on pyton.
+I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage. Since i'm not using streaming platforms much, i'm using ai to create same app but on Python.
 
 # Integrations
 Currently supported:
 - YouTube Music
 - Spotify (not tested)
 - SoundCloud (not tested)
-- Deezer
+- Deezer ([should be working fine](#help-needed))
 
 See [INTEGRATIONS.MD](INTEGRATIONS.MD)
 
 # Install
 Requires Python 3.10+
+```bash
+git clone https://github.com/d1pl6/PlaylistManager.git
 ```
-git clone https://github.com/d1pl6/PlaylistManager.git && cd PlaylistManager
-```
-Or Code > Download ZIP
+Or Download ZIP from [Releases](https://github.com/d1pl6/PlaylistManager/releases/latest) page
 
-Update `git pull`
+To Update:
+GUI: `Settings -> Check for updates`
+
+CLI: `git pull`
 
 ## Windows / Mac OS
-```
+```bash
 # to install basic dependencies
 pip install .
 
@@ -50,7 +51,9 @@ pip install .
 pip install ".[all]"
 
 # to install basic & specify optional dependencies
-pip install ".[youtubemusic,tray]"
+pip install ".[tray]"
+# or
+pip install pystray
 ```
 
 ## Linux
@@ -58,38 +61,16 @@ pip install ".[youtubemusic,tray]"
 > It's not recommended to install dependencies through `pip` because it can break system packages.
 
 ### Arch
-```
+```bash
 pacman -S tk python-pillow python-requests python-platformdirs python-flask python-flask-cors python-pynput
-```
-
-### Debian / Ubuntu
-```
-apt install -y python3-tk python3-pil python3-requests python3-platformdirs python3-flask python3-flask-cors python3-pynput
-```
-
-## Optional dependencies
-**Windows / macOS**:
-```
-# Integrations
-pip install ytmusicapi
-
-# Tray
-pip install pystray
-```
-**Linux**:
-
-Arch
-```
-# Integrations
-pacman -S python-ytmusicapi
 
 # Tray
 pacman -S python-pystray
 ```
-Debian / Ubuntu
-```
-# Integrations
-pip install ytmusicapi
+
+### Debian / Ubuntu
+```bash
+apt install -y python3-tk python3-pil python3-requests python3-platformdirs python3-flask python3-flask-cors python3-pynput
 
 # Tray
 apt install -y python3-pystray
@@ -99,11 +80,11 @@ apt install -y python3-pystray
 > **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
 
 > [!NOTE]
-> **Tray behavior**: restoring the window from the tray ("Open PlaylistManager") is best-effort - compositors may refuse unsolicited raise/focus requests (focus-stealing prevention), so the window can appear unfocused or behind other windows. A maximized window may also restore unmaximized after hide-to-tray (the compositor clears the maximized state when the window is hidden). Both are compositor policy, may be fixed in the future.
+> **Tray behavior**: restoring the window from the tray ("Open PlaylistManager") is best-effort - compositors may refuse unsolicited raise/focus requests (focus-stealing prevention), so the window can appear unfocused or behind other windows. A maximized window may also restore unmaximized after hide-to-tray (the compositor clears the maximized state when the window is hidden). May be fixed in the future.
 
 # Usage
 > [!NOTE]
-> **Wayland**: applications cannot grab global keyboard events (the compositor owns input - a security design decision), so pynput keybinds only capture XWayland apps. Bind compositor shortcuts to the CLI instead - see [CLI](CLI.MD#cli) and [Global command](CLI.MD#global-install-for-compositor-shortcuts).
+> **Wayland**: applications cannot grab global keyboard events (the compositor owns input - a security design decision), so pynput keybinds only capture XWayland apps. Bind compositor shortcuts to the CLI instead - see [CLI](CLI.MD) and [Global command](CLI.MD#global-install-for-compositor-shortcuts).
 ```
 python -m main
 
@@ -119,9 +100,62 @@ python main.py
 7. Wait database creation (might take longer if you have a lot of songs in playlist)
 8. Create keybind (click on 2nd line after playlist name)
 
+## CLI
+See [CLI.MD](CLI.MD)
+
 # Uninstall
 - Delete `~/.config/playlistmanager`
-- Unisntall python dependencies
+- Uninstall python dependencies
+
+# Help needed
+
+Everyone here needs a real account on the platform. Report what worked,
+what failed, and paste the exact error from the log/status row.
+
+**Liked-songs virtual playlists** (Spotify "Liked Songs", SoundCloud
+"Liked Tracks", Deezer "Loved Tracks"): none of these is a real playlist
+- the app shows them in the add dialog as a regular entry and routes the
+keybind add to the platform's *like* API. Things to test on each platform:
+
+* Add dialog shows the virtual entry and selectable tiles; pick it, the
+  card appears and registers a keybind (GUI picker only - these have no
+  URL, so `-p add` cannot register them).
+* Keybind/`-a` add of the currently playing song: does the track actually
+  get liked on the platform (check in the platform app)? Does a second
+  add of the same song get blocked as a duplicate?
+* Card reload (right-click -> reload): expected to FAIL - the reload path
+  fetches playlist details/tracks by the sentinel id and the platform
+  rejects it. Confirm the failure is a clean error, not a crash.
+* Song remove on the card (right-click -> remove a row): expected to FAIL
+  with a platform error (fake playlist id) and the row stays; the local
+  entry is only deleted when the platform call succeeds. Report the exact
+  error line.
+* YouTube Music needs no testing here - "Liked songs" (LM) is a real
+  playlist.
+
+Specific per platform:
+
+- **Spotify (real account)** - RE-AUTH FIRST: `python main.py --login
+  spotify ...` (the new `user-library-modify` scope only applies after a
+  fresh login; an old token makes the like call 403, not a code bug).
+  - "Liked Songs" shows in the add dialog; adding likes the song in the
+    Spotify app (`PUT /v1/me/tracks`).
+  - Followed playlists (ones you don't own) must NOT appear in the add
+    dialog - currently guaranteed by the owned/collaborative filter;
+    confirm the picker has no non-owned entries.
+  - Initial card import shows "No tracks" (known gap - the virtual entry
+    has no `/v1/playlists/<id>/tracks`).
+- **SoundCloud (real account)** - playlists you follow but don't own must
+  be absent from the add dialog (new `user.id` ownership filter - confirm
+  a followed playlist is gone). "Liked Tracks" adds must like via
+  `PUT /me/track-likes/<numeric id>` - confirm in the SoundCloud app.
+- **Deezer** - "Loved Tracks" likes go through the public REST
+  `PUT /user/me/tracks` with the ARL cookie - this endpoint is UNVERIFIED
+  against the live API. Key test: does adding a song to "Loved Tracks"
+  return 2xx and show up in the Deezer favorites? If it 4xxs, we need to
+  find the Pipe GraphQL favorite mutation instead - report the status code
+  and response body. Also confirm no non-owned playlists appear
+  (`me.playlists` is own-only, but verify nothing unexpected shows).
 
 # License
 PlaylistManager is licensed under the GNU-GPL-2.0-or-later. If you did not get a copy, please see <https://www.gnu.org/licenses/>.
@@ -129,16 +163,12 @@ PlaylistManager is licensed under the GNU-GPL-2.0-or-later. If you did not get a
 # Q & A
 Q: Current state?
 
-A: Beta.
+A: Pseudo-release.
 
 Q: Why AI?
 
 A: I hate programming.
 
-Q: Will _patform_ be added?
+Q: Will _platform_ be added?
 
 A: See [TODO](TODO.MD), if it doesn't exist there - open `Platform integration request` on [Issue](https://github.com/d1pl6/PlaylistManager/issues) page.
-
-Q: 1.0.0 when?
-
-A: After todo and more tests

@@ -24,6 +24,4 @@ album img	| artists
 
 [x] profiles (settings, playlists)
 
-[ ] Docs & Contribution
-
-[ ] Executable
+[x] Docs & Contribution

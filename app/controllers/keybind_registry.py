@@ -9,9 +9,10 @@ import threading
 import logging
 from typing import Callable, Dict, Optional, Set
 
+from utils.key_mapping import parse_keybind
+
 # Legacy bindings predate the platform field; they were all YouTube Music.
 PLATFORM_YOUTUBE_MUSIC = "youtube_music"
-from utils.key_mapping import parse_keybind
 
 logger = logging.getLogger(__name__)
 
