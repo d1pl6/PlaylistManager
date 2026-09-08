@@ -88,7 +88,32 @@ class ScrollableFrame(tk.Frame):
         self.canvas.bind("<Configure>", self._on_canvas_resize)
 
         # --- Mousewheel ---
+        self._bind_all_mousewheel = bind_all_mousewheel
         self._bind_mousewheel(bind_all_mousewheel)
+        # Clean up bind_all bindings when ALL bind_all frames are gone:
+        # a single frame's unbind_all would strip the main window's
+        # handlers too (bind_all is global per toplevel), so the handlers
+        # are only removed when the last bind_all ScrollableFrame dies.
+        if bind_all_mousewheel:
+            ScrollableFrame._bind_all_frames += 1
+            self.bind("<Destroy>", self._on_destroy, add="+")
+
+    # Number of live ScrollableFrames using bind_all mousewheel.
+    _bind_all_frames: int = 0
+
+    def _on_destroy(self, _event) -> None:
+        """Unbind the global mousewheel handlers when the frame dies."""
+        if not self._bind_all_mousewheel:
+            return
+        ScrollableFrame._bind_all_frames -= 1
+        if ScrollableFrame._bind_all_frames <= 0:
+            ScrollableFrame._bind_all_frames = 0
+            try:
+                target = self.winfo_toplevel()
+                for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                    target.unbind_all(seq)
+            except (tk.TclError, KeyError):
+                pass
 
     # ------------------------------------------------------------------
     # Scrollbar drive + auto-hide

@@ -80,7 +80,46 @@ def normalize_tk_key(keysym: str) -> Optional[str]:
         "Next",
     ):
         return keysym.lower()
-    return None
+    # Punctuation/typography keysyms: Tk reports named keysyms ("," is
+    # "comma", "/" is "slash"), while pynput reports the literal character.
+    # Normalising both sides to the literal char keeps local (Tk) and
+    # global (pynput) keybinds interchangeable, e.g. "ctrl+," matches in
+    # both modes.
+    _PUNCT_KEYSYM = {
+        "comma": ",",
+        "period": ".",
+        "slash": "/",
+        "backslash": "\\",
+        "semicolon": ";",
+        "colon": ":",
+        "apostrophe": "'",
+        "quotedbl": '"',
+        "minus": "-",
+        "equal": "=",
+        "plus": "+",
+        "asterisk": "*",
+        "numbersign": "#",
+        "percent": "%",
+        "question": "?",
+        "exclam": "!",
+        "at": "@",
+        "dollar": "$",
+        "asciicircum": "^",
+        "ampersand": "&",
+        "parenleft": "(",
+        "parenright": ")",
+        "underscore": "_",
+        "bracketleft": "[",
+        "bracketright": "]",
+        "braceleft": "{",
+        "braceright": "}",
+        "less": "<",
+        "greater": ">",
+        "bar": "|",
+        "grave": "`",
+        "asciitilde": "~",
+    }
+    return _PUNCT_KEYSYM.get(keysym)
 
 
 def parse_keybind(keybind_str: str) -> Set[str]:

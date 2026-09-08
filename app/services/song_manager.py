@@ -353,13 +353,26 @@ class SongManager:
                 rows = []
                 skipped = 0
                 for track in tracks:
-                    song = extractor(track)
-                    if song is None:
+                    try:
+                        song = extractor(track)
+                        if song is None:
+                            skipped += 1
+                            continue
+                        title, artists, duration, track_id, thumbnail_url = song
+                        artists_json = json.dumps(artists)
+                        rows.append((title, artists_json, duration, track_id, thumbnail_url))
+                    except Exception as e:
+                        # Any non-DB error in extraction/serialisation must
+                        # not abort the whole batch: an escaping exception
+                        # would leave the implicit transaction OPEN on the
+                        # thread-cached connection, silently poisoning all
+                        # later adds for this thread.
+                        logger.debug(
+                            "%s extractor failed for track: %s",
+                            platform, e,
+                        )
                         skipped += 1
                         continue
-                    title, artists, duration, track_id, thumbnail_url = song
-                    artists_json = json.dumps(artists)
-                    rows.append((title, artists_json, duration, track_id, thumbnail_url))
 
                 if skipped:
                     logger.debug(
@@ -676,7 +689,7 @@ class SongManager:
                 song_dict["artists"] = json.loads(song_dict["artists"])
                 return song_dict
 
-        except sqlite3.Error as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.error("Error getting song from %s: %s", playlist_name, e)
             return None
 
@@ -742,7 +755,7 @@ class SongManager:
                     songs.append(song_dict)
                 return songs
 
-        except sqlite3.Error as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.error("Error getting songs from %s: %s", playlist_name, e)
             return []
 
@@ -782,7 +795,7 @@ class SongManager:
                     "track_id": row[4],
                 }
 
-        except sqlite3.Error as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.error("Error getting latest song from %s: %s", playlist_name, e)
             return None
 
@@ -830,7 +843,7 @@ class SongManager:
                     )
                 return songs
 
-        except sqlite3.Error as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.error("Error getting latest songs from %s: %s", playlist_name, e)
             return []
 
@@ -936,6 +949,6 @@ class SongManager:
                     })
                 return songs
 
-        except sqlite3.Error as e:
+        except (sqlite3.Error, ValueError) as e:
             logger.error("Error searching songs in %s: %s", playlist_name, e)
             return []

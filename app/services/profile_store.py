@@ -33,22 +33,33 @@ _lock = threading.Lock()
 _active: str = ""
 _profiles_data: dict | None = None
 
-# Where active-profile name is persisted (fast CLI read).
-ACTIVE_JSON = Path(__file__).resolve().parents[2] / "cfg" / "profile.json"
-
-# Where full profile metadata lives.
-PROFILES_JSON = Path(__file__).resolve().parents[2] / "db" / "profiles.json"
-
-# Default paths (global / shared locations).
-_DEFAULT_DB_DIR = Path(__file__).resolve().parents[2] / "db"
-_DEFAULT_CFG_DIR = Path(__file__).resolve().parents[2] / "cfg"
-
-# Platformdirs auth root (outside repo).
+# All data lives under a single XDG-ish root, co-located with auth/.
 try:
     from platformdirs import user_config_dir as _user_config_dir
-    _AUTH_ROOT = Path(_user_config_dir("playlistmanager")) / "auth"
+    _APP_ROOT = Path(_user_config_dir("playlistmanager"))
 except Exception:
-    _AUTH_ROOT = Path.home() / ".config" / "playlistmanager" / "auth"
+    _APP_ROOT = Path.home() / ".config" / "playlistmanager"
+
+# Where active-profile name is persisted (fast CLI read).
+ACTIVE_JSON = _APP_ROOT / "cfg" / "profile.json"
+
+# Where full profile metadata lives.
+PROFILES_JSON = _APP_ROOT / "db" / "profiles.json"
+
+# Default paths (global / shared locations).
+_DEFAULT_DB_DIR = _APP_ROOT / "db"
+_DEFAULT_CFG_DIR = _APP_ROOT / "cfg"
+_AUTH_ROOT = _APP_ROOT / "auth"
+
+# Legacy paths (repo-root db/cfg) — one-time migration source.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_LEGACY_DB_DIR = _REPO_ROOT / "db"
+_LEGACY_CFG_DIR = _REPO_ROOT / "cfg"
+
+# Set to False in the test harness: migrating the real repo db/ would
+# silently move developer data under test.  (conftest.py disables this
+# and re-points all path constants at a throwaway tree.)
+_MIGRATE_LEGACY = True
 
 # ---------------------------------------------------------------------------
 # File I/O helpers (atomic, exFAT-safe)
@@ -56,15 +67,27 @@ except Exception:
 
 
 def _write_json(path: Path, data: object) -> None:
-    """Atomically write *data* to *path* (temp + rename)."""
+    """Atomically write *data* to *path* (unique temp + rename).
+
+    Uses :func:`tempfile.mkstemp` so concurrent processes never clobber
+    the same temp file (the CLI and GUI can run simultaneously).
+    """
+    import tempfile
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(str(tmp), str(path))
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, str(path))
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     except Exception:
         logger.exception("Failed to write %s", path)
 
@@ -172,17 +195,65 @@ def initialize() -> None:
 
     Creates ``cfg/profile.json`` and ``db/profiles.json`` on first run
     with a ``default`` profile (all buckets shared -- identical to
-    pre-profile behaviour).
+    pre-profile behaviour).  On the first launch after the 0.3.x data
+    relocation, migrates legacy ``db/`` and ``cfg/`` from the repo root
+    into ``~/.config/playlistmanager/``.
     """
     global _active
     if _active:
         return
+    if _MIGRATE_LEGACY:
+        _migrate_legacy_dirs()
     _ensure_active_file()
     raw = _read_json(ACTIVE_JSON)
     if isinstance(raw, dict) and "active" in raw:
         _active = str(raw["active"])
     else:
         _active = "default"
+
+
+# ---------------------------------------------------------------------------
+# One-time legacy migration
+# ---------------------------------------------------------------------------
+
+_SENTINEL = ".data_migrated_from_repo_root"
+
+
+def _migrate_legacy_dirs() -> None:
+    """Move ``db/`` and ``cfg/`` from the repo root into ``~/.config/playlistmanager/``.
+
+    Runs once: a sentinel file in the new ``db/`` dir gates the
+    operation.  Only migrates when the **new** dir is empty (or absent)
+    and the **legacy** dir has content — a downgrade that leaves both
+    populated means the user chose to keep the old layout.
+    """
+    import shutil
+
+    for legacy, dest, label in (
+        (_LEGACY_DB_DIR, _DEFAULT_DB_DIR, "db"),
+        (_LEGACY_CFG_DIR, _DEFAULT_CFG_DIR, "cfg"),
+    ):
+        sentinel = dest / _SENTINEL
+        if sentinel.exists():
+            continue  # already migrated (or fresh install)
+        dest.mkdir(parents=True, exist_ok=True)
+        if legacy.is_dir() and any(legacy.iterdir()):
+            if not dest.exists() or not any(dest.iterdir()):
+                # Destination is empty — safe to migrate.
+                for item in legacy.iterdir():
+                    if item.name == _SENTINEL:
+                        continue
+                    target = dest / item.name
+                    try:
+                        shutil.move(str(item), str(target))
+                        logger.info("Migrated %s/%s -> %s", label, item.name, target)
+                    except OSError as e:
+                        logger.warning("Failed to migrate %s/%s: %s", label, item.name, e)
+        # Write sentinel whether we migrated or not (fresh install).
+        try:
+            sentinel.write_text("ok")
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -371,12 +442,13 @@ def rename(old: str, new: str) -> None:
         progs[new] = progs.pop(old)
         _save_profiles(profiles)
         # Move owned data on disk.
+        import shutil
         for base in (_DEFAULT_DB_DIR / "profiles", _DEFAULT_CFG_DIR / "profiles"):
             src = base / old
             if src.is_dir():
                 dst = base / new
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                src.rename(dst)
+                shutil.move(str(src), str(dst))
         # A profile that captured the Logins bucket owns
         # <platformdirs>/auth/<old> - move it along, or the next login
         # resolves to the empty <new> dir and the old credentials are lost.
@@ -385,7 +457,7 @@ def rename(old: str, new: str) -> None:
             if src_auth.is_dir():
                 dst_auth = _AUTH_ROOT / new
                 dst_auth.parent.mkdir(parents=True, exist_ok=True)
-                src_auth.rename(dst_auth)
+                shutil.move(str(src_auth), str(dst_auth))
         # If this was the active profile, update the pointer.
         global _active
         if old == active_profile():
@@ -410,7 +482,7 @@ def set_bucket(name: str, bucket: str, on: bool) -> None:
             raise ValueError(f"Profile {name!r} does not exist")
         was_on = progs[name].get(bucket, False)
         progs[name][bucket] = bool(on)
-        _save_profiles(progs)
+        _save_profiles(profiles)
     if on and not was_on:
         # First time this profile captures the bucket: snapshot current
         # shared data into the profile slot.

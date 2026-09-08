@@ -278,9 +278,10 @@ class MainWindow:
         self.root.configure(background=C["root_bg"])
 
         self.main_area.configure(background=C["root_bg"])
-        self.sf.canvas.configure(background=C["root_bg"])
-        self.sf.content.configure(background=C["root_bg"])
-        self.sf.style_scrollbar(hover_bg(C["button_main_bg"]), C["root_bg"])
+        sbg = C["scrollable_frame_bg"]
+        self.sf.canvas.configure(background=sbg)
+        self.sf.content.configure(background=sbg)
+        self.sf.style_scrollbar(hover_bg(C["button_main_bg"]), sbg)
 
         header_bg = C["frame_head_bg"]
         self.header_frame.configure(background=header_bg)

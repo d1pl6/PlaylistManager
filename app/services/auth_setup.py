@@ -171,11 +171,18 @@ def save_and_verify_spotify_credentials(
     """
     result = verify_spotify_credentials(client_id, client_secret, refresh_token)
     if result.get("ok"):
-        save_spotify_credentials(
-            client_id,
-            client_secret,
-            result.get("refresh_token") or refresh_token,
-        )
+        try:
+            save_spotify_credentials(
+                client_id,
+                client_secret,
+                result.get("refresh_token") or refresh_token,
+            )
+        except OSError as e:
+            # Match the Last.fm/SoundCloud/Deezer contract: verification
+            # succeeded but the write failed — report it as a failure so
+            # the CLI login handler can surface the error instead of
+            # crashing on an unhandled exception.
+            result = {"ok": False, "error": f"Failed to save credentials: {e}"}
     return result
 
 

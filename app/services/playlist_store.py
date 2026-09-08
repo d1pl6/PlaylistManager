@@ -8,6 +8,7 @@ a fallback so existing data is never orphaned.
 
 import json
 import os
+import tempfile
 import time
 import threading
 import logging
@@ -170,6 +171,11 @@ class PlaylistStore:
 
         If *playlist_id* is empty (legacy path) the fallback key
         ``(platform, name)`` is used for dedup.
+
+        Returns ``True`` when the change was persisted, ``False`` on a
+        write failure (disk full, permissions) - the in-memory cache is
+        still updated either way, so a failed persist surfaces only on
+        the next launch.
         """
         with _lock:
             playlists = PlaylistStore.load_playlists()
@@ -217,7 +223,7 @@ class PlaylistStore:
                     "Added playlist '%s' (platform=%s, id=%s)",
                     name, platform, playlist_id or "<none>",
                 )
-            PlaylistStore._write(playlists)
+            return PlaylistStore._write(playlists)
 
     @staticmethod
     def update_thumbnail(
@@ -293,13 +299,14 @@ class PlaylistStore:
             return True
 
     @staticmethod
-    def delete_playlist(name: str, platform: str, playlist_id: str = ""):
+    def delete_playlist(name: str, platform: str, playlist_id: str = "") -> bool:
         """Remove a playlist entry.
 
         Args:
             name: Playlist name (used for fallback lookup).
             platform: Platform identifier (required).
-            playlist_id: Stable API identifier (preferred lookup key).
+            playlist_id: Stable API identifier (preferred lookup key).\n
+        Returns ``True`` when an entry was removed, ``False`` otherwise.
         """
         with _lock:
             playlists = PlaylistStore.load_playlists()
@@ -312,12 +319,12 @@ class PlaylistStore:
                     "Deleted playlist '%s' (platform=%s, id=%s)",
                     name, platform, playlist_id or "<legacy>",
                 )
-                PlaylistStore._write(playlists)
-            else:
-                logger.warning(
-                    "No playlist found to delete: name='%s', platform=%s, id=%s",
-                    name, platform, playlist_id or "<none>",
-                )
+                return bool(PlaylistStore._write(playlists))
+            logger.warning(
+                "No playlist found to delete: name='%s', platform=%s, id=%s",
+                name, platform, playlist_id or "<none>",
+            )
+            return False
 
     @staticmethod
     def delete_playlists_for_platform(platform: str) -> int:
@@ -427,23 +434,37 @@ class PlaylistStore:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _write(playlists):
+    def _write(playlists) -> bool:
         """Write the playlist list to disk atomically (temp-file + rename).
 
         Also updates the in-memory cache so subsequent reads skip the file.
+        Uses :func:`tempfile.mkstemp` for unique temp names so concurrent
+        processes (CLI + GUI) never clobber the same temp file.
+
+        Returns ``True`` on success, ``False`` on write failure.
         """
         global _playlist_cache, _cache_timestamp
+        ok = True
         try:
             # The db/ directory is gitignored and does not exist on a
             # fresh clone - create it before the first write.
             playlists_json.parent.mkdir(parents=True, exist_ok=True)
-            # Write to a temporary file, then atomically replace the real one.
-            # This prevents partial/corrupt writes on crash.
-            temp = playlists_json.with_suffix(".json.tmp")
-            with open(temp, "w", encoding="utf-8") as f:
-                json.dump(playlists, f, ensure_ascii=False, indent=2)
-            temp.replace(playlists_json)
+            # Write to a unique temporary file, then atomically replace.
+            fd, tmp = tempfile.mkstemp(
+                dir=str(playlists_json.parent), suffix=".json"
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(playlists, f, ensure_ascii=False, indent=2)
+                Path(tmp).replace(playlists_json)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
+            ok = False
             logger.error("Failed to write playlists.json: %s", e)
         finally:
             # Update the cache even when the write failed so the running
@@ -454,6 +475,7 @@ class PlaylistStore:
             # entry that visibly exists.
             _playlist_cache = playlists
             _cache_timestamp = time.monotonic()
+        return ok
 
 
 def playlist_still_registered(

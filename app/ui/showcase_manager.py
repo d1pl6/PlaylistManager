@@ -720,19 +720,21 @@ class ShowcaseManager:
 
         Called from a worker thread, so the update must be marshalled to the
         tkinter main thread via ``after`` and guarded in case the window was
-        destroyed or the button no longer exists.
+        destroyed or the button no longer exists.  The guard lives INSIDE
+        the callback: ``winfo_exists()`` can pass a moment before the
+        widget dies, so the ``config`` itself must be try/except'd.
         """
-        try:
-            self.root.after(
-                0,
-                lambda: (
+        def _flip() -> None:
+            try:
+                if like_btn.winfo_exists():
                     like_btn.config(
                         image=self._heart_full_img if loved else self._heart_empty_img
                     )
-                    if like_btn.winfo_exists()
-                    else None
-                ),
-            )
+            except tk.TclError:
+                logger.debug("Like button destroyed while updating glyph")
+
+        try:
+            self.root.after(0, _flip)
         except Exception:
             logger.debug("Window closed while updating like glyph", exc_info=True)
 

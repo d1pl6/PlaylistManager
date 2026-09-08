@@ -164,8 +164,18 @@ class TrayService:
         self._started = True
         if _is_gtk_backend():
             # See _is_gtk_backend - the Gtk family needs its own running
-            # GLib mainloop; run it in a daemon thread.
-            threading.Thread(target=self._icon.run, daemon=True).start()
+            # GLib mainloop; run it in a daemon thread.  The backend can
+            # still fail at runtime (e.g. no StatusNotifierWatcher /
+            # notification daemon on DBus), which must not abort startup
+            # or spray a raw traceback - log and disable instead.
+            def _run_guarded():
+                try:
+                    self._icon.run()
+                except Exception as e:
+                    logger.warning("Tray backend failed at runtime: %s", e)
+                    self._icon = None
+
+            threading.Thread(target=_run_guarded, daemon=True).start()
         else:
             self._icon.run_detached()
 
