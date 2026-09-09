@@ -1,9 +1,9 @@
 """Unified UI scale factor (HiDPI / display scaling).
 
 Fonts scale automatically via fontconfig/``Xft.dpi`` - **not** via
-``tk scaling``.  Verified 2026-08-14 on this machine: at 175% display scale
-``tk scaling`` stays 1.333 (the physical screen DPI) while fonts still render
-at 1.75x, and forcing ``tk scaling`` to 2.333 changes no font metric.  This
+``tk scaling``.  Verified 2026-08-14: at 175% display scale ``tk scaling``
+stays 1.333 (the physical screen DPI) while fonts still render at 1.75x,
+and forcing ``tk scaling`` to 2.333 changes no font metric.  This
 module computes the one scale factor the rest of the UI uses:
 
   - icons are PIL-resized to ``round(base_px * scale)`` (utils/icons.py),
@@ -37,6 +37,7 @@ UI_SCALE_PRESETS = ("auto", "1.0", "1.25", "1.5", "1.75", "2.0", "2.5", "3.0")
 
 _scale: float = 1.0
 _font_mult: float = 1.0
+_font_family: str = ""
 
 
 def _clamp(v: float) -> float:
@@ -106,8 +107,11 @@ def init(root=None) -> None:
     Call once, right after ``tk.Tk()`` and before any widget exists (the
     CLI never calls it - scale stays 1.0).  Calling again later (live
     re-apply) recomputes from the current settings.
+
+    Font family is validated against ``tk.font.families()`` - a name not
+    present on the system is reset to ``""`` (Tk default) with a warning.
     """
-    global _scale, _font_mult
+    global _scale, _font_mult, _font_family
 
     profile = get_setting_value("ui_scale", "value", "auto").strip().lower()
     detected = xft_dpi(root)
@@ -125,7 +129,26 @@ def init(root=None) -> None:
             _font_mult = 1.0
         else:
             _font_mult = _scale / auto_scale if auto_scale else 1.0
-    logger.debug("ui_scale=%s font_mult=%s detected_dpi=%s", _scale, _font_mult, detected)
+
+    # --- font family ---
+    _font_family = get_setting_value("font", "family", "").strip()
+    if _font_family:
+        try:
+            import tkinter.font
+            available = tkinter.font.families()
+        except Exception:
+            available = ()
+        if _font_family not in available:
+            logger.warning(
+                "Font family %r not found on system - using Tk default",
+                _font_family,
+            )
+            _font_family = ""
+
+    logger.debug(
+        "ui_scale=%s font_mult=%s font_family=%r detected_dpi=%s",
+        _scale, _font_mult, _font_family, detected,
+    )
 
 
 def get_ui_scale() -> float:
@@ -151,11 +174,15 @@ def ui_font(size: int, weight: str = "", family: str = "") -> Tuple[str, ...]:
     family name, and Tk's fuzzy fallback picks whichever installed font
     matches best - or the Tk default when nothing does.)
 
+    If a font family is configured in ``cfg/settings.ini`` ``[font]``
+    ``family``, it is used when *family* is empty.
+
     In auto mode ``font_mult`` is 1.0 and this returns the plain
-    ``("", size)`` - fonts are already rendered at the display scale by
-    fontconfig, so no manual adjustment (double-scaling trap).
+    ``(family, size)`` - fonts are already rendered at the display scale
+    by fontconfig, so no manual adjustment (double-scaling trap).
     """
+    fam = family or _font_family
     scaled = size if _font_mult == 1.0 else round(size * _font_mult)
     if weight:
-        return (family, scaled, weight)
-    return (family, scaled)
+        return (fam, scaled, weight)
+    return (fam, scaled)

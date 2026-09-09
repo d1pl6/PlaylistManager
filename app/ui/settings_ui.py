@@ -1,5 +1,6 @@
 import logging
 import tkinter as tk
+import tkinter.font
 import webbrowser
 from tkinter import messagebox, ttk
 
@@ -18,7 +19,7 @@ from utils.config import (
     set_setting,
     set_setting_value,
 )
-from utils.scaling import UI_SCALE_PRESETS, ui_font
+from utils.scaling import UI_SCALE_PRESETS, px, ui_font
 from utils.platform import is_wayland_session
 from utils.theme import C, btn_colors, hover_bg
 from utils.window import center_window
@@ -135,8 +136,8 @@ def show_settings_dialog(
     win.transient(parent)
     win.grab_set()
 
-    win.geometry("420x540")
-    win.minsize(350, 320)
+    win.geometry("420x640")
+    win.minsize(350, 400)
 
     tk.Label(
         win,
@@ -176,6 +177,7 @@ def show_settings_dialog(
         columns_value = int(get_setting_value("layout", "columns", "2"))
     except (ValueError, TypeError):
         columns_value = 2
+    font_family_value = get_setting_value("font", "family", "")
 
     update_var = tk.IntVar(value=update_var_value)
     center_var = tk.IntVar(value=center_var_value)
@@ -304,6 +306,8 @@ def show_settings_dialog(
             foreground=theme_label_fg,
             font=ui_font(9),
             anchor="w",
+            wraplength=372,  # available content width at the default 420px window
+            justify="left",
         ).pack(fill="x", padx=16)
 
     def _on_tray_toggle():
@@ -352,6 +356,148 @@ def show_settings_dialog(
         font=ui_font(9),
         anchor="w",
     ).pack(fill="x", padx=16)
+
+    # --- Title similarity threshold slider -----------------------------
+    def _clamp_step(value: float, lo: float, hi: float, step: float) -> float:
+        return round(min(max(value, lo), hi) / step) * step
+
+    try:
+        _threshold_now = float(
+            get_setting_value("duplicate_check", "title_threshold", "0.85")
+        )
+    except (TypeError, ValueError):
+        _threshold_now = 0.85
+    _threshold_now = _clamp_step(_threshold_now, 0.50, 1.00, 0.05)
+
+    def _persist_setting(option: str, var, fmt) -> None:
+        try:
+            set_setting_value("duplicate_check", option, fmt(var.get()))
+        except Exception as e:
+            logger.error("Failed to write duplicate_check %s setting: %s", option, e)
+
+    threshold_var = tk.DoubleVar(value=_threshold_now)
+    threshold_row = tk.Frame(dupcheck_section, background=theme_check_bg)
+    threshold_row.pack(fill="both", pady=(0, 2), padx=16)
+    tk.Label(
+        threshold_row,
+        text="Title similarity:",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0, 5))
+    threshold_val = tk.Label(
+        threshold_row,
+        text=f"{_threshold_now:.2f}",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    )
+    threshold_val.pack(side="right", pady=(0, 5))
+
+    def _on_threshold_drag(value: str) -> None:
+        threshold_val.configure(text=f"{float(value):.2f}")
+
+    def _persist_threshold(_event=None) -> None:
+        _persist_setting("title_threshold", threshold_var, lambda v: f"{float(v):.2f}")
+
+    threshold_scale = tk.Scale(
+        threshold_row,
+        from_=0.50,
+        to=1.00,
+        resolution=0.05,
+        orient="horizontal",
+        showvalue=0,
+        length=px(150),
+        sliderlength=px(14),
+        variable=threshold_var,
+        background=theme_check_bg,
+        troughcolor=C["scrollable_frame_bg"],
+        activebackground=theme_check_select,
+        highlightthickness=0,
+        bd=0,
+        command=_on_threshold_drag,
+    )
+    threshold_scale.pack(side="left", fill="x", expand=True, pady=(0, 5), padx=10)
+    # Persist when the drag ends (mouse or keyboard), not on every tick:
+    # set_setting_value rewrites the whole INI, so firing per mouse-move
+    # would thrash the file.
+    threshold_scale.bind("<ButtonRelease-1>", _persist_threshold)
+    threshold_scale.bind("<KeyRelease>", _persist_threshold)
+
+    tk.Label(
+        dupcheck_section,
+        text="Match score required for a near-duplicate (higher = stricter)",
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        font=ui_font(9),
+        anchor="w",
+        padx=16,
+    ).pack(fill="x", padx=0, pady=(0, 3))
+
+    # --- Duration tolerance slider --------------------------------------
+    try:
+        _tolerance_now = int(
+            get_setting_value("duplicate_check", "duration_tolerance", "5")
+        )
+    except (TypeError, ValueError):
+        _tolerance_now = 5
+    _tolerance_now = int(_clamp_step(float(_tolerance_now), 0.0, 60.0, 1.0))
+
+    tolerance_var = tk.IntVar(value=_tolerance_now)
+    tolerance_row = tk.Frame(dupcheck_section, background=theme_check_bg)
+    tolerance_row.pack(fill="both", pady=(0, 2), padx=16)
+    tk.Label(
+        tolerance_row,
+        text="Duration tolerance:",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0, 5))
+    tolerance_val = tk.Label(
+        tolerance_row,
+        text=f"{_tolerance_now} s",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    )
+    tolerance_val.pack(side="right", pady=(0, 5))
+
+    def _on_tolerance_drag(value: str) -> None:
+        tolerance_val.configure(text=f"{int(float(value))} s")
+
+    def _persist_tolerance(_event=None) -> None:
+        _persist_setting("duration_tolerance", tolerance_var, lambda v: str(int(v)))
+
+    tolerance_scale = tk.Scale(
+        tolerance_row,
+        from_=0,
+        to=60,
+        resolution=1,
+        orient="horizontal",
+        showvalue=0,
+        length=px(150),
+        sliderlength=px(14),
+        variable=tolerance_var,
+        background=theme_check_bg,
+        troughcolor=C["scrollable_frame_bg"],
+        activebackground=theme_check_select,
+        highlightthickness=0,
+        bd=0,
+        command=_on_tolerance_drag,
+    )
+    tolerance_scale.pack(side="left", fill="x", expand=True, pady=(0, 5), padx=10)
+    tolerance_scale.bind("<ButtonRelease-1>", _persist_tolerance)
+    tolerance_scale.bind("<KeyRelease>", _persist_tolerance)
+
+    tk.Label(
+        dupcheck_section,
+        text="Max length difference between matching tracks, in seconds",
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        font=ui_font(9),
+        anchor="w",
+        padx=16,
+    ).pack(fill="x", padx=0, pady=(0, 3))
 
     def _do_dup_check_now():
         if not callable(on_check_duplicates_now):
@@ -505,6 +651,58 @@ def show_settings_dialog(
     )
     tk.Label(
         scale_row,
+        text="(restart to apply)",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(9),
+    ).pack(side="left", pady=(0,5))
+
+    # --- Font family ---
+    def _on_font_family_change(value: str) -> None:
+        try:
+            set_setting_value("font", "family", value)
+        except Exception as e:
+            logger.error("Failed to write font family setting: %s", e)
+
+    font_family_row = tk.Frame(appearance_section, background=theme_check_bg)
+    font_family_row.pack(fill="both", pady=(0,5), padx=16)
+    tk.Label(
+        font_family_row,
+        text="Font:",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0,5))
+
+    # Build the family list: "(Default)" first, then every Tk-known family
+    # sorted case-insensitively.
+    _all_families = sorted(set(tkinter.font.families()), key=str.casefold)
+    font_family_values = ["(Default)"] + list(_all_families)
+    # If user has a custom family selected, make sure it appears in the list.
+    if font_family_value and font_family_value not in _all_families:
+        font_family_values.insert(0, font_family_value)
+
+    font_family_var = tk.StringVar(
+        value=font_family_value if font_family_value else "(Default)"
+    )
+    font_family_combo = ttk.Combobox(
+        font_family_row,
+        textvariable=font_family_var,
+        cursor="hand2",
+        values=font_family_values,
+        state="readonly",
+        width=18,
+        font=ui_font(12),
+    )
+    font_family_combo.pack(side="left", pady=(0,5))
+    font_family_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_font_family_change(
+            "" if font_family_var.get() == "(Default)" else font_family_var.get()
+        ),
+    )
+    tk.Label(
+        font_family_row,
         text="(restart to apply)",
         background=theme_check_bg,
         foreground=theme_check_fg,
@@ -974,6 +1172,21 @@ def show_settings_dialog(
 
     if center_var_value == 1:
         center_window(win)
+
+
+    # Fit the window width to its content at the current font settings.
+    # Monospace families (e.g. Adwaita Mono) or a large font size factor
+    # render rows much wider than the 420px default, and the scrollable
+    # canvas stretches its content to the window width with no horizontal
+    # scrollbar - wider content clips at the window edge.  Widen the
+    # window to the content's requested width instead (capped so a huge
+    # font cannot force a full-screen dialog); the 24px margin covers the
+    # scrollbar and frame paddings.
+    sf.update_scrollregion()
+    win.update_idletasks()
+    needed = sf.content.winfo_reqwidth() + 24
+    if needed > 420:  # the default window width
+        win.geometry(f"{min(needed, 900)}x{win.winfo_height()}")
 
 
 

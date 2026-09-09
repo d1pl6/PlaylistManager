@@ -24,6 +24,7 @@ DEFAULT_SETTINGS = {
     "global_listener": {"is_true": "yes"},
     "hide_to_tray": {"is_true": "no"},
     "ui_scale": {"value": "auto"},
+    "font": {"family": ""},
     "showcase": {"count": "0"},          # int, 0 = off, N = show last N added songs
     "showcase_log": {"is_true": "yes"},  # show the log_artist/log_name/log_log row
     "playlist_stats": {"is_true": "yes"},  # show the song count / followers / duration row

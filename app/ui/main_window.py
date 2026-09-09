@@ -22,7 +22,7 @@ from controllers.keybind_registry import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
 from services import duplicate_queue
 from services.database import DatabaseManager
-from services.duplicate_check import find_duplicate_pairs
+from services.duplicate_check import find_duplicate_pairs, read_settings
 from services.playlist_store import PlaylistStore, playlist_still_registered
 from services.playlist_sync import PlaylistSyncService
 from services.song_manager import SongManager
@@ -1039,6 +1039,7 @@ class MainWindow:
             error = None
             pairs = []
             try:
+                _, threshold, tolerance = read_settings()
                 song_manager = self._song_manager
                 for pl in PlaylistStore.load_playlists():
                     name = pl.get("name", "")
@@ -1047,7 +1048,9 @@ class MainWindow:
                     songs = song_manager.get_all_songs(
                         name, platform=platform, playlist_id=pid
                     )
-                    for match in find_duplicate_pairs(songs):
+                    for match in find_duplicate_pairs(
+                        songs, threshold=threshold, duration_tolerance=tolerance
+                    ):
                         key = duplicate_queue.make_pair_key(
                             platform,
                             pid,

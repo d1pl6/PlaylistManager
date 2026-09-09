@@ -146,7 +146,7 @@ def _prune(data: dict) -> None:
                     continue
                 if not songs:
                     # An empty songs dict contributes nothing to the
-                    # count but would make next(iter(songs)) raise —
+                    # count but would make next(iter(songs)) raise -
                     # self-heal it away (see _entry_count).
                     del playlists[playlist_id]
                     continue
