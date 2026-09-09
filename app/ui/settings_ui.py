@@ -22,7 +22,7 @@ from utils.config import (
 from utils.scaling import UI_SCALE_PRESETS, px, ui_font
 from utils.platform import is_wayland_session
 from utils.theme import C, btn_colors, hover_bg
-from utils.window import center_window
+from utils.window import center_window, fit_window_to_screen
 
 logger = logging.getLogger(__name__)
 REPO_URL = "https://github.com/d1pl6/PlaylistManager"
@@ -1170,23 +1170,29 @@ def show_settings_dialog(
         anchor="w",
     ).pack(fill="x", pady=(0,4), padx=16)
 
-    if center_var_value == 1:
-        center_window(win)
-
-
     # Fit the window width to its content at the current font settings.
-    # Monospace families (e.g. Adwaita Mono) or a large font size factor
-    # render rows much wider than the 420px default, and the scrollable
-    # canvas stretches its content to the window width with no horizontal
-    # scrollbar - wider content clips at the window edge.  Widen the
-    # window to the content's requested width instead (capped so a huge
-    # font cannot force a full-screen dialog); the 24px margin covers the
-    # scrollbar and frame paddings.
+    # Wide font families (e.g. Adwaita Mono) render rows much wider than
+    # the 420px default, and the scrollable canvas stretches its content
+    # to the window width with no horizontal scrollbar - wider content
+    # clips at the window edge.  Widen the window to the content's
+    # requested width instead (capped so a huge font cannot force a
+    # full-screen dialog); the 24px margin covers the scrollbar and frame
+    # paddings.
     sf.update_scrollregion()
     win.update_idletasks()
     needed = sf.content.winfo_reqwidth() + 24
     if needed > 420:  # the default window width
         win.geometry(f"{min(needed, 900)}x{win.winfo_height()}")
+
+    # Safety net: never open taller than the screen (the width cap above
+    # already stays under it; a hand-edited geometry would not).  With the
+    # settings dialog this is a no-op, but it guards future dialog edits.
+    fit_window_to_screen(win, margin=60)
+
+    if center_var_value == 1:
+        # Center AFTER the size is final, or the fit above would leave
+        # the widened window off-centre.
+        center_window(win)
 
 
 

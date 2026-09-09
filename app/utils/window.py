@@ -18,6 +18,37 @@ def center_window(win: tk.Misc) -> None:
     win.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
 
 
+def fit_window_to_screen(win: tk.Misc, margin: int = 60) -> None:
+    """Cap *win*'s size so it never exceeds the screen (minus *margin*).
+
+    Content taller than the display (e.g. the theme dialog's swatch list)
+    would otherwise open with its bottom rows unreachable; the window's
+    ScrollableFrame then scrolls the overflow.  Never grows a window: a
+    caller-set geometry smaller than the content is respected.
+
+    For unmapped windows (``winfo_width()`` is 1 before the first map)
+    the requested size is used.  Call after the content is laid out
+    (``update_idletasks``) and before :func:`center_window`.
+    """
+    win.update_idletasks()
+    try:
+        w = win.winfo_width()
+        h = win.winfo_height()
+        if w <= 1:  # not yet mapped - use the requested size
+            w = win.winfo_reqwidth()
+            h = win.winfo_reqheight()
+    except tk.TclError:
+        return
+    max_w = max(win.winfo_screenwidth() - margin, 100)
+    max_h = max(win.winfo_screenheight() - margin, 100)
+    new_w = min(w, max_w)
+    new_h = min(h, max_h)
+    try:
+        win.geometry(f"{new_w}x{new_h}")
+    except tk.TclError:
+        pass
+
+
 def _geometry_size(win: tk.Misc) -> tuple:
     """Return (width, height) from the window's geometry string.
 

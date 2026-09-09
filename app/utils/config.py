@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import tempfile
 from configparser import ConfigParser, Error as ConfigParseError
 from pathlib import Path
@@ -276,6 +277,112 @@ def apply_theme_preset(preset: str) -> None:
     for section, options in values.items():
         cfg[section] = options
     _write_ini_file(THEME_PATH, cfg)
+
+
+# ---------------------------------------------------------------------------
+# Named user themes: full palette INI files under cfg/themes/<name>.ini
+# (profile-aware via cfg_dir, same as theme.ini).  "Default theme" and
+# "White Theme" are built-in pseudo-entries handled by the UI - they map
+# onto restore_theme_defaults() / apply_theme_preset("white") and are
+# reserved here so a saved theme can never shadow them.
+# ---------------------------------------------------------------------------
+
+THEMES_DIR = _profile_store.cfg_dir() / "themes"
+
+_THEME_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_RESERVED_THEME_NAMES = ("default theme", "white theme")
+
+
+def _validate_theme_name(name: str) -> str:
+    """Validate a theme name, returning the stripped form.
+
+    Mirrors profile_store's rules: alphanumeric + underscore + hyphen,
+    max 64 chars.  Raises ValueError on any violation.
+    """
+    name = name.strip()
+    if not name:
+        raise ValueError("Theme name cannot be empty")
+    if len(name) > 64:
+        raise ValueError("Theme name too long (max 64 characters)")
+    if not _THEME_NAME_RE.match(name):
+        raise ValueError(
+            "Theme name must start with a letter or digit "
+            "and contain only letters, digits, underscores, and hyphens"
+        )
+    if name.lower() in _RESERVED_THEME_NAMES:
+        raise ValueError(f"{name!r} is a built-in theme and cannot be overwritten")
+    return name
+
+
+def _theme_file(name: str) -> Path:
+    return THEMES_DIR / f"{name}.ini"
+
+
+def list_themes() -> list[str]:
+    """Sorted names of saved user themes (built-ins not included)."""
+    try:
+        return sorted(p.stem for p in THEMES_DIR.glob("*.ini"))
+    except OSError:
+        return []
+
+
+def save_theme(name: str) -> None:
+    """Save the current theme.ini palette as the named user theme.
+
+    Overwrites an existing theme of the same name (that is the "Save"
+    semantics; the caller confirms before overwriting).
+    """
+    name = _validate_theme_name(name)
+    ensure_theme_file()
+    cfg = ConfigParser()
+    cfg = _safe_read_config(cfg, THEME_PATH)
+    _write_ini_file(_theme_file(name), cfg)
+
+
+def apply_theme(name: str) -> None:
+    """Overwrite cfg/theme.ini from the named user theme (atomically).
+
+    The caller then runs load_theme() + its on_theme_change callback for
+    the live apply.  Raises ValueError if the theme does not exist.
+    """
+    name = name.strip()
+    path = _theme_file(name)
+    if not path.exists():
+        raise ValueError(f"Theme {name!r} does not exist")
+    cfg = ConfigParser()
+    cfg = _safe_read_config(cfg, path)
+    if not cfg.sections():
+        # A corrupt/empty theme file must never clobber the live palette.
+        raise ValueError(f"Theme {name!r} is corrupt (no theme sections)")
+    _write_ini_file(THEME_PATH, cfg)
+
+
+def delete_theme(name: str) -> None:
+    """Delete a saved user theme.  Built-in themes cannot be deleted."""
+    name = name.strip()
+    if name.lower() in _RESERVED_THEME_NAMES:
+        raise ValueError(f"Cannot delete the built-in theme {name!r}")
+    path = _theme_file(name)
+    if not path.exists():
+        raise ValueError(f"Theme {name!r} does not exist")
+    path.unlink()
+
+
+def rename_theme(old: str, new: str) -> None:
+    """Rename a saved user theme (atomic file move).
+
+    Optional convenience mirroring profile rename; not wired into the UI.
+    """
+    old = old.strip()
+    new = _validate_theme_name(new)
+    old_path = _theme_file(old)
+    if not old_path.exists():
+        raise ValueError(f"Theme {old!r} does not exist")
+    new_path = _theme_file(new)
+    if new_path.exists():
+        raise ValueError(f"Theme {new!r} already exists")
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(str(old_path), str(new_path))
 
 
 def ensure_settings_file() -> None:

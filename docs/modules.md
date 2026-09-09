@@ -65,7 +65,7 @@ grep -rn "^from \|^import " app/ --include="*.py"
 | `profiles_ui.py` | profile management Toplevels: create / rename / edit-bucket dialogs (steal the grab, restore the parent's on close) | `settings_ui` | `services.profile_store`, `ui.scrollable`, `utils.{scaling,theme,window}` |
 | `manage_integrations_ui.py` | integration manage dialog (login window's "Manage" button): per-platform Download/Uninstall rows, download worker thread, uninstall orchestration (close cards via `on_uninstall` callback -> stop flow/receiver -> unregister live registries -> service cleanup); modal, scrollable | `ui.login_ui` | `services.integration_manager`, `plugin_loader`, `ui.scrollable`, `utils.{logging_config,scaling,theme}` |
 | `activity_window.py` | Non-modal Activity window: Errors log (with Clear) + Duplicates tab (pending songs / scan results / marked-pairs manager); hide-on-close singleton; all actions funnel through the injected `on_song(record, action)` | `ui.main_window` | `ui.scrollable`, `utils.{scaling,theme}` |
-| `settings_theme_ui.py` | theme picker Toplevel; writes `cfg/theme.ini` directly | `settings_ui` | `ui.scrollable`, `utils.{config,scaling,theme,window}` |
+| `settings_theme_ui.py` | theme picker Toplevel; writes `cfg/theme.ini` directly; Themes bar at the top (combo of built-in + saved user themes with Save/Create/Delete, mirroring the Profiles section) applies themes live via the existing `on_theme_change` callback; window is capped at the screen height (`fit_window_to_screen`) so the swatch list scrolls instead of opening taller than the display | `settings_ui` | `ui.scrollable`, `utils.{config,scaling,theme,window}` |
 | `updater_ui.py` | `show_update_dialog(root, version, url, body)` | `app.app` (after the updater thread lands) | `utils.{scaling,theme,window}` |
 | `close_playlist_dialog.py` | confirm-remove dialog | `card_grid` | `utils.{scaling,theme,window}` |
 | `scrollable.py` | `ScrollableFrame` mixin | `card_grid`, `playlist_dialog`, `settings_ui`, `settings_theme_ui`, `main_window` | `utils.theme` |
@@ -75,14 +75,14 @@ grep -rn "^from \|^import " app/ --include="*.py"
 
 | File | Role | Used by | Uses |
 |---|---|---|---|
-| `config.py` | `SETTINGS_PATH`/`THEME_PATH` (profile-aware via `profile_store.cfg_dir()`; imported first so the active profile is initialised before paths bind), `DEFAULT_SETTINGS`/`DEFAULT_THEME`, `ensure_*_file()`, `get_setting(_value)` | most modules (theme, scaling, key_mapping, updater, settings dialogs, main_window, app.app) | `services.profile_store` |
+| `config.py` | `SETTINGS_PATH`/`THEME_PATH` (profile-aware via `profile_store.cfg_dir()`; imported first so the active profile is initialised before paths bind), `DEFAULT_SETTINGS`/`DEFAULT_THEME`, `ensure_*_file()`, `get_setting(_value)`, named-theme CRUD: `THEMES_DIR` (`cfg/themes/`, one full-palette INI per saved theme), `list_themes()`/`save_theme()`/`apply_theme()`/`delete_theme()`/`rename_theme()` with `_NAME_RE`-style validation and reserved built-in names ("Default theme"/"White Theme") | most modules (theme, scaling, key_mapping, updater, settings dialogs, main_window, app.app) | `services.profile_store` |
 | `theme.py` | `THEME_MAP`, flat dict `C`, `load_theme()`, `btn_colors()` | every UI module, `app_controller`, `keybind_controller` | `utils.{config,scaling}` |
 | `scaling.py` | `init(root)` / `ui_font()` / `px()`: single source of scale factor and font family; must run before any widget; validates font family against `tk.font.families()` at startup | `app.app` (first), then icons, theme, all UI | `utils.config` |
 | `icons.py` | `IconService`: PIL-resized PhotoImages, LANCZOS + cache, main-thread only | `login_ui`, `main_window`, `showcase_manager` | `utils.scaling` |
 | `thumbnail.py` | `ThumbnailService.fetch_image()` any thread / `to_photoimage()` main thread only | `playlist_dialog`, `showcase_manager`, `playlist_sync`, `app.cli` | requests, Pillow |
 | `key_mapping.py` | pynput/tk key normalization and parsing | `keybind_controller`, `keybind_registry` | stdlib only |
 | `platform.py` | `is_wayland_session()`, `x11_root_desktop_state()` (EWMH root props via `xprop`, used by hide-to-tray to exclude desktop-switch/show-desktop minimizes), `get_terminal_command()`, `open_directory()` | `keybind_controller`, `tray`, `auth_setup`, `main_window` | stdlib only |
-| `window.py` | `center_window` / `resize_window`, pure geometry | `app.app` and most dialogs | tkinter only |
+| `window.py` | `center_window` / `resize_window` / `fit_window_to_screen` (caps a Toplevel at the screen size, used before centering so over-tall dialogs scroll instead of opening off-screen), pure geometry | `app.app` and most dialogs | tkinter only |
 | `updater.py` | GitHub latest-release check on a worker thread | `app.app` | `utils.config`, `_version` |
 | `logging_config.py` | `configure_logging()` levels, `user_log()` helper | `app.main`, `app.app`, `cli`, `auth_setup`, several UI modules | stdlib only |
 
