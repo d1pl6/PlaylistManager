@@ -10,7 +10,6 @@ to 1.75x text.  :class:`IconService` resizes the base PNG to
 """
 
 import logging
-from pathlib import Path
 from typing import Dict, Tuple
 
 from PIL import Image, ImageTk

@@ -3,8 +3,6 @@
 Pure string/enum functions - no listener needed, no display required.
 """
 
-import pytest
-
 from pynput.keyboard import Key, KeyCode
 
 from utils import key_mapping

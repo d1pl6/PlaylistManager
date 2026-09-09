@@ -260,7 +260,13 @@ def build_playlist_url(
 
     if template:
         host = _resolve_host(platform, plugin_registry) or ""
-        return template.format(host=host, id=playlist_id)
+        # Replace, never str.format: templates arrive from downloaded
+        # plugin manifests, and format's attribute/index access on
+        # injected values ({host.__class__}) is exactly the kind of
+        # surface a foreign manifest could abuse.
+        return (
+            template.replace("{host}", host).replace("{id}", playlist_id)
+        )
 
     # 2. Plugin with hosts but no template - generic ``/<id>`` default.
     host = _resolve_host(platform, plugin_registry)
@@ -303,7 +309,10 @@ def build_song_url(
 
     if template:
         host = _resolve_host(platform, plugin_registry) or ""
-        return template.format(host=host, id=track_id)
+        # Replace, never str.format - see build_playlist_url.
+        return (
+            template.replace("{host}", host).replace("{id}", track_id)
+        )
 
     # 2. Plugin with hosts but no template - generic ``/<id>`` default.
     host = _resolve_host(platform, plugin_registry)

@@ -213,8 +213,10 @@ def download_integration(platform_id: str) -> List[Path]:
                     # verify it exists and declares the expected id so a
                     # re-purposed repo can never install under a foreign
                     # platform id.  Other copies (e.g. the browser
-                    # extension) carry none and are skipped.
-                    if src_rel.split("/")[-1] == platform_id:
+                    # extension) carry none and are skipped.  Every repo in
+                    # the catalog uses a whole-root copy (``""``), which IS
+                    # the plugin package - validate it too.
+                    if src_rel.split("/")[-1] in ("", platform_id):
                         manifest = src / "plugin.json"
                         if not manifest.is_file():
                             raise FileNotFoundError(

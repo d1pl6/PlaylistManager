@@ -26,7 +26,6 @@ from plugin_loader import PluginRegistry
 from services import duplicate_queue, integration_manager
 from ui.scrollable import ScrollableFrame
 from utils.icons import IconService
-from utils.logging_config import user_log
 from utils.scaling import ui_font
 from utils.theme import C, btn_colors
 

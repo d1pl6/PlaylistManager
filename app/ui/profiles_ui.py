@@ -16,10 +16,9 @@ The same window shape is reused for:
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
 
 from services import profile_store
-from ui.scrollable import ScrollableFrame
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
 from utils.window import center_window

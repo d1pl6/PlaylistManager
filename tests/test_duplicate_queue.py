@@ -34,9 +34,28 @@ class TestPending:
     def test_add_then_find(self, sandbox):
         rid = dq.add_pending({"playlist_id": "pl1", "track_id": "t1",
                               "playlist_name": "Chill", "platform": "spotify"})
-        rec = dq.find_pending("pl1", "t1")
+        # find_pending's natural key includes the playlist name (two
+        # legacy id-less playlists can queue the same track_id).
+        rec = dq.find_pending("pl1", "t1", "Chill")
         assert rec is not None
         assert rec["id"] == rid
+
+    def test_same_track_different_playlists_kept_separate(self, sandbox):
+        dq.add_pending({"playlist_id": "pl1", "track_id": "t1",
+                        "playlist_name": "Chill", "platform": "spotify"})
+        dq.add_pending({"playlist_id": "pl2", "track_id": "t1",
+                        "playlist_name": "Workout", "platform": "spotify"})
+        # Distinct playlists enqueueing the same track are separate prompts
+        pend = dq.list_pending(prune_unregistered=False)
+        assert len(pend) == 2
+
+    def test_idless_same_track_different_playlists_kept_separate(self, sandbox):
+        # Legacy entries have playlist_id == "" - the name disambiguates.
+        dq.add_pending({"playlist_id": "", "track_id": "t1",
+                        "playlist_name": "Chill", "platform": "spotify"})
+        dq.add_pending({"playlist_id": "", "track_id": "t1",
+                        "playlist_name": "Workout", "platform": "spotify"})
+        assert len(dq.list_pending(prune_unregistered=False)) == 2
 
     def test_re_add_replaces(self, sandbox):
         dq.add_pending({"playlist_id": "pl1", "track_id": "t1"})
@@ -104,13 +123,15 @@ class TestErrors:
 
 class TestPurge:
     def test_purge_platform(self, sandbox):
-        dq.add_pending({"playlist_id": "p1", "track_id": "t1", "platform": "spotify"})
-        dq.add_pending({"playlist_id": "p2", "track_id": "t2", "platform": "yt"})
+        dq.add_pending({"playlist_id": "p1", "track_id": "t1",
+                        "platform": "spotify", "playlist_name": "Chill"})
+        dq.add_pending({"playlist_id": "p2", "track_id": "t2",
+                        "platform": "yt", "playlist_name": "Other"})
         dq.set_song(dq.make_pair_key("spotify", "p1", "a", "b"), "added")
         dq.record_error("X", "spotify", "e")
         counts = dq.purge_platform("spotify")
         assert counts == (1, 1, 1)
-        assert dq.find_pending("p2", "t2") is not None
+        assert dq.find_pending("p2", "t2", "Other") is not None
         assert dq.list_songs() == {}
 
     def test_purge_playlist(self, sandbox):
@@ -122,7 +143,7 @@ class TestPurge:
         counts = dq.purge_playlist("spotify", "p1", "Chill")
         assert counts[0] == 1  # pending removed
         assert counts[1] == 1  # song memory removed
-        assert dq.find_pending("p2", "t2") is not None
+        assert dq.find_pending("p2", "t2", "Other") is not None
         assert dq.list_songs() == {}
 
 

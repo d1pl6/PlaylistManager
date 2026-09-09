@@ -746,7 +746,7 @@ class SongManager:
                 playlist_name, platform=platform, playlist_id=playlist_id
             ) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM songs ORDER BY added_at DESC")
+                cursor.execute("SELECT * FROM songs ORDER BY added_at DESC, id DESC")
                 rows = cursor.fetchall()
                 songs = []
                 for row in rows:
@@ -934,7 +934,7 @@ class SongManager:
                     "FROM songs "
                     "WHERE title LIKE ? ESCAPE '\\' "
                     "OR artists LIKE ? ESCAPE '\\' "
-                    "ORDER BY added_at DESC LIMIT ?",
+                    "ORDER BY added_at DESC, id DESC LIMIT ?",
                     (pattern, pattern, limit),
                 )
                 songs = []

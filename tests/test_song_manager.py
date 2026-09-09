@@ -9,8 +9,6 @@ Pure functions (``_parse_duration``, the platform extractors,
 ``_pick_thumbnail``) are tested separately with no file I/O.
 """
 
-import time
-
 import pytest
 
 from services import song_manager
@@ -142,9 +140,11 @@ class TestExtractors:
         assert out[3] == "789"
         assert out[4] == "/0/500x500-1.jpg"
 
-    def test_unknown_platform_falls_back_to_youtube(self):
+    def test_unknown_platform_falls_back_to_youtube(self, sandbox):
         # add_songs_bulk with an unknown platform warns and uses the
         # YouTube extractor (track dicts without videoId are skipped).
+        # sandbox: per-test DB dir (singleton + connection registry are
+        # reset by the fixture, so nothing leaks into the shared tree).
         sm = song_manager.SongManager()
         n = sm.add_songs_bulk("X", [{"title": "T", "videoId": "v1"}],
                               platform="unknown_platform", playlist_id="")
@@ -216,7 +216,8 @@ class TestSongCrud:
     def test_get_all_songs_newest_first(self, sm):
         sm.add_song("Playlist A", "Song One", ["Artist"], 180,
                     "track1", platform="spotify", playlist_id="pl1")
-        time.sleep(1.1)  # added_at has second precision; distinct timestamps
+        # No sleep needed: the ordering is added_at DESC, id DESC - the id
+        # tiebreaker keeps same-second adds deterministic.
         sm.add_song("Playlist A", "Song Two", ["Artist"], 180,
                     "track2", platform="spotify", playlist_id="pl1")
         songs = sm.get_all_songs("Playlist A", platform="spotify", playlist_id="pl1")

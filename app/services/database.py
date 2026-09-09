@@ -116,8 +116,12 @@ class DatabaseManager:
         its ``with`` block exits).  *playlist_id* pins the deletion to
         the id-hashed file; without it the legacy (pre-hash) name is
         used, and both variants are removed when an id is given so a
-        pre-migration delete still cleans up.  Errors are logged and
-        ignored so callers can treat this as best-effort cleanup.
+        pre-migration delete still cleans up.  When deleting by id, the
+        cache-drop covers legacy-addressed connections too (``""`` key):
+        a flow thread holding a pre-migration handle would otherwise
+        recreate the unlinked legacy file on its next lookup.  Errors
+        are logged and ignored so callers can treat this as best-effort
+        cleanup.
         """
         paths = [
             DatabaseManager.get_playlist_db_path_static(
@@ -136,7 +140,10 @@ class DatabaseManager:
                 for key in DatabaseManager._connections
                 if key[1] == playlist_name
                 and key[2] == platform
-                and (not playlist_id or key[3] == playlist_id)
+                and (
+                    not playlist_id
+                    or key[3] in ("", playlist_id)
+                )
             ]:
                 # Drop without closing: the owning thread (still alive)
                 # closes it itself when it exits the `with` block.

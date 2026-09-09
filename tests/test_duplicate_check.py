@@ -275,7 +275,7 @@ class TestResolveNearDuplicate:
         )
         assert action == "queued"
         assert match is not None
-        pend = duplicate_queue.find_pending("pl", "new")
+        pend = duplicate_queue.find_pending("pl", "new", "X")
         assert pend is not None
         assert pend["title"] == "Tales from da Guttah"
         assert pend["similarity"] == match["similarity"]

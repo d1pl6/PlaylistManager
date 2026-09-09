@@ -29,7 +29,6 @@ import logging
 import os
 import threading
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -106,24 +105,51 @@ def _write(data: dict) -> None:
 
 
 def _entry_count(scrobbles: dict) -> int:
-    """Total song records across all platforms/playlists (nested dicts)."""
-    return sum(
-        len(songs)
-        for playlists in scrobbles.values()
-        for songs in playlists.values()
-    )
+    """Total song records across all platforms/playlists (nested dicts).
+
+    Tolerates parseable-but-misshapen ledgers (a platform mapped to a
+    non-dict, a playlist mapped to a non-dict): malformed levels are
+    skipped instead of raising TypeError out of ``record_scrobble`` -
+    this is bookkeeping, never worth crashing the add flow over.
+    """
+    total = 0
+    for playlists in scrobbles.values():
+        if not isinstance(playlists, dict):
+            continue
+        for songs in playlists.values():
+            if isinstance(songs, dict):
+                total += len(songs)
+    return total
 
 
 def _prune(data: dict) -> None:
-    """Drop oldest records FIFO (insertion order = JSON object order)."""
+    """Drop oldest records FIFO (insertion order = JSON object order).
+
+    Misshapen levels (see :func:`_entry_count`) are dropped outright so
+    the ledger self-heals back to a regular shape.
+    """
     scrobbles = data.get("scrobbles", {})
+    if not isinstance(scrobbles, dict):
+        return
     total = _entry_count(scrobbles)
     while total > MAX_ENTRIES:
         dropped = False
         for platform in list(scrobbles):
             playlists = scrobbles[platform]
+            if not isinstance(playlists, dict):
+                del scrobbles[platform]
+                continue
             for playlist_id in list(playlists):
                 songs = playlists[playlist_id]
+                if not isinstance(songs, dict):
+                    del playlists[playlist_id]
+                    continue
+                if not songs:
+                    # An empty songs dict contributes nothing to the
+                    # count but would make next(iter(songs)) raise —
+                    # self-heal it away (see _entry_count).
+                    del playlists[playlist_id]
+                    continue
                 oldest = next(iter(songs))
                 del songs[oldest]
                 total -= 1
@@ -157,9 +183,15 @@ def record_scrobble(platform: str, playlist_id: str, song_id, timestamp: int) ->
         return
     with _lock:
         data = _load()
+        # Self-heal misshapen levels instead of letting setdefault chain
+        # through a non-dict platform/playlist entry (see _entry_count).
         scrobbles = data.setdefault("scrobbles", {})
-        playlists = scrobbles.setdefault(str(platform), {})
-        songs = playlists.setdefault(str(playlist_id), {})
+        playlists = scrobbles.get(str(platform))
+        if not isinstance(playlists, dict):
+            playlists = scrobbles[str(platform)] = {}
+        songs = playlists.get(str(playlist_id))
+        if not isinstance(songs, dict):
+            songs = playlists[str(playlist_id)] = {}
         songs[str(song_id)] = {
             "timestamp": int(timestamp),
             "at": _now_iso(),

@@ -36,6 +36,13 @@ def setup_ytmusic_auth() -> Dict[str, Any]:
     should show a manual-step message.
     """
     AUTH_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # mkdir's mode only applies to a NEW directory - enforce it also on
+    # an existing one (created with a looser umask, or by an earlier
+    # version) so the credentials stay private.
+    try:
+        AUTH_DIR.chmod(0o700)
+    except OSError:
+        logger.debug("Could not enforce 0o700 on %s", AUTH_DIR)
     open_directory(AUTH_DIR)
 
     try:

@@ -373,9 +373,10 @@ class CardGridManager:
 
     def _confirm_close_playlist(self, card) -> None:
         try:
-            index = self.cards.index(card)
+            # Membership check: card must still be in the grid.
+            self.cards.index(card)
             playlist_name = card.name_label.cget("text")
-        except (ValueError, IndexError):
+        except (ValueError, tk.TclError):
             logger.error("Close confirmation: frame not found")
             return
         show_close_playlist_dialog(

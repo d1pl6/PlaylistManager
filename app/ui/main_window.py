@@ -103,6 +103,12 @@ class MainWindow:
         self._service_after_id: str | None = None
         self._activity_poll_after_id: str | None = None
 
+        # Drag-to-move anchor; only meaningful between <Button-1> and the
+        # following <B1-Motion>, but initialized so a synthetic motion
+        # event cannot trigger an AttributeError.
+        self._drag_x: int = 0
+        self._drag_y: int = 0
+
         # Set by App._start_tray() once the window exists; None when no
         # tray backend is available.
         self.tray_service = None
@@ -708,7 +714,6 @@ class MainWindow:
         # Capture the card, not the index: the callbacks object can
         # outlive close_main_frame() renumbering, so on_song_added resolves
         # the live index at callback time (memory: never capture an index).
-        main_frame = card.frame
 
         def _set(widget, **kwargs) -> None:
             """Configure *widget* if it still exists.
@@ -1735,7 +1740,14 @@ class MainWindow:
             logger.warning("Failed to close DB connections before reload: %s", e)
 
         self._sync_service.reload_database(
-            playlist_name, platform, playlist_id, on_done
+            playlist_name,
+            platform,
+            playlist_id,
+            on_done,
+            # Serialize the delete+reimport against in-flight keybind
+            # adds: an add racing the DB unlink would write to the
+            # orphaned inode and silently lose its rows.
+            gate=self.kc.flow_busy(),
         )
 
     # ------------------------------------------------------------------

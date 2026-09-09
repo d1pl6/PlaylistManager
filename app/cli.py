@@ -211,26 +211,37 @@ def resolve_targets_for(
 # ---------------------------------------------------------------------------
 
 
-def _init_platform(plugin_registry, platform_id: str):
+def _init_platform(plugin_registry, platform_id: str, integration=None):
     """Authenticate one platform via its plugin. Returns the integration
-    with a live client, or ``None`` when unavailable/unconfigured."""
+    with a live client, or ``None`` when unavailable/unconfigured.
+
+    *integration* may be a prebuilt instance from an
+    :class:`IntegrationRegistry` (already authenticated by the caller) -
+    pass it when the caller built one, so the platform is never
+    authenticated twice.
+    """
     plugin = plugin_registry.get(platform_id)
     if plugin is None:
         return None
-    try:
-        auth_manager = None
-        if plugin.auth_module:
-            auth_manager = plugin.import_auth_attr()
-        integration_cls = plugin.import_integration()
-    except Exception as e:
-        logger.error(
-            "%s integration unavailable: %s", platform_id, e, exc_info=True
-        )
-        return None
+    if integration is None:
+        try:
+            auth_manager = None
+            if plugin.auth_module:
+                auth_manager = plugin.import_auth_attr()
+            integration_cls = plugin.import_integration()
+            integration = integration_cls(auth_manager=auth_manager)
+        except Exception as e:
+            logger.error(
+                "%s integration unavailable: %s", platform_id, e, exc_info=True
+            )
+            return None
 
-    integration = integration_cls(auth_manager=auth_manager)
     try:
-        if not integration.authenticate():
+        # A prebuilt registry instance may already be authenticated
+        # (the caller restricted the registry to exactly the platforms
+        # it needs) - re-running authenticate() would repeat the
+        # network round trip for nothing.
+        if not integration.is_authenticated() and not integration.authenticate():
             logger.warning(
                 "%s is not configured - run the GUI auth setup first",
                 plugin.display_name,
@@ -249,13 +260,22 @@ def _auth_error(plugin) -> str:
     return f"{plugin.display_name} not configured - run the GUI auth setup first"
 
 
-def _build_integrations():
+def _build_integrations(auth_platforms=None):
     """Return an IntegrationRegistry covering every discovered plugin.
 
     Mirrors App.__init__ headlessly: no tkinter, no messageboxes.  Every
     loadable integration is registered; consumers gate on
     ``is_authenticated()`` so an unconfigured or failed platform simply
     reports a per-platform error instead of disappearing.
+
+    *auth_platforms* restricts authentication to those platform ids (an
+    iterable of id strings); ``None`` authenticates every registered
+    platform.  Registration itself is pure Python (no network), so a
+    caller that only needs one or two platforms should pass their ids
+    and never pay ``authenticate()`` for the rest - Spotify's /v1/me
+    verification is a network round trip with a 15 s timeout, and a
+    stale unrelated integration (e.g. expired YouTube credentials)
+    would otherwise slow or fail an add that does not touch it.
     """
     registry = IntegrationRegistry()
     plugin_registry = get_default_registry()
@@ -273,6 +293,8 @@ def _build_integrations():
     # Authenticate after registration - authenticate() is a network round
     # trip and must never keep a broken plugin from being registered.
     for integration in registry.get_all().values():
+        if auth_platforms is not None and integration.id not in auth_platforms:
+            continue
         try:
             integration.authenticate()
         except Exception as e:
@@ -282,15 +304,16 @@ def _build_integrations():
     return registry
 
 
-def _scrobble_backend():
+def _scrobble_backend(integrations=None):
     """Return the single ScrobbleCapable integration, or ``None``.
 
     Built lazily (and only on demand - the caller gates on auto-scrobble
     being enabled) so an add that is not going to scrobble never pays the
-    full-registry authenticate() cost of every installed platform.  ``None``
-    when no scrobble-capable backend is installed/configured.
+    full-registry authenticate() cost of every installed platform.
+    ``None`` when no scrobble-capable backend is installed/configured.
     """
-    integrations = _build_integrations()
+    if integrations is None:
+        integrations = _build_integrations()
     return next(
         (
             integ
@@ -352,7 +375,29 @@ def run_add(spec: str) -> int:
     # ScrobbleCapable backend once.  When it's off (default) we never
     # authenticate unrelated platforms just to find a scrobble backend.
     auto_scrobble = get_setting("scrobble_on_add")
-    scrobble_integ = _scrobble_backend() if auto_scrobble else None
+
+    # Build ONE registry, authenticating only the platforms this add
+    # touches: the target platforms plus the scrobble backend when
+    # auto-scrobble is on.  Authenticating every installed platform here
+    # pays network round trips (Spotify /v1/me verification) for
+    # integrations the add never uses, and a stale unrelated integration
+    # could delay or fail a perfectly healthy add.
+    target_platforms = {
+        entry.get("platform") or "youtube_music" for _, entry in targets
+    }
+    registry = _build_integrations(auth_platforms=target_platforms)
+    scrobble_integ = None
+    if auto_scrobble:
+        scrobble_integ = _scrobble_backend(registry)
+        if scrobble_integ is not None and scrobble_integ.id not in target_platforms:
+            try:
+                scrobble_integ.authenticate()
+            except Exception as e:
+                logger.error(
+                    "%s auth failed: %s",
+                    scrobble_integ.display_name, e, exc_info=True,
+                )
+                scrobble_integ = None
 
     # Legacy registry entries predate the "platform" field - default them
     # to YouTube Music, matching PlaylistStore.
@@ -373,7 +418,9 @@ def run_add(spec: str) -> int:
         if plugin is None or not plugin.flow_class:
             ctx["error"] = f"unsupported platform '{platform}'"
             continue
-        integration = _init_platform(plugin_registry, platform)
+        integration = _init_platform(
+            plugin_registry, platform, integration=registry.get(platform)
+        )
         if integration is None:
             ctx["error"] = _auth_error(plugin)
             continue
@@ -430,7 +477,7 @@ def run_add_url(url: str) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    integrations = _build_integrations()
+    integrations = _build_integrations(auth_platforms={platform})
     integration = integrations.get(platform)
     if integration is None or not integration.is_authenticated():
         plugin = get_default_registry().get(platform)
@@ -564,7 +611,11 @@ def run_refresh(spec: str) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    integrations = _build_integrations()
+    integrations = _build_integrations(
+        auth_platforms={
+            entry.get("platform") or "youtube_music" for _, entry in targets
+        }
+    )
     sync = PlaylistSyncService(integrations)
 
     failures = 0

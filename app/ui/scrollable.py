@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
-from tkinter import ttk
 
 from utils.theme import C, hover_bg
 

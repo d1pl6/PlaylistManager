@@ -85,7 +85,6 @@ class AppController:
         process raises) leaves the app stopped rather than silently
         half-closed.
         """
-        import os
         import subprocess
         import sys
         from pathlib import Path

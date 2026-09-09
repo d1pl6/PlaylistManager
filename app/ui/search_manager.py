@@ -10,7 +10,7 @@ import logging
 import threading
 import tkinter as tk
 
-from utils.scaling import px, ui_font
+from utils.scaling import ui_font
 from utils.theme import C, btn_colors, dimmed_fg
 
 logger = logging.getLogger(__name__)

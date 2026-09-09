@@ -83,6 +83,7 @@ class PlaylistSyncService:
         platform: str,
         playlist_id: str,
         on_done: OnReloadDoneCallback,
+        gate: Optional[threading.Lock] = None,
     ) -> None:
         """Delete the local database and re-import all tracks.
 
@@ -90,6 +91,15 @@ class PlaylistSyncService:
         *PlaylistStore*.
 
         *on_done* is called from the worker thread.
+
+        *gate* is an optional lock the worker holds (blocking acquire) for
+        the whole reload.  The delete+reimport window races an in-flight
+        keybind flow: the flow's write would land on the just-unlinked DB
+        file (rows silently lost on the orphaned inode).  Passing the
+        keybind controller's ``flow_busy()`` lock serializes the two - the
+        reload waits for running adds to drain, and adds that fire during
+        the reload are skipped by the keybind's non-blocking acquire and
+        reported as "another add in progress".
         """
         if not playlist_id:
             logger.warning("No playlist_id for '%s', cannot reload", playlist_name)
@@ -102,6 +112,12 @@ class PlaylistSyncService:
             return
 
         def _run() -> None:
+            lock_gate = gate
+            if lock_gate is not None:
+                # Blocking: drain any in-flight add before deleting the DB
+                # (see docstring).  The keybind side acquires non-blocking
+                # and skips, so there is no circular wait.
+                lock_gate.acquire()
             try:
                 inserted, status, thumb_url = self.reload_database_sync(
                     playlist_name, platform, playlist_id
@@ -110,6 +126,9 @@ class PlaylistSyncService:
             except Exception as e:
                 logger.error("Reload failed for '%s': %s", playlist_name, e)
                 on_done(playlist_name, 0, "Error", None)
+            finally:
+                if lock_gate is not None:
+                    lock_gate.release()
 
         threading.Thread(target=_run, daemon=True).start()
 

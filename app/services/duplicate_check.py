@@ -201,8 +201,8 @@ def find_duplicate_pairs(
     """All near-duplicate pairs within one playlist's songs.
 
     *songs* must be ordered newest-first (the ``get_all_songs``
-    ``ORDER BY added_at DESC`` ordering) so each pair can carry which
-    side is the newer addition.  Returns a list of
+    ``ORDER BY added_at DESC, id DESC`` ordering) so each pair can carry
+    which side is the newer addition.  Returns a list of
     ``{"newer": song, "older": song, "similarity": ratio}``, most
     similar pair first.  O(N^2) with a cheap duration pre-screen - fine
     for playlists of up to a few thousand rows.
@@ -260,6 +260,9 @@ def read_settings() -> tuple[bool, float, int]:
 
     The config import is lazy so this module stays importable without
     any side effects; malformed knob values fall back to the defaults.
+    Threshold and tolerance are clamped to sane ranges so a hand-edited
+    or legacy INI value (0.0 threshold, negative tolerance) cannot make
+    every song "similar".
     """
     from utils.config import get_setting, get_setting_value
 
@@ -268,10 +271,12 @@ def read_settings() -> tuple[bool, float, int]:
         threshold = float(get_setting_value("duplicate_check", "title_threshold", "0.85"))
     except (TypeError, ValueError):
         threshold = 0.85
+    threshold = min(max(threshold, 0.05), 1.0)
     try:
         tolerance = int(get_setting_value("duplicate_check", "duration_tolerance", "5"))
     except (TypeError, ValueError):
         tolerance = 5
+    tolerance = min(max(tolerance, 0), 600)
     return enabled, threshold, tolerance
 
 

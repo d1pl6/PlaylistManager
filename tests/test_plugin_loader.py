@@ -136,7 +136,7 @@ class TestDuplicateId:
 
 class TestPluginInfoFields:
     def test_url_templates_loaded(self, tmp_path):
-        d = _write_manifest(tmp_path, "p", _valid_manifest(
+        _write_manifest(tmp_path, "p", _valid_manifest(
             url_hosts=["music.example.com"],
             playlist_url_template="https://{host}/p/{id}",
             song_url_template="https://{host}/s/{id}",
@@ -191,15 +191,10 @@ class TestFallbackPathValidation:
         info = plugin_loader.PluginRegistry().discover(tmp_path).get("testplatform")
         assert info.auth_file_fallbacks == []
 
-    def test_malicious_path_traversal_in_manifest_validated(self, tmp_path):
-        # Defense in depth: fallbacks must never escape the repo root.
-        reg = plugin_loader.PluginRegistry().discover(tmp_path)
-        assert len(reg) == 0  # nothing to discover on an empty tree
-
 
 class TestLoginLogo:
     def test_escaped_login_logo_refused(self, tmp_path):
-        d = _write_manifest(tmp_path, "p", _valid_manifest(login_logo="../../evil.png"))
+        _write_manifest(tmp_path, "p", _valid_manifest(login_logo="../../evil.png"))
         info = plugin_loader.PluginRegistry().discover(tmp_path).get("testplatform")
         assert info.login_logo_path is None
 

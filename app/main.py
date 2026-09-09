@@ -44,15 +44,18 @@ def parse_args():
     )
     p.add_argument(
         "--verbose", "-v", action="count", default=0,
-        help="normal logging. INFO, DEBUG",
+        help="increase logging verbosity (repeatable): -v = INFO and above, "
+             "-vv = DEBUG and above, -vvv = TRACE and above "
+             "(equivalent to --debug / --trace)",
     )
     p.add_argument(
-        "--debug", "-vv", action="store_true",
-        help="verbose logging (DEBUG level)",
+        "--debug", action="store_true",
+        help="verbose logging (DEBUG level; same as -vv)",
     )
     p.add_argument(
-        "--trace", "-vvv", action="store_true",
-        help="ultra-verbose logging (TRACE level + third-party debug)",
+        "--trace", action="store_true",
+        help="ultra-verbose logging (TRACE level + third-party debug; "
+             "same as -vvv)",
     )
     p.add_argument(
         "--add-song", "-a", dest="add_song_targets", metavar="PLAYLISTS",
@@ -76,7 +79,9 @@ def parse_args():
     )
     p.add_argument(
         "--login", dest="login_platform", metavar="PLATFORM",
-        help='log in to a platform: "youtube_music" or "spotify" '
+        help='log in to a platform: "youtube_music", "spotify" '
+             '(spotify takes --client-id/--client-secret/--refresh-token), '
+             '"soundcloud" or "deezer"',
     )
     p.add_argument(
         "--logout", dest="logout_platform", metavar="PLATFORM",

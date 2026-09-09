@@ -36,7 +36,6 @@ import os
 import threading
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -175,8 +174,11 @@ def _playlist_alive(record: dict) -> bool:
 def add_pending(record: dict) -> Optional[str]:
     """Queue one near-duplicate song; returns its id.
 
-    Re-enqueueing the same ``(playlist_id, track_id)`` replaces the old
-    record instead of stacking duplicates of the same prompt.
+    Re-enqueueing the same ``(playlist_name, playlist_id, track_id)``
+    replaces the old record instead of stacking duplicates of the same
+    prompt.  ``playlist_name`` is part of the key: two distinct legacy
+    playlists (no playlist_id - both ``""``) can enqueue the same
+    track_id and must get two separate prompts.
     """
     record = dict(record)
     record.setdefault("id", uuid.uuid4().hex)
@@ -188,7 +190,8 @@ def add_pending(record: dict) -> Optional[str]:
             r
             for r in data.get("pending", [])
             if not (
-                r.get("playlist_id") == record.get("playlist_id")
+                r.get("playlist_name") == record.get("playlist_name")
+                and r.get("playlist_id") == record.get("playlist_id")
                 and r.get("track_id") == record.get("track_id")
             )
         ]
@@ -216,12 +219,18 @@ def remove_pending(record_id: str) -> bool:
         return removed
 
 
-def find_pending(playlist_id: str, track_id: str) -> Optional[dict]:
-    """Locate one queued record by its natural key (no pruning on read)."""
+def find_pending(playlist_id: str, track_id: str, playlist_name: str = "") -> Optional[dict]:
+    """Locate one queued record by its natural key (no pruning on read).
+
+    Mirrors :func:`add_pending`'s dedup key: ``playlist_name`` disambiguates
+    two legacy playlists (both ``playlist_id == ""``) that queued the same
+    track_id.
+    """
     with _lock:
         for r in _load().get("pending", []):
             if (
-                r.get("playlist_id") == playlist_id
+                r.get("playlist_name") == playlist_name
+                and r.get("playlist_id") == playlist_id
                 and r.get("track_id") == track_id
             ):
                 return dict(r)
