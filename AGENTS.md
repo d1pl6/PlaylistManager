@@ -15,6 +15,7 @@ python main.py --logout spotify       # headless CLI: delete credentials + regis
 python main.py --install spotify      # headless CLI: download/install a platform plugin ("all" for every platform)
 python main.py --uninstall spotify    # headless CLI: remove a platform plugin + credentials + registry + db (or "all")
 python main.py --list         # headless CLI: numbered playlists (no display needed)
+python main.py --data-saver   # launch GUI with thumbnails disabled ('max' mode; overrides the [thumbnails] setting for the run)
 ```
 
 Every `python main.py ...` above is equivalent under `python -m app ...` (CLI.MD and the cli.py docstring use the `-m app` form). Platform names in the CLI are the **directory** names: `youtube_music`, `spotify`, `lastfm`, `soundcloud`, `deezer`.
@@ -94,21 +95,21 @@ app/
     main_window.py          # composition root: toolbar, card grid, search, showcase rows, dialog wiring; Activity window host (badge, decision dispatcher)
     card_grid.py            # CardGridManager — grid of playlist cards; per-card actions (keybind capture, remove, reload)
     card.py                 # PlaylistCard dataclass + card widget
-    showcase_manager.py     # last-N-added-songs row per card (cfg [showcase] count, default "0" = off)
+    showcase_manager.py     # last-N-added-songs row per card (cfg [showcase] count, default "0" = off); song-aware thumb fetch + cache-mode prune
     search_manager.py       # search bar filtering the grid
     activity_window.py      # non-modal Errors log + duplicate-decision window (hide-on-close singleton)
     playlist_dialog.py      # playlist picker (async thumbnails)
     scrollable.py           # ScrollableFrame — reusable Canvas+Scrollbar+mousewheel container; use it for any new scrollable window
     login_ui.py             # first-run login dialog + per-platform tiles; "Manage" button
     manage_integrations_ui.py  # download/uninstall dialog for platform plugins (uninstall orchestration, see Integration quirks)
-    settings_ui.py          # Settings dialog (booleans, ui_scale, columns, duplicate-check, profiles section)
+    settings_ui.py          # Settings dialog (booleans, ui_scale, columns, font family, thumbnails mode + clear-cache button, duplicate-check, profiles section)
     settings_theme_ui.py    # theme picker Toplevel, writes cfg/theme.ini directly
     profiles_ui.py          # profile create/rename/bucket-edit dialogs (uses services/profile_store.py)
     updater_ui.py, tooltip.py, close_playlist_dialog.py
   utils/
-    config.py              # SETTINGS_PATH, THEME_PATH, DEFAULT_THEME, ensure_settings_file(), ensure_theme_file()
+    config.py              # SETTINGS_PATH, THEME_PATH, DEFAULT_THEME, THUMBNAIL_MODES, ensure_settings_file(), ensure_theme_file()
     theme.py               # central theme palette: THEME_MAP, C dict, load_theme()
-    thumbnail.py           # ThumbnailService — fetch_image() (any thread) / to_photoimage() (main thread only)
+    thumbnail.py           # ThumbnailService — fetch_image()/fetch_song_image() (any thread), to_photoimage() (main thread only); data-saver modes + on-disk cache (see Key data paths; modes see Config)
     scaling.py             # HiDPI: init(root), ui_font(), px() — single source of scale factor
     icons.py               # IconService — PIL-resized PhotoImages, LANCZOS + cache, main-thread-only
     key_mapping.py         # pynput key normalization/parsing
@@ -146,6 +147,7 @@ Everything except `theme.txt` lives under the platformdirs root
 | Per-playlist SQLite DBs | `<root>/db/platform/<sanitized>_<md5(playlist_id)[:8]>.db` (legacy: `<sanitized>.db`) |
 | App settings (INI) | `<root>/cfg/settings.ini` |
 | Theme settings (INI) | `<root>/cfg/theme.ini` |
+| Thumbnail cache | `platformdirs.user_cache_dir("playlistmanager")` — `~/.cache/playlistmanager/` on Linux (NOT the config root; **not profile-aware** — a thumbnail is the same bytes whichever profile fetched it): `playlists/` (URL-keyed covers, `md5(url|WxH).png`), `songs/` (URL-keyed or — in `dedupe` mode — identity-keyed song thumbs plus `index.json`), `full/` (original images, cleared on image-view close) |
 | Palette spec (docs) | `theme.txt` |
 | Auth credentials | `<root>/auth/` |
 | Active profile + metadata | `<root>/cfg/profile.json` (name), `<root>/db/profiles.json` (bucket capture per profile) |
@@ -200,12 +202,12 @@ Runtime colors are centralized in `app/utils/theme.py`, not re-read from the INI
 - **Quit path**: never join the pynput listener thread. `listener.stop()` alone stops event delivery; on some Linux setups the thread stays alive until process exit (daemon), and `join(timeout=N)` blocks the caller for the **full** N seconds. Teardown must call `kc.stop_listener(wait=False)` — a `wait=True` join is only acceptable on the Settings→toggle-listener path, and keep it short (≤0.5 s). See `app_controller`/`MainWindow.cleanup()` for the established pattern.
 - **Background work** (keybind flows, thumbnail downloads, playlist import/reload) runs in daemon threads. Worker threads must not touch tkinter widgets — they hand results to the UI thread via `root.after(0, ...)` (which requires the mainloop to be running).
 - **Guard every `root.after(0, ...)` from a worker thread**: after `root.destroy()` it raises `TclError("application has been destroyed")`, and from a non-main thread before/during a non-running mainloop it raises `RuntimeError("main thread is not in main loop")` — an uncaught raise kills the daemon thread with a traceback at quit. The repo's established guard helpers are `_schedule_ui` (`keybind_controller.handle_keybind`), `_async_ui` (`playlist_controller`), `_tray_after` (`App._start_tray`), plus inline try/except in `main_window` import/reload `on_done` — follow one of those patterns in new background work.
-- **Thumbnails**: `ThumbnailService.fetch_image()` (network + PIL) is thread-safe; `to_photoimage()`/`ImageTk.PhotoImage` is **main thread only**. Never create a `PhotoImage` in a worker.
+- **Thumbnails**: `ThumbnailService.fetch_image()`/`fetch_song_image()` (network + PIL) are thread-safe; `to_photoimage()`/`ImageTk.PhotoImage` is **main thread only**. Never create a `PhotoImage` in a worker.
 - **SQLite**: `DatabaseManager` caches one connection per thread per DB (`db/platform/<name>.db`). Don't share connections across threads; use `get_db_connection`. Before a reload deletes a DB file, the main thread must call `close_thread_connections()` or its cached handle would write to the orphaned file. `delete_playlist_db` is the canonical deletion path (closes cached conns, removes `-wal`/`-shm` sidecars). SQLite leaves `-wal`/`-shm` sidecars behind when only the main file is unlinked. `DatabaseManager._set_pragmas` sets `PRAGMA busy_timeout=30000` on every connection — the sqlite3 default 5s timeout causes "database is locked" when a keybind flow collides with a reload's write lock.
 
 ## Config
 
-`DEFAULT_SETTINGS` in `utils/config.py` defines the **entire** settings surface (booleans + values, optional-section defaults included): `update_check`, `center_windows`, `auto_resize`, `global_listener`, `hide_to_tray` (the last enables hide-to-tray via `services/tray.py`), `showcase_log` (the per-card log row), `playlist_stats` (song count/followers/duration row), `like_button` + `scrobble_on_add` + `scrobble_keybind` (Last.fm side effects — all default **off**, and don't flip their defaults; scrobbling is privacy-relevant by design), plus value sections: `ui_scale` (`value` key), `showcase` (`count` — last-N-added-songs per card, "0" = off), `layout` (`columns` — grid columns, default "2", clamped 1-4, applied live from Settings), `duplicate_check` (`is_true` off + `title_threshold` "0.85" / `duration_tolerance` "5" — read via `services/duplicate_check.read_settings()`), and `soundcloud` (`capture_mode`: `api`/`hybrid`/`extension` — see docs/modules.md SoundCloud row). All booleans are read with `ConfigParser.getboolean()` (accepts `yes/no/true/false/1/0`); defaults are applied by `utils/config.py:ensure_settings_file()` (which merges missing sections/keys into existing user files without touching unknown legacy sections).
+`DEFAULT_SETTINGS` in `utils/config.py` defines the **entire** settings surface (booleans + values, optional-section defaults included): `update_check`, `center_windows`, `auto_resize`, `global_listener`, `hide_to_tray` (the last enables hide-to-tray via `services/tray.py`), `showcase_log` (the per-card log row), `playlist_stats` (song count/followers/duration row), `like_button` + `scrobble_on_add` + `scrobble_keybind` (Last.fm side effects — all default **off**, and don't flip their defaults; scrobbling is privacy-relevant by design), plus value sections: `ui_scale` (`value` key), `showcase` (`count` — last-N-added-songs per card, "0" = off), `layout` (`columns` — grid columns, default "2", clamped 1-4, applied live from Settings), `duplicate_check` (`is_true` off + `title_threshold` "0.85" / `duration_tolerance` "5" — read via `services/duplicate_check.read_settings()`), `soundcloud` (`capture_mode`: `api`/`hybrid`/`extension` — see docs/modules.md SoundCloud row), and `thumbnails` (`mode`: `off`/`download`/`dedupe`/`cache`/`max` — data-saver modes, see Key data paths; `--data-saver` forces `max` per run). All booleans are read with `ConfigParser.getboolean()` (accepts `yes/no/true/false/1/0`); defaults are applied by `utils/config.py:ensure_settings_file()` (which merges missing sections/keys into existing user files without touching unknown legacy sections).
 
 **Do not assume the INI contains only the sections above**: user files can carry legacy sections (e.g. a stale `toggle_frameless`). Settings writers (`_toggle_setting`) and readers must tolerate and preserve unknown sections.
 

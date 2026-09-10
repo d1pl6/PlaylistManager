@@ -48,7 +48,19 @@ DEFAULT_SETTINGS = {
     # on a receiver miss; "extension" is receiver-only.  Read by
     # integrations/soundcloud/flow.py.
     "soundcloud": {"capture_mode": "hybrid"},
+    # Thumbnail data-saver modes (read by utils/thumbnail.py):
+    #   "off"      - live fetches every run, no on-disk cache (default)
+    #   "download" - persist every fetched playlist/song thumb to disk
+    #   "dedupe"   - one song thumb per distinct song (duplicate-check
+    #                matcher), reused across playlists/URLs/profiles
+    #   "cache"    - persist covers + only currently visible song thumbs,
+    #                pruned after each showcase refresh
+    #   "max"      - no thumbnails at all (--data-saver forces this per run)
+    "thumbnails": {"mode": "off"},
 }
+
+# Valid [thumbnails] mode values; anything else falls back to "off".
+THUMBNAIL_MODES = ("off", "download", "dedupe", "cache", "max")
 
 THEME_PATH = _profile_store.cfg_dir() / "theme.ini"
 

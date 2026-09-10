@@ -65,6 +65,26 @@ def _redirect_profile_store() -> None:
 _redirect_profile_store()
 
 
+def _redirect_thumbnail_cache() -> None:
+    """Sandbox the on-disk thumbnail cache (module globals in
+    utils/thumbnail.py are referenced at call time, so re-pinning the
+    derived paths after import is enough).  Without this, a test that
+    exercises a persistent cache mode would write to the REAL
+    ``~/.cache/playlistmanager/`` tree.
+    """
+    import utils.thumbnail as th  # noqa: PLC0415
+
+    th.CACHE_ROOT = th.Path(_TEMP_ROOT) / "cache"
+    th._PLAYLIST_DIR = th.CACHE_ROOT / "playlists"
+    th._SONG_DIR = th.CACHE_ROOT / "songs"
+    th._FULL_DIR = th.CACHE_ROOT / "full"
+    th._DEDUPE_INDEX = th._SONG_DIR / "index.json"
+    th.DATA_SAVER = False
+
+
+_redirect_thumbnail_cache()
+
+
 def _cleanup_temp_root() -> None:
     shutil.rmtree(_TEMP_ROOT, ignore_errors=True)
 

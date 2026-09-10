@@ -70,6 +70,9 @@ class PlaylistSyncService:
                 inserted, status = self.import_tracks_sync(
                     playlist_name, platform, playlist_id
                 )
+                # "download" mode: persist every song thumb to disk so the
+                # playlist is fully available offline (background thread).
+                ThumbnailService.warm_song_cache(playlist_name, platform, playlist_id)
                 on_done(playlist_name, inserted, status)
             except Exception as e:
                 logger.error("Import failed for '%s': %s", playlist_name, e)
@@ -122,6 +125,9 @@ class PlaylistSyncService:
                 inserted, status, thumb_url = self.reload_database_sync(
                     playlist_name, platform, playlist_id
                 )
+                # "download" mode: persist every song thumb to disk so the
+                # playlist is fully available offline (background thread).
+                ThumbnailService.warm_song_cache(playlist_name, platform, playlist_id)
                 on_done(playlist_name, inserted, status, thumb_url)
             except Exception as e:
                 logger.error("Reload failed for '%s': %s", playlist_name, e)

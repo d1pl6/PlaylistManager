@@ -14,6 +14,14 @@
 --trace / -vvv  # TRACE and above + third-party debug loggers (requests / urllib3 / ytmusicapi / etc)
 ```
 
+### Data saver:
+```
+python -m app --data-saver   # launch the GUI with thumbnail fetching disabled
+                             # (the "max" thumbnail mode: nothing is shown, nothing
+                             # is downloaded; overrides the [thumbnails] setting for
+                             # the run)
+```
+
 ### Authentication:
 ```
 python -m app --login youtube_music       # open auth folder + terminal ('ytmusicapi browser')

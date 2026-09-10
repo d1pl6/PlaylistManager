@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 class App:
     def __init__(self, args):
         self.args = args
+        # Data saver forces the "max" thumbnail mode for the whole run
+        # (before any widget could trigger a thumbnail fetch).
+        if getattr(args, "data_saver", False):
+            from utils import thumbnail as thumbnail_module
+
+            thumbnail_module.DATA_SAVER = True
         self.root = tk.Tk()
         # Must run before any widget exists: picks the ui_scale profile from
         # settings + display Xft.dpi, which every ui_font()/px()/IconService

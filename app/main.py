@@ -110,6 +110,11 @@ def parse_args():
         "--refresh-token", dest="refresh_token", default=None,
         help="Spotify refresh token (for --login spotify)",
     )
+    p.add_argument(
+        "--data-saver", action="store_true",
+        help="data saver for this run: disable thumbnail fetching entirely "
+             "(the 'max' mode) to save network traffic",
+    )
     return p.parse_args()
 
 

@@ -14,6 +14,7 @@ from ui.profiles_ui import (
 from ui.scrollable import ScrollableFrame
 from ui.settings_theme_ui import show_theme_dialog
 from utils.config import (
+    THUMBNAIL_MODES,
     get_setting,
     get_setting_value,
     set_setting,
@@ -22,6 +23,7 @@ from utils.config import (
 from utils.scaling import UI_SCALE_PRESETS, px, ui_font
 from utils.platform import is_wayland_session
 from utils.theme import C, btn_colors, hover_bg
+from utils.thumbnail import ThumbnailService
 from utils.window import center_window, fit_window_to_screen
 
 logger = logging.getLogger(__name__)
@@ -708,6 +710,113 @@ def show_settings_dialog(
         foreground=theme_check_fg,
         font=ui_font(9),
     ).pack(side="left", pady=(0,5))
+
+    # --- Thumbnails (data-saver modes) ---
+    # Mode keys match utils.config.THUMBNAIL_MODES; the combo shows
+    # friendly labels.  The mode is read per fetch, so a change applies
+    # live (existing in-memory/disk entries are simply reused as-is).
+    _THUMBNAIL_LABELS = (
+        ("off", "Off (fetch each run)"),
+        ("download", "Download (all thumbnails)"),
+        ("dedupe", "Dedupe (per song name + artist)"),
+        ("cache", "Cache (visible only)"),
+        ("max", "Max (no thumbnails)"),
+    )
+
+    def _on_thumbnail_mode_change(value: str) -> None:
+        key = value
+        for k, label in _THUMBNAIL_LABELS:
+            if label == value:
+                key = k
+                break
+        try:
+            set_setting_value("thumbnails", "mode", key)
+        except Exception as e:
+            logger.error("Failed to write thumbnail mode setting: %s", e)
+
+    thumb_row = tk.Frame(appearance_section, background=theme_check_bg)
+    thumb_row.pack(fill="both", pady=(0,5), padx=16)
+    tk.Label(
+        thumb_row,
+        text="Thumbnails:",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0,5))
+
+    thumb_mode_value = get_setting_value("thumbnails", "mode", "off")
+    if thumb_mode_value not in THUMBNAIL_MODES:
+        thumb_mode_value = "off"
+    _thumb_key_to_label = dict(_THUMBNAIL_LABELS)
+    thumb_labels = tuple(_thumb_key_to_label.values())
+    thumb_var = tk.StringVar(value=_thumb_key_to_label[thumb_mode_value])
+    thumb_combo = ttk.Combobox(
+        thumb_row,
+        textvariable=thumb_var,
+        cursor="hand2",
+        values=thumb_labels,
+        state="readonly",
+        width=22,
+        font=ui_font(12),
+    )
+    thumb_combo.pack(side="left", pady=(0,5))
+    thumb_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_thumbnail_mode_change(thumb_var.get()),
+    )
+
+    cache_size_var = tk.StringVar(value="")
+
+    def _refresh_cache_size_label() -> None:
+        try:
+            size = ThumbnailService.disk_cache_size()
+        except Exception:
+            size = 0
+        if size > 0:
+            text = (
+                f"{size / (1024 * 1024):.1f} MB"
+                if size >= 1024 * 1024
+                else f"{size / 1024:.0f} KB"
+            )
+        else:
+            text = "empty"
+        cache_size_var.set(f"({text})")
+
+    tk.Label(
+        thumb_row,
+        textvariable=cache_size_var,
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(9),
+    ).pack(side="left", pady=(0,5), padx=(6, 0))
+    _refresh_cache_size_label()
+
+    def _on_clear_cache() -> None:
+        if not messagebox.askyesno(
+            "Clear Thumbnail Cache",
+            "Delete all downloaded and deduplicated thumbnails?\n"
+            "They will be re-fetched on demand.",
+            parent=win,
+        ):
+            return
+        try:
+            ThumbnailService.clear_disk_cache()
+        except Exception as e:
+            logger.error("Failed to clear thumbnail cache: %s", e)
+            return
+        _refresh_cache_size_label()
+
+    tk.Button(
+        appearance_section,
+        text="Clear thumbnail cache",
+        cursor="hand2",
+        relief="raised",
+        bd=0,
+        highlightthickness=0,
+        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+        font=ui_font(10),
+        command=_on_clear_cache,
+    ).pack(fill="x", pady=(0, 5), padx=16)
 
     def _on_columns_change(value: str) -> None:
         try:

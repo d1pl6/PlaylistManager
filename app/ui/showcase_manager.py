@@ -59,6 +59,10 @@ class ShowcaseManager:
         self._card_index_fn = card_index_fn
         self._search_results = search_results or {}
         self.frame_img_refs: dict = {}
+        # Song thumb URLs currently rendered per card (keyed by the card
+        # FRAME - widgets hash by identity; PlaylistCard itself is
+        # unhashable eq-dataclass).  Dead frame keys are dropped lazily.
+        self._card_song_urls: dict = {}
 
     def _card_index(self, card) -> int | None:
         if self._card_index_fn:
@@ -122,9 +126,21 @@ class ShowcaseManager:
             elif isinstance(child, tk.Frame):
                 self._prune_frame_imgs(child)
 
-    def _fetch_song_thumb(self, thumb_label: tk.Label, thumb_url: str, *, card=None) -> None:
+    def _fetch_song_thumb(self, thumb_label: tk.Label, song: dict, *, card=None) -> None:
+        """Fetch a song's thumbnail honouring the thumbnail mode.
+
+        *song* is a SongManager row (title / artists / duration /
+        thumbnail_url) - the mode-specific identity (dedupe) is resolved
+        inside the thumbnail service, not here.
+        """
+        thumb_url = song.get("thumbnail_url") or ""
+        if not thumb_url:
+            return
+
         def fetch() -> None:
-            img = ThumbnailService.fetch_image(thumb_url, size=(px(40), px(40)))
+            img = ThumbnailService.fetch_song_image(
+                song, size=(px(40), px(40))
+            )
             if img is not None:
                 try:
                     self.root.after(0, lambda: self._apply_cover(thumb_label, img))
@@ -172,10 +188,54 @@ class ShowcaseManager:
             if frame_idx not in self._search_results:
                 showcase_frame.grid(row=3, column=0, sticky="nsew")
             card.showcase_frame = showcase_frame
-            for thumb_label, url in thumb_jobs:
-                self._fetch_song_thumb(thumb_label, url, card=card)
+            for thumb_label, song in thumb_jobs:
+                self._fetch_song_thumb(thumb_label, song, card=card)
+
+        # Remember which song thumbs this card currently shows, so the
+        # cache-mode prune (below) keeps exactly the visible set.  Keyed
+        # by the card's frame (widgets hash by identity; PlaylistCard
+        # itself is an eq-dataclass and unhashable).
+        self._card_song_urls[card.frame] = {
+            s.get("thumbnail_url") for s in rows if s.get("thumbnail_url")
+        }
+        self._maybe_prune_song_cache()
 
         self._card_grid._update_card_height(frame_idx, layout=True)
+
+    def _active_song_urls(self) -> set:
+        """Union of song thumb URLs currently rendered across all cards."""
+        urls: set = set()
+        dead = []
+        for frame, card_urls in self._card_song_urls.items():
+            try:
+                alive = frame.winfo_exists()
+            except tk.TclError:
+                alive = False
+            if not alive:
+                dead.append(frame)
+                continue
+            urls |= card_urls
+        for frame in dead:
+            self._card_song_urls.pop(frame, None)
+        return urls
+
+    def _maybe_prune_song_cache(self) -> None:
+        """In ``cache`` mode, drop song thumbs no longer visible.
+
+        Best-effort: runs on a daemon thread, failures are logged inside
+        the thumbnail service.
+        """
+        active = self._active_song_urls()
+
+        def work() -> None:
+            try:
+                ThumbnailService.prune_song_cache(
+                    active, size=(px(40), px(40))
+                )
+            except Exception as e:
+                logger.debug("Thumbnail cache prune failed: %s", e)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _refresh_stats(
         self, frame_idx: int, playlist_name: str, platform: str
@@ -345,7 +405,7 @@ class ShowcaseManager:
                 pass
             thumb_url = song.get("thumbnail_url") or ""
             if thumb_url:
-                jobs.append((thumb, thumb_url))
+                jobs.append((thumb, song))
 
         if pending_likes:
             self._load_like_states(pending_likes)
