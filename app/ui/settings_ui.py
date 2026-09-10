@@ -171,6 +171,7 @@ def show_settings_dialog(
     fullscreen_var_value = 1 if get_setting("fullscreen", fallback=False) else 0
     global_var_value = 1 if get_setting("global_listener", fallback=True) else 0
     tray_var_value = 1 if get_setting("hide_to_tray", fallback=False) else 0
+    start_tray_var_value = 1 if get_setting("start_in_tray", fallback=False) else 0
     try:
         showcase_count_value = int(get_setting_value("showcase", "count", "0"))
     except (ValueError, TypeError):
@@ -392,6 +393,21 @@ def show_settings_dialog(
     tray_ck.pack(fill="both", pady=(0,5), padx=16)
     if not getattr(tray_available, "available", False):
         tray_ck.configure(state="disabled", cursor="arrow")
+
+    start_tray_var = tk.IntVar(value=start_tray_var_value)
+    start_tray_ck = tk.Checkbutton(
+        app_section,
+        text="Start in tray (next launch)",
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=lambda: _toggle_setting("start_in_tray", start_tray_var),
+        variable=start_tray_var,
+    )
+    start_tray_ck.pack(fill="both", pady=(0,5), padx=16)
+    if not getattr(tray_available, "available", False):
+        start_tray_ck.configure(state="disabled", cursor="arrow")
 
     dupcheck_section = tk.Frame(content, background=theme_win_bg)
     dupcheck_section.pack(fill="both", padx=8, pady=(0, 8))

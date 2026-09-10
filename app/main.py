@@ -120,6 +120,11 @@ def parse_args():
         help="start the window fullscreen for this run "
              "(overrides the [fullscreen] setting)",
     )
+    p.add_argument(
+        "--start-in-tray", action="store_true",
+        help="launch hidden in the system tray for this run "
+             "(overrides the [start_in_tray] setting)",
+    )
     return p.parse_args()
 
 

@@ -55,6 +55,7 @@ class TestEnsureSettingsFile:
         assert cp.getboolean("remember_geometry", "is_true", fallback=None) is True
         assert cp.getboolean("fullscreen", "is_true", fallback=None) is False
         assert cp.get("window", "geometry") == ""
+        assert cp.getboolean("start_in_tray", "is_true", fallback=None) is False
 
     def test_window_geometry_value_round_trip(self, paths):
         settings, _ = paths

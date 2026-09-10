@@ -10,10 +10,22 @@ import tkinter as tk
 
 
 def center_window(win: tk.Misc) -> None:
-    """Centre *win* on screen."""
+    """Centre *win* on screen.
+
+    For unmapped windows (``winfo_width()`` is 1 before the first map -
+    including a start-in-tray boot where the root is withdrawn before
+    setup) the requested size is used, so the window is later shown
+    centred correctly.
+    """
     win.update_idletasks()
-    w = win.winfo_width()
-    h = win.winfo_height()
+    try:
+        w = win.winfo_width()
+        h = win.winfo_height()
+        if w <= 1 or h <= 1:  # not yet mapped - use the requested size
+            w = win.winfo_reqwidth()
+            h = win.winfo_reqheight()
+    except tk.TclError:
+        return
     sw = win.winfo_screenwidth()
     sh = win.winfo_screenheight()
     win.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")

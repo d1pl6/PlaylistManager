@@ -453,8 +453,32 @@ class App:
         self._tray_service = tray
         self.main_window.tray_service = tray
 
+    def _start_hidden_requested(self) -> bool:
+        """True when start-in-tray is effective for this run.
+
+        The ``[start_in_tray]`` setting or the ``--start-in-tray`` flag
+        requests it; fullscreen wins (a user asking for fullscreen
+        explicitly wants the window on screen).  The actual hide happens
+        in :meth:`run` BEFORE setup, so the window never maps at all;
+        the tray's "Open" item restores through ``show_from_tray()`` ->
+        deiconify, which already handles withdrawn windows.
+        """
+        if getattr(self.args, "fullscreen", False) or get_setting("fullscreen", False):
+            return False
+        return getattr(self.args, "start_in_tray", False) or get_setting(
+            "start_in_tray", False
+        )
+
     def run(self):
         logger.info("Starting app")
+        # Start-in-tray: withdraw BEFORE any UI work so the window never
+        # maps - not even once.  A withdraw after setup would let the
+        # window paint and then hide it, which is not "start in tray".
+        # If the tray fails to start the window is deiconified below -
+        # an unreachable app is worse than a visible one.
+        start_hidden = self._start_hidden_requested()
+        if start_hidden:
+            self.root.withdraw()
         try:
             self.main_window.setup()
             # setup() restores playlist frames, and auto-resize may have
@@ -463,7 +487,18 @@ class App:
             # unless a saved geometry was restored instead.
             if not self._geometry_restored and get_setting("center_windows", True):
                 center_window(self.root)
+            # Seed the geometry no-op cache with the settled rect so the
+            # first <Configure> echo - and this launch's own layout - never
+            # persists a default/phantom geometry.  Only changes from the
+            # settled state are remembered as user moves.
+            self._geometry_last_saved = save_window_geometry(self.root)
             self._start_tray()
+            if start_hidden and getattr(self, "_tray_service", None) is None:
+                user_log(
+                    logger,
+                    "Start-in-tray requested but the tray is unavailable - showing the window",
+                )
+                self.root.deiconify()
             # Kick off the update check here, immediately before the
             # mainloop starts: launched from __init__, a fast network could
             # complete the check before mainloop() ran, and the marshaled

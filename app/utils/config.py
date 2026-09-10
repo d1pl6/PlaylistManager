@@ -33,6 +33,7 @@ DEFAULT_SETTINGS = {
     "window": {"geometry": ""},  # last main-window "WxH+X+Y"
     "global_listener": {"is_true": "yes"},
     "hide_to_tray": {"is_true": "no"},
+    "start_in_tray": {"is_true": "no"},  # launch hidden in the system tray (tray must actually start)
     "ui_scale": {"value": "auto"},
     "font": {"family": ""},
     "showcase": {"count": "0"},          # int, 0 = off, N = show last N added songs
