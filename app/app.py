@@ -12,9 +12,9 @@ from services.playlist_store import PlaylistStore
 from services.tray import TrayService
 from ui.main_window import MainWindow
 from ui.updater_ui import show_update_dialog
-from utils.window import center_window
+from utils.window import center_window, restore_window_geometry, save_window_geometry
 from utils import updater
-from utils.config import get_setting
+from utils.config import get_setting, get_setting_value, set_setting_value
 from utils.logging_config import user_log
 from utils import scaling
 
@@ -78,8 +78,32 @@ class App:
             plugin_registry=self.plugin_registry,
         )
 
-        if get_setting("center_windows", True):
+        # Restore the saved window size/position (best-effort: Wayland
+        # compositors own placement).  A restored geometry wins over
+        # centering; the flag skips the post-setup re-center in run().
+        self._geometry_restored = restore_window_geometry(
+            self.root, get_setting_value("window", "geometry", "")
+        )
+        if not self._geometry_restored and get_setting("center_windows", True):
             center_window(self.root)
+
+        # Fullscreen: forced per-run override or the persisted setting.
+        # Applied AFTER the geometry restore so Tk keeps the pre-fullscreen
+        # rect (toggling off later returns to it).
+        if getattr(args, "fullscreen", False) or get_setting("fullscreen", False):
+            try:
+                self.root.attributes("-fullscreen", True)
+            except Exception:
+                logger.exception("Failed to enter fullscreen")
+
+        # Window geometry persistence: debounced <Configure> save (covers
+        # drag-move/resize and crashes that skip a clean quit) + final
+        # flush in cleanup().  Window-local F11 toggles fullscreen (plain
+        # Tk binding - no global grab; the compositor still owns keys).
+        self._geometry_last_saved = get_setting_value("window", "geometry", "")
+        self._geometry_save_after_id = None
+        self.root.bind("<Configure>", self._on_geometry_configure)
+        self.root.bind("<F11>", self._on_toggle_fullscreen)
 
     def _register_plugin(self, plugin: PluginInfo) -> bool:
         """Load one plugin's integration into the live registry.
@@ -435,8 +459,9 @@ class App:
             self.main_window.setup()
             # setup() restores playlist frames, and auto-resize may have
             # grown the window past the 650x460 geometry that __init__
-            # centered - re-center now that the initial size has settled.
-            if get_setting("center_windows", True):
+            # centered - re-center now that the initial size has settled,
+            # unless a saved geometry was restored instead.
+            if not self._geometry_restored and get_setting("center_windows", True):
                 center_window(self.root)
             self._start_tray()
             # Kick off the update check here, immediately before the
@@ -456,6 +481,20 @@ class App:
         Called by :class:`AppController` before quitting.  Raises the
         first error so the controller can offer Force-quit / Cancel.
         """
+        # Final window-geometry flush - covers quit paths that leave no
+        # recent <Configure> (and the profile-switch restart, which goes
+        # through cleanup too).  Best-effort: the app must be able to shut
+        # down even if the settings write fails.
+        if get_setting("remember_geometry", True):
+            try:
+                geo = save_window_geometry(self.root)
+            except Exception:
+                geo = ""
+            if geo:
+                try:
+                    set_setting_value("window", "geometry", geo)
+                except Exception:
+                    logger.exception("Failed to save window geometry on quit")
         # Stop the tray first so no tray callback can fire against a
         # destroyed root.  Icon.stop() is non-blocking (unlike the pynput
         # listener) - no join quirk.
@@ -476,3 +515,53 @@ class App:
         except Exception:
             logger.exception("Failed to close the root window")
             raise
+
+    def _on_geometry_configure(self, _event=None):
+        """Debounced writer for the ``[window] geometry`` setting.
+
+        Bound on the root in __init__ AFTER the geometry restore so the
+        restore itself cannot trigger a save race; the restored value is
+        already what _geometry_last_saved was seeded with, so the first
+        configure is a no-op write either way.
+        """
+        if not get_setting("remember_geometry", True):
+            return
+        if self._geometry_save_after_id is not None:
+            try:
+                self.root.after_cancel(self._geometry_save_after_id)
+            except Exception:
+                pass
+        try:
+            self._geometry_save_after_id = self.root.after(
+                400, self._save_geometry_now
+            )
+        except Exception:
+            self._geometry_save_after_id = None
+
+    def _save_geometry_now(self):
+        self._geometry_save_after_id = None
+        if not get_setting("remember_geometry", True):
+            return
+        try:
+            geo = save_window_geometry(self.root)
+        except Exception:
+            return
+        if not geo or geo == self._geometry_last_saved:
+            return
+        try:
+            set_setting_value("window", "geometry", geo)
+            self._geometry_last_saved = geo
+        except Exception:
+            logger.exception("Failed to save window geometry")
+
+    def _on_toggle_fullscreen(self, _event=None):
+        """Window-local F11: toggle fullscreen for this window only.
+
+        A plain Tk binding - the app must have focus; no global grab
+        (impossible on native Wayland anyway).
+        """
+        try:
+            active = bool(self.root.attributes("-fullscreen"))
+            self.root.attributes("-fullscreen", not active)
+        except Exception:
+            logger.exception("Failed to toggle fullscreen")

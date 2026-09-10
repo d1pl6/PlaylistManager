@@ -1,11 +1,11 @@
 ## Content
 - [Debugging](#debugging)
-- [Data saver](#data-saver)
 - [Authentication](#authentication)
 - [Plugins](#plugins)
 - [Playlist management](#playlist-management)
 - [Song add](#song-add)
 - [Scrobble](#scrobble-lastfm-backend-independent-of-any-playlist)
+- [Data saver, fullscreen](#other)
 - [Global install](#global-install-for-compositor-shortcuts)
 
 ### Debugging:
@@ -15,13 +15,6 @@
 --trace / -vvv  # TRACE and above + third-party debug loggers (requests / urllib3 / ytmusicapi / etc)
 ```
 
-### Data saver:
-```
-python -m app --data-saver   # launch the GUI with thumbnail fetching disabled
-                             # (the "max" thumbnail mode: nothing is shown, nothing
-                             # is downloaded; overrides the [thumbnails] setting for
-                             # the run)
-```
 
 ### Authentication:
 ```
@@ -112,6 +105,16 @@ platforms (Spotify) read the currently-playing track, `extension`-type
 platforms (YouTube Music) capture via the browser extension. It requires the
 Last.fm plugin and credentials to be configured (see the Settings dialog's
 Last.fm section); otherwise it prints an error and exits non-zero.
+
+### Other:
+```
+python -m app --data-saver   # launch the GUI with thumbnail fetching disabled
+                             # (the "max" thumbnail mode: nothing is shown, nothing
+                             # is downloaded; overrides the [thumbnails] setting for
+                             # the run)
+
+python -m app --fullscreen   # launch app in fullcreen
+```
 
 ## Global install (for compositor shortcuts)
 `python -m app ...` only works from the repo root. To bind the command from anywhere

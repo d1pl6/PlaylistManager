@@ -16,6 +16,7 @@ python main.py --install spotify      # headless CLI: download/install a platfor
 python main.py --uninstall spotify    # headless CLI: remove a platform plugin + credentials + registry + db (or "all")
 python main.py --list         # headless CLI: numbered playlists (no display needed)
 python main.py --data-saver   # launch GUI with thumbnails disabled ('max' mode; overrides the [thumbnails] setting for the run)
+python main.py --fullscreen   # launch GUI fullscreen for this run (overrides the [fullscreen] setting)
 ```
 
 Every `python main.py ...` above is equivalent under `python -m app ...` (CLI.MD and the cli.py docstring use the `-m app` form). Platform names in the CLI are the **directory** names: `youtube_music`, `spotify`, `lastfm`, `soundcloud`, `deezer`.
@@ -114,7 +115,7 @@ app/
     icons.py               # IconService — PIL-resized PhotoImages, LANCZOS + cache, main-thread-only
     key_mapping.py         # pynput key normalization/parsing
     platform.py            # get_terminal_command (per-OS shell command for ytmusicapi browser)
-    window.py              # pure geometry: center_window, resize_window
+    window.py              # pure geometry: center_window, resize_window, fit_window_to_screen, window-geometry persistence (save/restore + validation)
     updater.py             # GitHub release version check
     logging_config.py      # root logger setup, --verbose/--debug/--trace levels
 
@@ -207,7 +208,7 @@ Runtime colors are centralized in `app/utils/theme.py`, not re-read from the INI
 
 ## Config
 
-`DEFAULT_SETTINGS` in `utils/config.py` defines the **entire** settings surface (booleans + values, optional-section defaults included): `update_check`, `center_windows`, `auto_resize`, `global_listener`, `hide_to_tray` (the last enables hide-to-tray via `services/tray.py`), `showcase_log` (the per-card log row), `playlist_stats` (song count/followers/duration row), `like_button` + `scrobble_on_add` + `scrobble_keybind` (Last.fm side effects — all default **off**, and don't flip their defaults; scrobbling is privacy-relevant by design), plus value sections: `ui_scale` (`value` key), `showcase` (`count` — last-N-added-songs per card, "0" = off), `layout` (`columns` — grid columns, default "2", clamped 1-4, applied live from Settings), `duplicate_check` (`is_true` off + `title_threshold` "0.85" / `duration_tolerance` "5" — read via `services/duplicate_check.read_settings()`), `soundcloud` (`capture_mode`: `api`/`hybrid`/`extension` — see docs/modules.md SoundCloud row), and `thumbnails` (`mode`: `off`/`download`/`dedupe`/`cache`/`max` — data-saver modes, see Key data paths; `--data-saver` forces `max` per run). All booleans are read with `ConfigParser.getboolean()` (accepts `yes/no/true/false/1/0`); defaults are applied by `utils/config.py:ensure_settings_file()` (which merges missing sections/keys into existing user files without touching unknown legacy sections).
+`DEFAULT_SETTINGS` in `utils/config.py` defines the **entire** settings surface (booleans + values, optional-section defaults included): `update_check`, `center_windows`, `auto_resize`, `remember_geometry` (restore last window size/position on launch; saved via a debounced `<Configure>` binding + a flush in `App.cleanup()`, skipped while maximized/fullscreen — see `utils/window.py`), `fullscreen` (start the window fullscreen; `--fullscreen` overrides per run; window-local F11 toggles it, no global grab), `global_listener`, `hide_to_tray` (the last enables hide-to-tray via `services/tray.py`), `showcase_log` (the per-card log row), `playlist_stats` (song count/followers/duration row), `like_button` + `scrobble_on_add` + `scrobble_keybind` (Last.fm side effects — all default **off**, and don't flip their defaults; scrobbling is privacy-relevant by design), plus value sections: `ui_scale` (`value` key), `showcase` (`count` — last-N-added-songs per card, "0" = off), `layout` (`columns` — grid columns, default "2", clamped 1-4, applied live from Settings), `window` (`geometry` — last main-window "WxH+X+Y", validated on restore: size clamped to the screen, position must intersect it; best-effort under Wayland where the compositor owns placement), `duplicate_check` (`is_true` off + `title_threshold` "0.85" / `duration_tolerance` "5" — read via `services/duplicate_check.read_settings()`), `soundcloud` (`capture_mode`: `api`/`hybrid`/`extension` — see docs/modules.md SoundCloud row), and `thumbnails` (`mode`: `off`/`download`/`dedupe`/`cache`/`max` — data-saver modes, see Key data paths; `--data-saver` forces `max` per run). All booleans are read with `ConfigParser.getboolean()` (accepts `yes/no/true/false/1/0`); defaults are applied by `utils/config.py:ensure_settings_file()` (which merges missing sections/keys into existing user files without touching unknown legacy sections).
 
 **Do not assume the INI contains only the sections above**: user files can carry legacy sections (e.g. a stale `toggle_frameless`). Settings writers (`_toggle_setting`) and readers must tolerate and preserve unknown sections.
 

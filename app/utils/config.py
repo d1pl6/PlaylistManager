@@ -22,6 +22,15 @@ DEFAULT_SETTINGS = {
     "update_check": {"is_true": "yes"},
     "center_windows": {"is_true": "yes"},
     "auto_resize": {"is_true": "no"},
+    # Restore the main window's last size/position on launch (saved live
+    # on <Configure> and on quit; settings value written by
+    # utils/window.py save_window_geometry, read by restore_window_geometry).
+    "remember_geometry": {"is_true": "yes"},
+    # Start the main window fullscreen ("" --fullscreen flag overrides per
+    # run; live-toggleable from Settings / F11 - never persisted via the
+    # geometry save, which skips while fullscreen is active).
+    "fullscreen": {"is_true": "no"},
+    "window": {"geometry": ""},  # last main-window "WxH+X+Y"
     "global_listener": {"is_true": "yes"},
     "hide_to_tray": {"is_true": "no"},
     "ui_scale": {"value": "auto"},

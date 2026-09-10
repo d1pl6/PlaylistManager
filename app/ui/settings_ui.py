@@ -167,6 +167,8 @@ def show_settings_dialog(
     update_var_value = 1 if get_setting("update_check", fallback=True) else 0
     center_var_value = 1 if get_setting("center_windows", fallback=True) else 0
     resize_var_value = 1 if get_setting("auto_resize", fallback=False) else 0
+    remember_var_value = 1 if get_setting("remember_geometry", fallback=True) else 0
+    fullscreen_var_value = 1 if get_setting("fullscreen", fallback=False) else 0
     global_var_value = 1 if get_setting("global_listener", fallback=True) else 0
     tray_var_value = 1 if get_setting("hide_to_tray", fallback=False) else 0
     try:
@@ -184,6 +186,8 @@ def show_settings_dialog(
     update_var = tk.IntVar(value=update_var_value)
     center_var = tk.IntVar(value=center_var_value)
     resize_var = tk.IntVar(value=resize_var_value)
+    remember_var = tk.IntVar(value=remember_var_value)
+    fullscreen_var = tk.IntVar(value=fullscreen_var_value)
     global_var = tk.IntVar(value=global_var_value)
     tray_var = tk.IntVar(value=tray_var_value)
 
@@ -254,6 +258,59 @@ def show_settings_dialog(
             center_var.get() and center_window(win),
         ),
         variable=center_var,
+    ).pack(fill="both", pady=(0,5), padx=16)
+
+    tk.Checkbutton(
+        app_section,
+        text="Remember window size/position",
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=lambda: _toggle_setting("remember_geometry", remember_var),
+        variable=remember_var,
+    ).pack(fill="both", pady=(0,5), padx=16)
+
+    def _on_reset_window_geometry():
+        # Forget the remembered size/position: the next launch starts
+        # with the default size and centering behaviour.  The CURRENT
+        # window is left where it is - remembering merely resumes if the
+        # user moves it again (remember_geometry itself stays untouched).
+        try:
+            set_setting_value("window", "geometry", "")
+        except Exception as e:
+            logger.error("Failed to reset window geometry: %s", e)
+
+    tk.Button(
+        app_section,
+        text="Reset window size/position",
+        cursor="hand2",
+        relief="raised",
+        bd=0,
+        highlightthickness=0,
+        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+        font=ui_font(10),
+        command=_on_reset_window_geometry,
+    ).pack(fill="x", pady=(0, 5), padx=16)
+
+    def _on_fullscreen_toggle():
+        _toggle_setting("fullscreen", fullscreen_var)
+        # Live toggle: apply to the main window (dialog parent).  Works
+        # through XWayland; F11 inside the app does the same.
+        try:
+            parent.attributes("-fullscreen", bool(fullscreen_var.get()))
+        except Exception:
+            pass
+
+    tk.Checkbutton(
+        app_section,
+        text="Start window fullscreen",
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=_on_fullscreen_toggle,
+        variable=fullscreen_var,
     ).pack(fill="both", pady=(0,5), padx=16)
 
     def _on_auto_resize_toggle():

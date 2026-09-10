@@ -115,6 +115,11 @@ def parse_args():
         help="data saver for this run: disable thumbnail fetching entirely "
              "(the 'max' mode) to save network traffic",
     )
+    p.add_argument(
+        "--fullscreen", action="store_true",
+        help="start the window fullscreen for this run "
+             "(overrides the [fullscreen] setting)",
+    )
     return p.parse_args()
 
 

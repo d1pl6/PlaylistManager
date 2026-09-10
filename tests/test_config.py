@@ -48,6 +48,24 @@ class TestEnsureSettingsFile:
         assert cp.get("layout", "columns") == "2"
         assert cp.get("duplicate_check", "title_threshold") == "0.85"
 
+    def test_window_geometry_defaults_written(self, paths):
+        settings, _ = paths
+        config.ensure_settings_file()
+        cp = _read(settings)
+        assert cp.getboolean("remember_geometry", "is_true", fallback=None) is True
+        assert cp.getboolean("fullscreen", "is_true", fallback=None) is False
+        assert cp.get("window", "geometry") == ""
+
+    def test_window_geometry_value_round_trip(self, paths):
+        settings, _ = paths
+        config.set_setting_value("window", "geometry", "1100x700+120+45")
+        assert config.get_setting_value("window", "geometry", "") == "1100x700+120+45"
+        assert config.get_setting("remember_geometry", fallback=True) is True
+        config.set_setting("remember_geometry", False)
+        assert config.get_setting("remember_geometry", fallback=True) is False
+        config.set_setting("fullscreen", True)
+        assert config.get_setting("fullscreen", fallback=False) is True
+
     def test_preserves_unknown_sections(self, paths):
         settings, _ = paths
         settings.write_text("[legacy_section]\nfoo = bar\n", encoding="utf-8")
