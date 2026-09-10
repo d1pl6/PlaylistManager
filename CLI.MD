@@ -1,5 +1,6 @@
 ## Content
 - [Debugging](#debugging)
+- [Data saver](#data-saver)
 - [Authentication](#authentication)
 - [Plugins](#plugins)
 - [Playlist management](#playlist-management)
