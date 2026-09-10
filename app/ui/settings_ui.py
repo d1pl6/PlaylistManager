@@ -24,7 +24,7 @@ from utils.scaling import UI_SCALE_PRESETS, px, ui_font
 from utils.platform import is_wayland_session
 from utils.theme import C, btn_colors, hover_bg
 from utils.thumbnail import ThumbnailService
-from utils.window import center_window, fit_window_to_screen
+from utils.window import center_window, fit_window_to_screen, resize_window
 
 logger = logging.getLogger(__name__)
 REPO_URL = "https://github.com/d1pl6/PlaylistManager"
@@ -272,14 +272,19 @@ def show_settings_dialog(
     ).pack(fill="both", pady=(0,5), padx=16)
 
     def _on_reset_window_geometry():
-        # Forget the remembered size/position: the next launch starts
-        # with the default size and centering behaviour.  The CURRENT
-        # window is left where it is - remembering merely resumes if the
-        # user moves it again (remember_geometry itself stays untouched).
+        # Forget the remembered size/position and apply the default
+        # geometry live: resize to fit the current content, then center
+        # on screen.  The persisted value is cleared so the next launch
+        # starts with the same default; remember_geometry is untouched.
         try:
             set_setting_value("window", "geometry", "")
         except Exception as e:
             logger.error("Failed to reset window geometry: %s", e)
+        try:
+            resize_window(parent)
+            center_window(parent)
+        except Exception:
+            pass
 
     tk.Button(
         app_section,
