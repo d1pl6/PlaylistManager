@@ -23,6 +23,7 @@ from controllers.playlist_controller import PlaylistController
 from services import duplicate_queue
 from services.database import DatabaseManager
 from services.duplicate_check import find_duplicate_pairs, read_settings
+from services.playlist_sort import sort_playlists
 from services.playlist_store import PlaylistStore, playlist_still_registered
 from services.playlist_sync import PlaylistSyncService
 from services.song_manager import SongManager
@@ -37,7 +38,12 @@ from ui.playlist_dialog import PlaylistDialog
 from ui.settings_ui import show_settings_dialog
 from ui.tooltip import ToolTip
 from utils.window import center_window, resize_window
-from utils.config import get_setting, get_setting_value
+from utils.config import (
+    GRID_SORT_DEFAULT_DIRECTION,
+    GRID_SORT_DEFAULT_KEY,
+    get_setting,
+    get_setting_value,
+)
 from ui.scrollable import ScrollableFrame
 from utils.theme import C, load_theme, btn_colors, hover_bg
 from utils.logging_config import user_log
@@ -61,6 +67,8 @@ _PLATFORM_API_TARGETS: dict[str, tuple[str, int]] = {
 assets_dir = Path(__file__).resolve().parents[2] / "assets"
 playlist_cover_img_path = assets_dir / "playlist_image.png"
 close_playlist_img_path = assets_dir / "close_playlist.png"
+pin_img_path = assets_dir / "pin.png"
+pin_active_img_path = assets_dir / "pin_active.png"
 reload_database_img_path = assets_dir / "reloadCache.png"
 loading_img_path = assets_dir / "hourglass.png"
 heart_empty_img_path = assets_dir / "heart_empty.png"
@@ -156,6 +164,8 @@ class MainWindow:
         self.loading_img = IconService.get(loading_img_path, 32)
         self.heart_empty_img = IconService.get(heart_empty_img_path, 16)
         self.heart_full_img = IconService.get(heart_full_img_path, 16)
+        self.pin_img = IconService.get(pin_img_path, 16)
+        self.pin_active_img = IconService.get(pin_active_img_path, 16)
 
         self.root.grid_rowconfigure(0, weight=0)
         self.root.grid_rowconfigure(1, weight=0)   # search bar
@@ -204,6 +214,10 @@ class MainWindow:
             playlist_cover_img=self.playlist_cover_img,
             close_playlist_img=self.close_playlist_img,
             reload_database_img=self.reload_database_img,
+            pin_img=self.pin_img,
+            pin_active_img=self.pin_active_img,
+            show_pin_buttons=get_setting("show_pin_buttons", True),
+            on_pin_toggle=self._on_pin_toggle,
             make_keybind_callbacks=self._make_keybind_callbacks,
             on_reload_requested=self._on_reload_requested,
             start_recording=self._start_recording,
@@ -356,6 +370,9 @@ class MainWindow:
         )
         ToolTip(self.btn_add_playlist, "Add a playlist")
 
+        # Grid sort lives in the Settings dialog (App behavior section);
+        # no header cluster (keeps the toolbar to login/add/activity/settings).
+
         open_settings_img_path = assets_dir / "settings.png"
         self.open_settings_img = IconService.get(open_settings_img_path, 32)
         # Right-side header cluster: Activity badge button + Settings.
@@ -382,7 +399,9 @@ class MainWindow:
                 on_columns_change=self.set_columns,
                 on_check_updates_now=lambda on_done=None: self.ac.check_updates(force=True, on_done=on_done),
                 on_check_duplicates_now=self._run_duplicate_scan,
-                on_like_button_change=self._apply_like_button_visibility,
+on_like_button_change=self._apply_like_button_visibility,
+                on_pin_buttons_change=self._apply_pin_visibility,
+                on_sort_change=self.apply_grid_sort,
                 on_scrobble_keybind_change=self._register_scrobble_keybind,
                 on_restart_app=self.ac.restart_app,
                 plugin_availability=set(self.integrations.get_all()),
@@ -1124,8 +1143,29 @@ class MainWindow:
 
     def setup(self) -> None:
         self.kc.set_root(self.root)
-        visible = self._filter_available_playlists(
+        self._populate_grid()
+
+        # Register the scrobble keybind (standalone action, not tied to a playlist)
+        self._register_scrobble_keybind()
+
+        # Start periodic connectivity and service-health probes.
+        self._start_background_checks()
+
+    def _populate_grid(self) -> None:
+        """Create the card grid from the registry in the current sort order.
+
+        Extracted from ``setup`` so a live sort/pin change can rebuild
+        the grid without a full restart (see ``_rebuild_grid``).  Sorting
+        happens BEFORE the available-platform filter so the registry
+        index ("Added" key) stays the true insertion order.
+        """
+        entries = sort_playlists(
             PlaylistStore.load_playlists(),
+            get_setting_value("grid_sort", "key", GRID_SORT_DEFAULT_KEY),
+            get_setting_value("grid_sort", "direction", GRID_SORT_DEFAULT_DIRECTION),
+        )
+        visible = self._filter_available_playlists(
+            entries,
             set(self.integrations.get_all()),
         )
         if visible:
@@ -1163,13 +1203,57 @@ class MainWindow:
                     if thumb_url:
                         self.showcase.set_playlist_cover(card.cover_label, thumb_url, card=card)
 
+                    self.card_grid.set_card_pin_state(
+                        i, bool(playlist.get("pinned", False))
+                    )
+
         self.card_grid._sync_empty_state()
 
-        # Register the scrobble keybind (standalone action, not tied to a playlist)
-        self._register_scrobble_keybind()
+    def _rebuild_grid(self) -> None:
+        """Rebuild the card grid in place after a sort/pin change.
 
-        # Start periodic connectivity and service-health probes.
-        self._start_background_checks()
+        Deliberately NON-destructive: ``close_main_frame`` deletes the
+        registry entry and (optionally) the per-playlist song DB, so it
+        is never used here.  Callbacks are index-captured, which is why
+        the grid must be re-created rather than re-ordered: unregister
+        the live keybinds, tear the frames down, and re-populate from a
+        fresh registry read in the new sort order.  The search query is
+        re-applied afterwards.
+        """
+        for card in list(self.card_grid.cards):
+            name = card.name_label.cget("text")
+            self.kc.unregister_keybind(
+                name,
+                platform=getattr(card, "platform", ""),
+                playlist_id=getattr(card, "playlist_id", ""),
+            )
+            self.showcase._prune_frame_imgs(card.frame)
+            try:
+                card.frame.destroy()
+            except tk.TclError:
+                pass
+        self.card_grid.reset_state()
+        self.showcase._card_song_urls.clear()
+        self.card_grid._sync_empty_state()
+        self._populate_grid()
+
+        # Re-apply an active search query (cards were rebuilt unfiltered).
+        try:
+            query = self.search._search_var.get()
+        except (tk.TclError, AttributeError):
+            query = ""
+        if query:
+            self.search._filter_playlists(query)
+
+    # ------------------------------------------------------------------
+    # Grid sort (Settings dialog writes [grid_sort], we just re-sort)
+    # ------------------------------------------------------------------
+
+    def apply_grid_sort(self) -> None:
+        """Rebuild the grid in place to match the current [grid_sort]
+        settings.  Called by the Settings dialog after it persists a new
+        key/direction value."""
+        self._rebuild_grid()
 
     # ------------------------------------------------------------------
     # Drag-to-move window
@@ -1678,6 +1762,41 @@ class MainWindow:
     # ------------------------------------------------------------------
     # Reload database (delegates to PlaylistSyncService)
     # ------------------------------------------------------------------
+
+    def _on_pin_toggle(self, card) -> None:
+        """Pin/unpin a card (pin button next to the close button).
+
+        Resolves the live index from the card object (never trusts a
+        captured index - cards survive renumbering) and floats the card
+        to the top of the grid when it becomes pinned via ``_rebuild_grid``.
+        """
+        try:
+            index = self.card_grid.cards.index(card)
+        except ValueError:
+            logger.warning("Pin toggle: card not in grid")
+            return
+        try:
+            playlist_name = card.name_label.cget("text")
+        except tk.TclError:
+            return
+        platform = getattr(card, "platform", "")
+        playlist_id = getattr(card, "playlist_id", "")
+        entry = PlaylistStore.find_playlist(
+            playlist_name, platform, playlist_id=playlist_id
+        )
+        if entry is None:
+            logger.warning("Pin toggle: playlist not in registry")
+            return
+        new_pinned = not bool(entry.get("pinned", False))
+        PlaylistStore.set_pinned(
+            playlist_name, platform, playlist_id=playlist_id, pinned=new_pinned
+        )
+        self.card_grid.set_card_pin_state(index, new_pinned)
+        self._rebuild_grid()
+
+    def _apply_pin_visibility(self, enabled: bool) -> None:
+        """Live-apply the pin button visibility setting in the grid."""
+        self.card_grid._apply_pin_visibility(enabled)
 
     def _on_reload_requested(self, frame_idx: int | None) -> None:
         """User clicked the reload button for a playlist frame."""

@@ -1175,6 +1175,11 @@ def _run_flow(
         else:
             outcome["message"] = result.get("message", "Added")
 
+        # Grid "Used" sort: bump only on an actual add (the outcome was
+        # "added", not exists/duplicate).
+        if status == "added":
+            PlaylistStore.mark_used(playlist_name, platform, playlist_id)
+
         # Scrobble the song if auto-scrobble is enabled and a ScrobbleCapable
         # integration was resolved.  An accepted scrobble is recorded in
         # the scrobble ledger so the remove-song path can later delete

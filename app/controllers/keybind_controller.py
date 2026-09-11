@@ -523,6 +523,9 @@ class KeybindController:
                 status = result.get("status", "error")
                 if status == "added":
                     callbacks.on_status("Added", C["label_playlist_good_bg"])
+                    # Grid "Used" sort: bump only on an actual add
+                    # (reloads and exists/duplicate outcomes don't count).
+                    PlaylistStore.mark_used(playlist_name, platform, playlist_id)
                 elif status == "exists":
                     callbacks.on_status("Exists", C["label_playlist_warn_bg"])
                 elif status == "duplicate":

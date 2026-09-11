@@ -299,6 +299,51 @@ class PlaylistStore:
             return True
 
     @staticmethod
+    def mark_used(
+        name: str, platform: str, playlist_id: str = ""
+    ) -> bool:
+        """Stamp ``last_used_at`` on a playlist entry (grid "Used" sort).
+
+        Called from the add-flow success paths whenever a song was
+        actually ADDED to the playlist (hotkey flow and CLI batch mode).
+        Reloads, registry adds, ``exists`` and ``duplicate`` outcomes do
+        not bump the stamp.  Missing entry -> no-op (the add-flow must
+        never resurrect a deleted playlist).
+        """
+        with _lock:
+            playlists = PlaylistStore.load_playlists()
+            target = _find_by_key(
+                playlists, playlist_id=playlist_id, platform=platform, name=name
+            )
+            if target is None:
+                return False
+            target["last_used_at"] = int(time.time())
+            return PlaylistStore._write(playlists)
+
+    @staticmethod
+    def set_pinned(
+        name: str, platform: str, pinned: bool, playlist_id: str = ""
+    ) -> bool:
+        """Set the grid "pinned" flag on a playlist entry.
+
+        Pinned playlists float to the top of the grid in every sort
+        state (see services/playlist_sort.py).  Absent flag == unpinned,
+        so existing playlists need no migration.  Missing entry -> no-op.
+        """
+        with _lock:
+            playlists = PlaylistStore.load_playlists()
+            target = _find_by_key(
+                playlists, playlist_id=playlist_id, platform=platform, name=name
+            )
+            if target is None:
+                return False
+            if pinned:
+                target["pinned"] = True
+            else:
+                target.pop("pinned", None)
+            return PlaylistStore._write(playlists)
+
+    @staticmethod
     def delete_playlist(name: str, platform: str, playlist_id: str = "") -> bool:
         """Remove a playlist entry.
 

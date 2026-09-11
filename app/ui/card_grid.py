@@ -77,6 +77,11 @@ class CardGridManager:
         playlist_cover_img,
         close_playlist_img,
         reload_database_img,
+        # Pin/unpin (optional - when pin images are None the buttons are off)
+        pin_img=None,
+        pin_active_img=None,
+        show_pin_buttons=True,
+        on_pin_toggle: Callable[[int], None] | None = None,
         # Callbacks into MainWindow
         make_keybind_callbacks: Callable[[int], KeybindCallbacks],
         on_reload_requested: Callable[[int], None],
@@ -104,6 +109,12 @@ class CardGridManager:
         self._playlist_cover_img = playlist_cover_img
         self._close_playlist_img = close_playlist_img
         self._reload_database_img = reload_database_img
+        self._pin_img = pin_img
+        self._pin_active_img = pin_active_img
+        self._show_pin_buttons = show_pin_buttons
+        self._on_pin_toggle_cb = on_pin_toggle
+        self._pin_buttons: list[tk.Button | None] = []
+        self._close_buttons: list[tk.Button] = []
 
         # Callbacks
         self._make_kc_callbacks = make_keybind_callbacks
@@ -149,6 +160,51 @@ class CardGridManager:
             except Exception as e:
                 logger.warning("Error destroying frame: %s", e)
         self.cards.clear()
+        self._pin_buttons.clear()
+        self._close_buttons.clear()
+
+    # ------------------------------------------------------------------
+    # Pin/unpin
+    # ------------------------------------------------------------------
+
+    def set_card_pin_state(self, frame_idx: int, pinned: bool) -> None:
+        """Swap the card's pin button to the active/inactive icon."""
+        try:
+            btn = self._pin_buttons[frame_idx]
+        except IndexError:
+            return
+        if btn is None:
+            return
+        try:
+            btn.config(image=self._pin_active_img if pinned else self._pin_img)
+        except tk.TclError:
+            return
+        btn._pm_pinned = pinned  # read by the tooltip lambda
+
+    def reset_state(self) -> None:
+        """Drop all grid bookkeeping (cards + per-card button lists).
+
+        Called before an in-place rebuild (sort/pin changes) — the
+        parallel lists must reset together or stale destroyed widgets
+        linger and later visibility calls hit bad window paths.
+        """
+        self.cards.clear()
+        self._pin_buttons.clear()
+        self._close_buttons.clear()
+
+    def _apply_pin_visibility(self, enabled: bool) -> None:
+        """Show/hide every pin button without touching the stored flags."""
+        self._show_pin_buttons = enabled
+        for i, btn in enumerate(self._pin_buttons):
+            if btn is None:
+                continue
+            try:
+                if enabled:
+                    btn.pack(side="left", before=self._close_buttons[i])
+                else:
+                    btn.pack_forget()
+            except (tk.TclError, IndexError):
+                continue
 
     # ------------------------------------------------------------------
     # Card index helper
@@ -243,8 +299,14 @@ class CardGridManager:
                 foreground=label_playlist_name_fg,
             )
 
+            # Header action cluster (pin | close) - the buttons are real
+            # children of this frame, not `pack(in_=...)` guests from the
+            # card header, so they render under any font/scaling setup.
+            header_actions = tk.Frame(
+                main_header_frame, background=label_playlist_name_bg
+            )
             close_playlist = tk.Button(
-                main_header_frame,
+                header_actions,
                 image=self._close_playlist_img,
                 cursor="hand2",
                 **button_playlist_btn,
@@ -252,6 +314,28 @@ class CardGridManager:
                 relief="raised",
             )
             ToolTip(close_playlist, "Close playlist")
+            self._close_buttons.append(close_playlist)
+
+            # Pin/unpin toggle - sits immediately LEFT of the close button.
+            pin_btn = None
+            if self._pin_img is not None and self._show_pin_buttons:
+                pin_btn = tk.Button(
+                    header_actions,
+                    image=self._pin_img,
+                    cursor="hand2",
+                    **button_playlist_btn,
+                    highlightthickness=0,
+                    relief="raised",
+                )
+                pin_btn._pm_pinned = False
+                ToolTip(
+                    pin_btn,
+                    lambda b=pin_btn: (
+                        "Unpin playlist" if getattr(b, "_pm_pinned", False)
+                        else "Pin playlist"
+                    ),
+                )
+            self._pin_buttons.append(pin_btn)
 
             playlist_keybind = tk.Entry(
                 main_header_frame,
@@ -340,6 +424,12 @@ class CardGridManager:
             playlist_name.configure(cursor="hand2")
 
             close_playlist["command"] = lambda c=card: self._confirm_close_playlist(c)
+            if pin_btn is not None:
+                pin_btn["command"] = (
+                    lambda c=card: self._on_pin_toggle_cb(c)
+                    if self._on_pin_toggle_cb
+                    else None
+                )
             playlist_keybind.bind(
                 "<Button-1>",
                 lambda e, c=card: self._start_recording_cb(self._card_index(c)),
@@ -360,7 +450,12 @@ class CardGridManager:
 
             playlist_cover.grid(row=0, column=0, sticky="ne", rowspan=2)
             playlist_name.grid(row=0, column=1, sticky="nswe")
-            close_playlist.grid(row=0, column=2, sticky="ne")
+            # Close always lives in the actions frame; the pin joins it on
+            # the left when enabled.  One code path, no None branches.
+            if pin_btn is not None:
+                pin_btn.pack(side="left")
+            close_playlist.pack(side="left")
+            header_actions.grid(row=0, column=2, sticky="ne")
             playlist_keybind.grid(row=1, column=1, sticky="nswe")
             reload_database.grid(row=1, column=2, sticky="ne")
 

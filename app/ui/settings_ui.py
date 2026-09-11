@@ -14,6 +14,9 @@ from ui.profiles_ui import (
 from ui.scrollable import ScrollableFrame
 from ui.settings_theme_ui import show_theme_dialog
 from utils.config import (
+    GRID_SORT_DEFAULT_DIRECTION,
+    GRID_SORT_DEFAULT_KEY,
+    GRID_SORT_KEY_LABELS,
     REMOVE_PLAYLIST_DEFAULT_MODE,
     REMOVE_PLAYLIST_MODE_LABELS,
     THUMBNAIL_MODES,
@@ -73,6 +76,8 @@ def show_settings_dialog(
     on_check_updates_now=None,
     on_check_duplicates_now=None,
     on_like_button_change=None,
+    on_pin_buttons_change=None,
+    on_sort_change=None,
     on_scrobble_keybind_change=None,
     on_restart_app=None,
     plugin_availability=None,
@@ -408,6 +413,95 @@ def show_settings_dialog(
     start_tray_ck.pack(fill="both", pady=(0,5), padx=16)
     if not getattr(tray_available, "available", False):
         start_tray_ck.configure(state="disabled", cursor="arrow")
+
+    pin_buttons_var = tk.BooleanVar(value=get_setting("show_pin_buttons", fallback=True))
+    pin_buttons_check = tk.Checkbutton(
+        app_section,
+        text="Pin/unpin buttons (on playlist cards)",
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        variable=pin_buttons_var,
+    )
+    pin_buttons_check.pack(fill="both", pady=(0, 5), padx=16)
+
+    def _on_pin_buttons_toggle():
+        _toggle_setting("show_pin_buttons", pin_buttons_var)
+        if on_pin_buttons_change:
+            try:
+                on_pin_buttons_change(bool(pin_buttons_var.get()))
+            except Exception as e:
+                logger.error("Failed to apply show_pin_buttons change: %s", e)
+
+    pin_buttons_check.config(command=_on_pin_buttons_toggle)
+
+    # --- Sort playlists: key combobox + direction arrow ----------------
+    sort_row = tk.Frame(app_section, background=theme_win_bg)
+    sort_row.pack(fill="both", pady=(0, 5), padx=16)
+    tk.Label(
+        sort_row,
+        text="Sort playlists by:",
+        background=theme_win_bg,
+        fg=C["label_def_fg"],
+        font=ui_font(12),
+    ).pack(side="left")
+
+    sort_key_var = tk.StringVar(
+        value=GRID_SORT_KEY_LABELS.get(
+            get_setting_value("grid_sort", "key", GRID_SORT_DEFAULT_KEY),
+            GRID_SORT_KEY_LABELS[GRID_SORT_DEFAULT_KEY],
+        )
+    )
+    sort_combo = ttk.Combobox(
+        sort_row,
+        textvariable=sort_key_var,
+        values=list(GRID_SORT_KEY_LABELS.values()),
+        state="readonly",
+        width=12,
+    )
+    sort_combo.pack(side="left", padx=(8, 4))
+    sort_arrow = tk.Button(
+        sort_row,
+        text="\u2191",
+        cursor="hand2",
+        highlightthickness=0,
+        relief="raised",
+        font=ui_font(12),
+        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+    )
+    sort_arrow.pack(side="left")
+
+    def _sort_direction() -> str:
+        return get_setting_value(
+            "grid_sort", "direction", GRID_SORT_DEFAULT_DIRECTION
+        )
+
+    def _apply_sort() -> None:
+        if callable(on_sort_change):
+            try:
+                on_sort_change()
+            except Exception as e:  # noqa: BLE001
+                logger.error("Failed to re-sort grid: %s", e)
+
+    def _on_sort_key_selected(_event=None) -> None:
+        label = sort_key_var.get()
+        key = next(
+            (k for k, v in GRID_SORT_KEY_LABELS.items() if v == label),
+            GRID_SORT_DEFAULT_KEY,
+        )
+        set_setting_value("grid_sort", "key", key)
+        _apply_sort()
+
+    def _on_sort_arrow(_event=None) -> None:
+        new_dir = "desc" if _sort_direction() == "asc" else "asc"
+        set_setting_value("grid_sort", "direction", new_dir)
+        sort_arrow.config(text="\u2191" if new_dir == "asc" else "\u2193")
+        _apply_sort()
+
+    sort_combo.bind("<<ComboboxSelected>>", _on_sort_key_selected)
+    sort_arrow.config(command=_on_sort_arrow)
+    sort_arrow.config(text="\u2191" if _sort_direction() == "asc" else "\u2193")
 
     dupcheck_section = tk.Frame(content, background=theme_win_bg)
     dupcheck_section.pack(fill="both", padx=8, pady=(0, 8))

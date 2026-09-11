@@ -78,10 +78,29 @@ DEFAULT_SETTINGS = {
     #                pruned after each showcase refresh
     #   "max"      - no thumbnails at all (--data-saver forces this per run)
     "thumbnails": {"mode": "off"},
+    # Grid sort / pin controls (see services/playlist_sort.py and
+    # app/ui/main_window.py).  The header combobox writes these live;
+    # "pinned" flags live per-playlist in the registry, not here.
+    "grid_sort": {"key": "name", "direction": "asc"},
+    "show_pin_buttons": {"is_true": "yes"},  # per-card pin/unpin buttons
 }
 
 # Valid [thumbnails] mode values; anything else falls back to "off".
 THUMBNAIL_MODES = ("off", "download", "dedupe", "cache", "max")
+
+# Valid [grid_sort] values (see services/playlist_sort.py).  The header
+# combobox/arrow in main_window writes these live; anything else falls
+# back to name/asc.
+GRID_SORT_KEYS = ("name", "platform", "added", "used")
+GRID_SORT_KEY_LABELS = {
+    "name": "Name",
+    "platform": "Platform",
+    "added": "Added",
+    "used": "Last used",
+}
+GRID_SORT_DIRECTIONS = ("asc", "desc")
+GRID_SORT_DEFAULT_KEY = "name"
+GRID_SORT_DEFAULT_DIRECTION = "asc"
 
 # Playlist-close mode choices (see DEFAULT_SETTINGS [remove_playlist]).
 # The labels are shown in the Settings combobox.
