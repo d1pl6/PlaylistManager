@@ -14,6 +14,8 @@ from ui.profiles_ui import (
 from ui.scrollable import ScrollableFrame
 from ui.settings_theme_ui import show_theme_dialog
 from utils.config import (
+    REMOVE_PLAYLIST_DEFAULT_MODE,
+    REMOVE_PLAYLIST_MODE_LABELS,
     THUMBNAIL_MODES,
     get_setting,
     get_setting_value,
@@ -365,13 +367,11 @@ def show_settings_dialog(
         global_ck.configure(state="disabled", cursor="arrow")
         tk.Label(
             app_section,
-            text="(not available on Wayland - use compositor shortcuts "
-                 "bound to 'playlistmanager add N')",
+            text="(not available on Wayland - use compositor shortcuts `playlistmanager add N`)",
             background=theme_win_bg,
             foreground=theme_label_fg,
             font=ui_font(9),
             anchor="w",
-            wraplength=372,  # available content width at the default 420px window
             justify="left",
         ).pack(fill="x", padx=16)
 
@@ -665,6 +665,95 @@ def show_settings_dialog(
         variable=playlist_stats_var,
     ).pack(fill="both", pady=(0,5), padx=16)
 
+    # --- Song removal: ask before the showcase ✕ deletes a song.  The
+    # removal is always a full one (platform + local row + scrobble).
+    confirm_song_remove_var = tk.IntVar(
+        value=1 if get_setting("confirm_on_song_remove", fallback=True) else 0
+    )
+    tk.Checkbutton(
+        appearance_section,
+        text="Ask before removing a song",
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=lambda: _toggle_setting(
+            "confirm_on_song_remove", confirm_song_remove_var
+        ),
+        variable=confirm_song_remove_var,
+    ).pack(fill="both", pady=(0,5), padx=16)
+
+    # --- Playlist removal: ask before a playlist card is closed; when
+    # not asking, [remove_playlist] default decides (Remove / Keep DB).
+    confirm_playlist_remove_var = tk.IntVar(
+        value=1 if get_setting("confirm_on_playlist_remove", fallback=True) else 0
+    )
+
+    def _on_confirm_playlist_remove_toggle():
+        _toggle_setting("confirm_on_playlist_remove", confirm_playlist_remove_var)
+        # The default-mode row is moot while the dialog is on.
+        try:
+            playlist_remove_combo.configure(
+                state="readonly" if confirm_playlist_remove_var.get() == 0 else "disabled"
+            )
+        except tk.TclError:
+            pass
+
+    tk.Checkbutton(
+        appearance_section,
+        text="Ask before removing the playlist",
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=_on_confirm_playlist_remove_toggle,
+        variable=confirm_playlist_remove_var,
+    ).pack(fill="both", pady=(0,5), padx=16)
+
+    playlist_remove_default_value = get_setting_value(
+        "remove_playlist", "default", REMOVE_PLAYLIST_DEFAULT_MODE
+    )
+    playlist_remove_default_label = REMOVE_PLAYLIST_MODE_LABELS.get(
+        playlist_remove_default_value,
+        REMOVE_PLAYLIST_MODE_LABELS[REMOVE_PLAYLIST_DEFAULT_MODE],
+    )
+
+    def _on_playlist_remove_default_change(label_value):
+        chosen = next(
+            (k for k, v in REMOVE_PLAYLIST_MODE_LABELS.items() if v == label_value),
+            REMOVE_PLAYLIST_DEFAULT_MODE,
+        )
+        try:
+            set_setting_value("remove_playlist", "default", chosen)
+        except Exception as e:
+            logger.error("Failed to save playlist-removal default: %s", e)
+
+    playlist_remove_default_row = tk.Frame(appearance_section, background=theme_check_bg)
+    playlist_remove_default_row.pack(fill="both", pady=(0,5), padx=16)
+    tk.Label(
+        playlist_remove_default_row,
+        text="Default playlist removal:",
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0,5))
+
+    playlist_remove_var = tk.StringVar(value=playlist_remove_default_label)
+    playlist_remove_combo = ttk.Combobox(
+        playlist_remove_default_row,
+        textvariable=playlist_remove_var,
+        cursor="hand2",
+        values=tuple(REMOVE_PLAYLIST_MODE_LABELS.values()),
+        state="disabled" if confirm_playlist_remove_var.get() == 1 else "readonly",
+        width=18,
+        font=ui_font(12),
+    )
+    playlist_remove_combo.pack(side="left", pady=(0,5))
+    playlist_remove_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_playlist_remove_default_change(playlist_remove_var.get()),
+    )
+
     showcase_row = tk.Frame(appearance_section, background=theme_check_bg)
     showcase_row.pack(fill="both", pady=(0,5), padx=16)
     tk.Label(
@@ -794,11 +883,11 @@ def show_settings_dialog(
     # friendly labels.  The mode is read per fetch, so a change applies
     # live (existing in-memory/disk entries are simply reused as-is).
     _THUMBNAIL_LABELS = (
-        ("off", "Off (fetch each run)"),
-        ("download", "Download (all thumbnails)"),
-        ("dedupe", "Dedupe (per song name + artist)"),
-        ("cache", "Cache (visible only)"),
-        ("max", "Max (no thumbnails)"),
+        ("off", "Off"),
+        ("download", "Download"),
+        ("dedupe", "Dedupe"),
+        ("cache", "Cache"),
+        ("max", "Max"),
     )
 
     def _on_thumbnail_mode_change(value: str) -> None:
@@ -816,7 +905,7 @@ def show_settings_dialog(
     thumb_row.pack(fill="both", pady=(0,5), padx=16)
     tk.Label(
         thumb_row,
-        text="Thumbnails:",
+        text="Data saver:",
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(12),
@@ -868,6 +957,21 @@ def show_settings_dialog(
         font=ui_font(9),
     ).pack(side="left", pady=(0,5), padx=(6, 0))
     _refresh_cache_size_label()
+
+    tk.Label(
+        appearance_section,
+        text=(
+            "Off: Fetch on every launch\n"
+            "Download: Keep all thumbnails permanently\n"
+            "Dedupe: Save one copy per song and artist; ideal for large libraries across multiple platforms\n"
+            "Cache: Save only visible items; clear the cache when the PC restarts\n"
+            "Max: Save metadata only; do not download thumbnails"
+        ),
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        justify="left",
+        font=ui_font(9),
+    ).pack(anchor="w", padx=16, pady=(0, 6))
 
     def _on_clear_cache() -> None:
         if not messagebox.askyesno(

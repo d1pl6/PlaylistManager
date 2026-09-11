@@ -20,6 +20,12 @@ from services import duplicate_queue, scrobble_log
 from ui.card import PlaylistCard
 from ui.close_playlist_dialog import show_close_playlist_dialog
 from ui.tooltip import ToolTip
+from utils.config import (
+    REMOVE_PLAYLIST_DEFAULT_MODE,
+    REMOVE_PLAYLIST_MODE_LABELS,
+    get_setting,
+    get_setting_value,
+)
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
 
@@ -29,11 +35,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Base design sizes of the playlist card, in unscaled pixels; every value
-# is multiplied by the UI scale (utils/scaling).
-CARD_W_BASE = 320
+# is multiplied by the UI scale (utils/scaling).  Card *width* is no
+# longer fixed — each card fills its grid column (column width is driven
+# by the window width and the column count).
 CARD_H_BASE = 96
 LOG_ROW_H_BASE = 23
 STATS_ROW_H_BASE = 20
+
+
+# Mode choices for removing a playlist card (config.REMOVE_PLAYLIST_*).
+def resolve_playlist_removal_mode(confirm: bool, default: str) -> Optional[str]:
+    """Resolve the playlist-removal action for a card ✕.
+
+    Returns "remove" (registry entry + local DB deleted), "keep_db"
+    (registry entry deleted, per-playlist SQLite file kept), or None when
+    confirmation is on -- the caller must then show the close dialog,
+    whose choice is one of the two modes or None (cancelled).  Unknown
+    ``default`` values fall back to "remove" (today's behaviour).
+    """
+    if confirm:
+        return None
+    return default if default in REMOVE_PLAYLIST_MODE_LABELS else REMOVE_PLAYLIST_DEFAULT_MODE
 
 
 class CardGridManager:
@@ -166,7 +188,6 @@ class CardGridManager:
 
             main_frame = tk.Frame(
                 self._content_frame,
-                width=px(CARD_W_BASE),
                 height=px(CARD_H_BASE),
                 background=frame_playlist_bg,
                 borderwidth=2,
@@ -179,8 +200,8 @@ class CardGridManager:
             main_frame.grid_rowconfigure(3, weight=0)
             main_frame.grid_columnconfigure(0, weight=1)
             main_header_frame = tk.Frame(main_frame, background=frame_playlist_bg)
-            main_stats_frame = tk.Frame(main_frame, background=frame_playlist_bg, width=px(CARD_W_BASE))
-            main_log_frame = tk.Frame(main_frame, background=frame_playlist_bg, width=px(CARD_W_BASE))
+            main_stats_frame = tk.Frame(main_frame, background=frame_playlist_bg)
+            main_log_frame = tk.Frame(main_frame, background=frame_playlist_bg)
 
             stats_bg = C["label_playlist_stats_bg"]
             stats_fg = C["label_playlist_stats_fg"]
@@ -220,7 +241,6 @@ class CardGridManager:
                 font=ui_font(12),
                 background=label_playlist_name_bg,
                 foreground=label_playlist_name_fg,
-                width=25,
             )
 
             close_playlist = tk.Button(
@@ -379,13 +399,23 @@ class CardGridManager:
         except (ValueError, tk.TclError):
             logger.error("Close confirmation: frame not found")
             return
-        show_close_playlist_dialog(
-            self.root,
-            playlist_name,
-            on_cancel=None,
-            on_keep_db=lambda: self.close_main_frame(card, delete_db=False),
-            on_confirm=lambda: self.close_main_frame(card, delete_db=True),
+        # Confirmation gate: with "Ask before removing the playlist" ON
+        # the close dialog decides (Cancel / Keep DB / Remove); with it
+        # OFF the [remove_playlist] default applies without a dialog.
+        mode = resolve_playlist_removal_mode(
+            get_setting("confirm_on_playlist_remove", True),
+            get_setting_value("remove_playlist", "default", REMOVE_PLAYLIST_DEFAULT_MODE),
         )
+        if mode is None:
+            show_close_playlist_dialog(
+                self.root,
+                playlist_name,
+                on_cancel=None,
+                on_keep_db=lambda: self.close_main_frame(card, delete_db=False),
+                on_confirm=lambda: self.close_main_frame(card, delete_db=True),
+            )
+        else:
+            self.close_main_frame(card, delete_db=(mode != "keep_db"))
 
     def close_main_frame(self, card, delete_db: bool = True) -> None:
         try:
@@ -451,11 +481,7 @@ class CardGridManager:
         logger.debug("Reordered frames after deletion")
 
     def _column_sticky(self, col: int) -> str:
-        if col == 0:
-            return "nw"
-        if col == self._columns - 1:
-            return "ne"
-        return "n"
+        return "nsew"
 
     def _restore_frame_grid(self, frame: tk.Frame, idx: int) -> None:
         pos = self.cards[idx].position

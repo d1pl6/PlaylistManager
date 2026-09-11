@@ -12,6 +12,7 @@ import threading
 import tkinter as tk
 import webbrowser
 from pathlib import Path
+from typing import Optional
 
 from PIL import Image
 
@@ -19,7 +20,9 @@ from services.playlist_store import PlaylistStore
 from services.playlist_url import build_song_url
 from services import scrobble_log
 from ui.tooltip import ToolTip
-from utils.config import get_setting
+from utils.config import (
+    get_setting,
+)
 from utils.icons import IconService
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
@@ -541,6 +544,15 @@ class ShowcaseManager:
                 text="Error", background=C["label_playlist_error_bg"]
             )
             return
+        # Decide BEFORE any state changes: confirmation asks through an
+        # in-app dialog (False = cancelled); otherwise the removal runs
+        # directly.  Song removal is always a full one - there is no
+        # "keep db" for songs.
+        if get_setting("confirm_on_song_remove", True):
+            if not self._ask_confirm_remove_song(
+                main_frame, title, artists, playlist_name
+            ):
+                return
         card.removing = True
 
         status_label.config(text="Removing", background=C["label_playlist_warn_bg"])
@@ -663,6 +675,105 @@ class ShowcaseManager:
                     )
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _ask_confirm_remove_song(
+        self,
+        main_frame: tk.Frame,
+        title: str,
+        artists: list,
+        playlist_name: str,
+    ) -> bool:
+        """Confirmation dialog before removing a song.
+
+        Returns True when the user confirms the removal (the only action
+        is a full one - platform + local row + scrobble), False when the
+        user cancelled.  Modal: the caller's flow waits for the choice
+        via ``wait_window``.  Colours and fonts are read from the live
+        theme at creation time (never frozen at import).
+        """
+        result: dict = {"ok": False}
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Remove song")
+        dialog.configure(background=C["root_bg"])
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        def choose(proceed: bool) -> None:
+            result["ok"] = proceed
+            try:
+                dialog.destroy()
+            except tk.TclError:
+                pass
+
+        artist_str = ""
+        if isinstance(artists, list) and artists:
+            artist_str = ", ".join(str(a) for a in artists[:2])
+        elif artists:
+            artist_str = str(artists)
+
+        body = tk.Frame(dialog, background=C["root_bg"])
+        body.pack(padx=16, pady=(14, 10), fill="both", expand=True)
+
+        tk.Label(
+            body,
+            text=f'Remove "{title}" from {playlist_name}?',
+            font=ui_font(12),
+            background=C["root_bg"],
+            foreground=C["label_def_fg"],
+            wraplength=380,
+            justify="left",
+        ).pack(fill="x")
+
+        if artist_str:
+            tk.Label(
+                body,
+                text=artist_str,
+                font=ui_font(10),
+                background=C["root_bg"],
+                foreground=C["label_def_fg"],
+                wraplength=380,
+                justify="left",
+            ).pack(fill="x", pady=(2, 0))
+
+        btns = tk.Frame(dialog, background=C["root_bg"])
+        btns.pack(padx=16, pady=(0, 12))
+
+        def make_button(text: str, proceed: bool) -> None:
+            tk.Button(
+                btns,
+                text=text,
+                cursor="hand2",
+                **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+                font=ui_font(11),
+                relief="raised",
+                bd=0,
+                highlightthickness=0,
+                command=lambda p=proceed: choose(p),
+            ).pack(side="left", padx=4)
+
+        make_button("Remove", True)
+        make_button("Cancel", False)
+
+        dialog.bind("<Escape>", lambda _e: choose(False))
+        dialog.protocol("WM_DELETE_WINDOW", lambda: choose(False))
+
+        # Centre over the card the user clicked.
+        try:
+            dialog.update_idletasks()
+            x = main_frame.winfo_rootx() + (
+                main_frame.winfo_width() - dialog.winfo_reqwidth()
+            ) // 2
+            y = main_frame.winfo_rooty() + (
+                main_frame.winfo_height() - dialog.winfo_reqheight()
+            ) // 2
+            dialog.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        except tk.TclError:
+            pass
+
+        self.root.wait_window(dialog)
+        return result["ok"]
 
     def _load_like_states(self, pending_likes: list) -> None:
         """Set the heart glyphs for a batch of showcase rows with ONE

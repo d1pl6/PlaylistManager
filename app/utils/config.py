@@ -44,6 +44,17 @@ DEFAULT_SETTINGS = {
     # (same artist + similar title + close duration).  Knobs are read by
     # services/duplicate_check.py callers.
     "duplicate_check": {"is_true": "no", "title_threshold": "0.85", "duration_tolerance": "5"},
+    # Remove/close confirmations:
+    #   confirm_on_song_remove - ask before the showcase ✕ deletes a song
+    #     (full removal is the only action; there is no "keep db" for songs)
+    #   confirm_on_playlist_remove - ask before a playlist card is closed
+    #     (the dialog offers Remove / Keep DB / Cancel)
+    #   [remove_playlist] default - the behaviour when the playlist dialog
+    #     is off: "remove" deletes the card + its database, "keep_db" keeps
+    #     the local SQLite file (see ui.card_grid.resolve_playlist_removal_mode).
+    "confirm_on_song_remove": {"is_true": "yes"},
+    "confirm_on_playlist_remove": {"is_true": "yes"},
+    "remove_playlist": {"default": "remove"},
     # Last.fm integration settings (service plugin, optional)
     "like_button": {"is_true": "no"},  # show the ♥/♡ button under "remove from playlist"
     # Scrobble a song when an add-flow succeeds.  Defaults to no like the
@@ -71,6 +82,15 @@ DEFAULT_SETTINGS = {
 
 # Valid [thumbnails] mode values; anything else falls back to "off".
 THUMBNAIL_MODES = ("off", "download", "dedupe", "cache", "max")
+
+# Playlist-close mode choices (see DEFAULT_SETTINGS [remove_playlist]).
+# The labels are shown in the Settings combobox.
+REMOVE_PLAYLIST_MODES = ("remove", "keep_db")
+REMOVE_PLAYLIST_MODE_LABELS = {
+    "remove": "Remove",
+    "keep_db": "Keep database",
+}
+REMOVE_PLAYLIST_DEFAULT_MODE = "remove"
 
 THEME_PATH = _profile_store.cfg_dir() / "theme.ini"
 
