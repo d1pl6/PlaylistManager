@@ -6,6 +6,7 @@ from tkinter import messagebox, ttk
 
 from _version import __version__
 from services import profile_store
+from services.scrobble import SCROBBLE_NONE, split_platforms
 from ui.profiles_ui import (
     show_create_profile_dialog,
     show_edit_buckets_dialog,
@@ -81,6 +82,7 @@ def show_settings_dialog(
     on_scrobble_keybind_change=None,
     on_restart_app=None,
     plugin_availability=None,
+    platform_display_names=None,
     ):
     """Show the settings dialog.
 
@@ -123,6 +125,9 @@ def show_settings_dialog(
             (from the live ``IntegrationRegistry``).  When given, sections
             for optional service plugins (Last.fm, SoundCloud) are hidden
             when the plugin is not installed.
+        platform_display_names: optional mapping of platform id -> display
+            name, used for the per-platform scrobble-source list labels.
+            Falls back to the raw id when a platform is absent.
     """
     theme_win_bg = C["frame_main_bg"]
     theme_header_bg = C["frame_head_bg"]
@@ -1130,13 +1135,6 @@ def show_settings_dialog(
         "<<ComboboxSelected>>",
         lambda e: _on_columns_change(columns_var.get()),
     )
-    tk.Label(
-        columns_row,
-        text="(applies immediately)",
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(9),
-    ).pack(side="left", pady=(0,5))
 
     tk.Button(
         appearance_section,
@@ -1190,7 +1188,91 @@ def show_settings_dialog(
             font=ui_font(11),
         )
         scrobble_on_add_check.pack(anchor="w", padx=16, pady=4)
-        scrobble_on_add_check.config(command=lambda: _toggle_setting("scrobble_on_add", scrobble_on_add_var))
+
+        # -- Per-platform scrobble sources ---------------------------------
+        # Only visible when the master gate is on.  Only installed music
+        # platforms are listed (Last.fm is the scrobble TARGET, never a
+        # source).  Storage semantics: empty = all installed (historical
+        # default), "none" = nothing, otherwise an explicit comma list.
+        scrobble_plat_area = tk.Frame(lastfm_section, background=theme_check_bg)
+        scrobble_plat_vars: dict = {}
+        raw_plat = get_setting_value("scrobble", "platforms", "")
+        _is_none = raw_plat.strip().lower() == SCROBBLE_NONE
+        _stored_ids = set() if _is_none else set(split_platforms(raw_plat))
+        _music_platforms = sorted(
+            (p for p in installed if p != "lastfm"),
+            key=lambda pid: (platform_display_names or {}).get(pid, pid).lower(),
+        )
+
+        if _music_platforms:
+            tk.Label(
+                scrobble_plat_area,
+                text="Platforms to scrobble from:",
+                background=theme_check_bg,
+                foreground=theme_check_fg,
+                font=ui_font(11),
+            ).pack(anchor="w", padx=4, pady=(6, 0))
+
+            _plat_scf = ScrollableFrame(
+                scrobble_plat_area,
+                bg=theme_check_bg,
+                max_viewport_height=px(100),
+            )
+            _plat_scf.pack(fill="both", padx=0, pady=(2, 4))
+            _plat_scf.update_scrollregion()
+            _plat_scf.style_scrollbar(
+                hover_bg(theme_check_fg), theme_check_bg,
+            )
+
+            for _pid in _music_platforms:
+                _pname = (platform_display_names or {}).get(_pid, _pid)
+                _var = tk.BooleanVar(
+                    value=(not _stored_ids and not _is_none) or _pid in _stored_ids,
+                )
+                _cb = tk.Checkbutton(
+                    _plat_scf.content,
+                    text=_pname,
+                    variable=_var,
+                    cursor="hand2",
+                    selectcolor=theme_check_select,
+                    **checkbutton_style,
+                    font=ui_font(11),
+                    command=lambda: set_setting_value(
+                        "scrobble",
+                        "platforms",
+                        ",".join(
+                            p for p in _music_platforms
+                            if scrobble_plat_vars[p].get()
+                        ) or SCROBBLE_NONE,
+                    ),
+                )
+                _cb.pack(anchor="w", padx=4, pady=1)
+                scrobble_plat_vars[_pid] = _var
+        else:
+            tk.Label(
+                scrobble_plat_area,
+                text="Install integration first",
+                background=theme_check_bg,
+                foreground=theme_check_fg,
+                font=ui_font(11),
+            ).pack(anchor="w", padx=4, pady=(6, 4))
+
+        def _apply_scrobble_list_visibility():
+            """Pack / un-pack the platform list based on the master gate."""
+            try:
+                if scrobble_on_add_var.get():
+                    scrobble_plat_area.pack(fill="x", padx=0, pady=(0, 4))
+                else:
+                    scrobble_plat_area.pack_forget()
+            except tk.TclError:
+                pass
+
+        def on_scrobble_on_add_toggle():
+            _toggle_setting("scrobble_on_add", scrobble_on_add_var)
+            _apply_scrobble_list_visibility()
+
+        scrobble_on_add_check.config(command=on_scrobble_on_add_toggle)
+        _apply_scrobble_list_visibility()
 
         # Scrobble keybind capture row
         scrobble_keybind_row = tk.Frame(lastfm_section, background=theme_check_bg)

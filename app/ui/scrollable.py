@@ -45,6 +45,11 @@ class ScrollableFrame(tk.Frame):
         bound to ``self``, ``content``, and ``canvas`` only.
     scrollbar_width:
         Width of the scrollbar thumb in pixels.
+    max_viewport_height:
+        Optional cap on the visible canvas height (pixels).  When set the
+        viewport shows at most this many pixels and scrolls for the rest -
+        i.e. a listbox-like region instead of the default grow-to-content
+        behavior.  The scrollregion is always the full content height.
     """
 
     def __init__(
@@ -55,8 +60,10 @@ class ScrollableFrame(tk.Frame):
         show_scrollbar: bool = True,
         bind_all_mousewheel: bool = False,
         scrollbar_width: int = 10,
+        max_viewport_height: int | None = None,
     ) -> None:
         super().__init__(parent, background=bg)
+        self.max_viewport_height = max_viewport_height
 
         # --- Canvas ---
         self.canvas = tk.Canvas(
@@ -180,9 +187,12 @@ class ScrollableFrame(tk.Frame):
         """
         try:
             self.canvas.update_idletasks()
+            content_h = self.content.winfo_reqheight()
+            if self.max_viewport_height is not None:
+                content_h = min(content_h, self.max_viewport_height)
             self.canvas.configure(
                 width=self.content.winfo_reqwidth(),
-                height=self.content.winfo_reqheight(),
+                height=content_h,
             )
             bbox = self.canvas.bbox("all")
             if bbox:

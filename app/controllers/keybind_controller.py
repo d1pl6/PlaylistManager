@@ -26,6 +26,7 @@ from utils.platform import is_wayland_session
 from controllers.keybind_registry import KeybindCallbacks, KeybindRegistry
 from services import duplicate_queue
 from services import scrobble_log
+from services.scrobble import scrobble_enabled_for
 from services.playlist_store import PlaylistStore
 from services.song_manager import SongManager
 from utils.theme import C
@@ -557,7 +558,7 @@ class KeybindController:
                     # recorded in the scrobble ledger so the remove-song
                     # path can later delete THIS exact scrobble (not the
                     # track's most recent one).
-                    if get_setting("scrobble_on_add"):
+                    if get_setting("scrobble_on_add") and scrobble_enabled_for(platform):
                         song_data = result.get("song", {})
                         if song_data and self.integrations:
                             song_id = result.get("song_id")

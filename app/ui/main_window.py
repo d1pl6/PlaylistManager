@@ -405,6 +405,10 @@ on_like_button_change=self._apply_like_button_visibility,
                 on_scrobble_keybind_change=self._register_scrobble_keybind,
                 on_restart_app=self.ac.restart_app,
                 plugin_availability=set(self.integrations.get_all()),
+                platform_display_names={
+                    pid: integ.display_name
+                    for pid, integ in self.integrations.get_all().items()
+                },
             ),
         )
         ToolTip(self.btn_open_settings, "Settings")

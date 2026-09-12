@@ -63,6 +63,11 @@ DEFAULT_SETTINGS = {
     # the plugin is configured.
     "scrobble_on_add": {"is_true": "no"},
     "scrobble_keybind": {"keybind": ""},  # standalone "scrobble current song, without adding it" combo
+    # Per-platform scrobble sources: comma-separated enabled platform ids.
+    # Empty/absent = ALL installed music platforms scrobble (matches the
+    # historical global behavior; zero migration).  Read by
+    # services/scrobble.py, written by the Last.fm section of Settings.
+    "scrobble": {"platforms": ""},
     # SoundCloud capture mode: how the add-flow acquires the current song.
     # "api" reads /me/recently-played/tracks[0]; "hybrid" prefers the browser
     # extension (exact URL + play/pause state) and falls back to the api path
@@ -110,6 +115,12 @@ REMOVE_PLAYLIST_MODE_LABELS = {
     "keep_db": "Keep database",
 }
 REMOVE_PLAYLIST_DEFAULT_MODE = "remove"
+
+# [scrobble] platforms section (see services/scrobble.py).  The list is a
+# comma-separated set of ENABLED scrobble-source platform ids; empty means
+# "all installed music platforms" (the historical behavior).
+SCROBBLE_PLATFORMS_SECTION = "scrobble"
+SCROBBLE_PLATFORMS_OPTION = "platforms"
 
 THEME_PATH = _profile_store.cfg_dir() / "theme.ini"
 

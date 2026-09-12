@@ -47,6 +47,7 @@ from services.playlist_store import PlaylistStore
 from services.playlist_sync import PlaylistSyncService
 from services.playlist_url import parse_playlist_url
 from services import scrobble_log
+from services.scrobble import scrobble_enabled_for
 from services.song_manager import SongManager
 from utils.config import get_setting
 from utils.logging_config import user_log
@@ -370,10 +371,11 @@ def run_add(spec: str) -> int:
     plugin_registry = get_default_registry()
     song_manager = SongManager()
 
-    # Read the auto-scrobble gate ONCE (not per target - get_setting hits
-    # the settings INI) and, only when it is enabled, resolve the
-    # ScrobbleCapable backend once.  When it's off (default) we never
-    # authenticate unrelated platforms just to find a scrobble backend.
+    # Read the auto-scrobble master gate ONCE (not per target - get_setting
+    # hits the settings INI).  The ScrobbleCapable backend is resolved only
+    # when at least one TARGET platform scrobbles (per the per-platform
+    # [scrobble] platforms list) - we never authenticate unrelated
+    # platforms just to find a scrobble backend.
     auto_scrobble = get_setting("scrobble_on_add")
 
     # Build ONE registry, authenticating only the platforms this add
@@ -387,7 +389,9 @@ def run_add(spec: str) -> int:
     }
     registry = _build_integrations(auth_platforms=target_platforms)
     scrobble_integ = None
-    if auto_scrobble:
+    if auto_scrobble and any(
+        scrobble_enabled_for(p) for p in target_platforms
+    ):
         scrobble_integ = _scrobble_backend(registry)
         if scrobble_integ is not None and scrobble_integ.id not in target_platforms:
             try:
@@ -1184,7 +1188,11 @@ def _run_flow(
         # integration was resolved.  An accepted scrobble is recorded in
         # the scrobble ledger so the remove-song path can later delete
         # THIS exact scrobble (not the track's most recent one).
-        if status == "added" and scrobble_integ is not None:
+        if (
+            status == "added"
+            and scrobble_integ is not None
+            and scrobble_enabled_for(platform)
+        ):
             result_song = result.get("song", {})
             if result_song:
                 try:
