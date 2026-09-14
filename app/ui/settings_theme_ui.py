@@ -25,15 +25,10 @@ from utils.config import (
     delete_theme,
 )
 from ui.scrollable import ScrollableFrame
+from utils.i18n import tr
 from utils.scaling import px, ui_font
 from utils.theme import C, readable_fg, btn_colors
 from utils.window import center_window, fit_window_to_screen
-
-
-#: Built-in pseudo-themes shown in the Themes combo (not saved files).
-BUILTIN_DEFAULT = "Default theme"
-BUILTIN_WHITE = "White Theme"
-_BUILTINS = (BUILTIN_DEFAULT, BUILTIN_WHITE)
 
 
 def _ok_button(parent, text, command):
@@ -53,6 +48,14 @@ def _ok_button(parent, text, command):
 def show_theme_dialog(parent, on_theme_change=None):
     """Open a separate scrollable theme-settings window."""
 
+    # Built-in pseudo-themes shown in the Themes combo (not saved files).
+    # The labels are user-facing and translated; they also double as the
+    # runtime identifiers the selection is compared against, so both sides
+    # use the same translated value and stay in sync for the dialog.
+    BUILTIN_DEFAULT = tr("theme.preset_default")
+    BUILTIN_WHITE = tr("theme.preset_white")
+    _BUILTINS = (BUILTIN_DEFAULT, BUILTIN_WHITE)
+
     win_bg = C["frame_main_bg"]
     header_bg = C["frame_head_bg"]
     label_bg = C["label_def_bg"]
@@ -62,7 +65,7 @@ def show_theme_dialog(parent, on_theme_change=None):
     button_btn = btn_colors(button_bg, button_fg)
 
     win = tk.Toplevel(parent)
-    win.title("Theme Settings")
+    win.title(tr("settings.theme_settings"))
     win.configure(background=win_bg, padx=2, pady=2)
     win.transient(parent)
     win.grab_set()
@@ -80,7 +83,7 @@ def show_theme_dialog(parent, on_theme_change=None):
 
     header_label = tk.Label(
         win,
-        text="Theme settings",
+        text=tr("theme.settings_header"),
         background=header_bg,
         foreground=label_fg,
         font=ui_font(12),
@@ -95,7 +98,7 @@ def show_theme_dialog(parent, on_theme_change=None):
 
     theme_label = tk.Label(
         themes_bar,
-        text="Theme:",
+        text=tr("theme.combo_label"),
         background=win_bg,
         foreground=label_fg,
         font=ui_font(10),
@@ -202,7 +205,7 @@ def show_theme_dialog(parent, on_theme_change=None):
         value = theme_cfg.get(section, option, fallback=default)
         btn = tk.Button(
             frame,
-            text="Change",
+            text=tr("theme.change"),
             cursor="hand2",
             font=ui_font(10),
             command=lambda: _choose_color(section, option, default, btn),
@@ -248,7 +251,7 @@ def show_theme_dialog(parent, on_theme_change=None):
             else:
                 apply_theme(sel)
         except ValueError as e:
-            messagebox.showerror("Apply Theme", str(e), parent=win)
+            messagebox.showerror(tr("theme.apply_title"), str(e), parent=win)
             _refresh_themes_combo()
             return
         _reload_theme_cfg()
@@ -266,8 +269,8 @@ def show_theme_dialog(parent, on_theme_change=None):
         if sel in _BUILTINS:
             return
         confirm = messagebox.askyesno(
-            "Save Theme",
-            f'Overwrite the theme "{sel}" with the current palette?',
+            tr("theme.save_title"),
+            tr("theme.save_overwrite_ask", sel=sel),
             parent=win,
         )
         if not confirm:
@@ -275,7 +278,7 @@ def show_theme_dialog(parent, on_theme_change=None):
         try:
             save_theme(sel)
         except ValueError as e:
-            messagebox.showerror("Save Theme", str(e), parent=win)
+            messagebox.showerror(tr("theme.save_title"), str(e), parent=win)
 
     def _on_create_theme() -> None:
         def _do_create(name):
@@ -286,15 +289,17 @@ def show_theme_dialog(parent, on_theme_change=None):
             _refresh_themes_combo(select=name)
             return None
 
-        _show_theme_name_dialog("Create Theme", "Theme name:", _do_create)
+        _show_theme_name_dialog(
+            tr("theme.create_title"), tr("theme.name_label"), _do_create
+        )
 
     def _on_delete_theme() -> None:
         sel = theme_var.get()
         if sel in _BUILTINS:
             return
         confirm = messagebox.askyesno(
-            "Delete Theme",
-            f'Delete the theme "{sel}"? The current palette is not affected.',
+            tr("theme.delete_title"),
+            tr("theme.delete_ask", sel=sel),
             parent=win,
         )
         if not confirm:
@@ -302,13 +307,13 @@ def show_theme_dialog(parent, on_theme_change=None):
         try:
             delete_theme(sel)
         except ValueError as e:
-            messagebox.showerror("Delete Theme", str(e), parent=win)
+            messagebox.showerror(tr("theme.delete_title"), str(e), parent=win)
             return
         _refresh_themes_combo(select=BUILTIN_DEFAULT)
 
     btn_save = tk.Button(
         themes_bar,
-        text="Save",
+        text=tr("common.save"),
         cursor="hand2",
         font=ui_font(10),
         command=_on_save_theme,
@@ -321,7 +326,7 @@ def show_theme_dialog(parent, on_theme_change=None):
 
     btn_create = tk.Button(
         themes_bar,
-        text="Create",
+        text=tr("theme.create"),
         cursor="hand2",
         font=ui_font(10),
         command=_on_create_theme,
@@ -334,7 +339,7 @@ def show_theme_dialog(parent, on_theme_change=None):
 
     btn_delete = tk.Button(
         themes_bar,
-        text="Delete",
+        text=tr("common.delete"),
         cursor="hand2",
         font=ui_font(10),
         command=_on_delete_theme,
@@ -417,10 +422,10 @@ def show_theme_dialog(parent, on_theme_change=None):
 
         btn_row = tk.Frame(content, background=C["frame_main_bg"])
         btn_row.pack(fill="x", pady=(12, 0))
-        _ok_button(btn_row, "Save", _save).pack(
+        _ok_button(btn_row, tr("common.save"), _save).pack(
             side="left", expand=True, fill="x", padx=(0, 4)
         )
-        _ok_button(btn_row, "Cancel", _dlg_close).pack(
+        _ok_button(btn_row, tr("common.cancel"), _dlg_close).pack(
             side="left", expand=True, fill="x", padx=(4, 0)
         )
 
@@ -459,69 +464,69 @@ def show_theme_dialog(parent, on_theme_change=None):
     theme_combo["values"] = list(_BUILTINS) + list_themes()
     theme_var.set(_preselected_theme())
 
-    _create_theme_button("Root background", "root_background", "background")
-    _create_theme_button("Frame header background", "frame_header", "background")
-    _create_theme_button("Frame main background", "frame_main", "background")
-    _create_theme_button("Frame playlist background", "frame_playlist", "background")
+    _create_theme_button(tr("theme.swatch_root_bg"), "root_background", "background")
+    _create_theme_button(tr("theme.swatch_frame_header_bg"), "frame_header", "background")
+    _create_theme_button(tr("theme.swatch_frame_main_bg"), "frame_main", "background")
+    _create_theme_button(tr("theme.swatch_frame_playlist_bg"), "frame_playlist", "background")
 
-    _create_theme_button("Scrollable frame background", "scrollable_frame", "background")
+    _create_theme_button(tr("theme.swatch_scrollable_frame_bg"), "scrollable_frame", "background")
 
-    _create_theme_button("Label default background", "label_default", "background")
-    _create_theme_button("Label default foreground", "label_default", "foreground")
+    _create_theme_button(tr("theme.swatch_label_default_bg"), "label_default", "background")
+    _create_theme_button(tr("theme.swatch_label_default_fg"), "label_default", "foreground")
 
-    _create_theme_button("Label playlist background", "label_playlist", "background")
-    _create_theme_button("Label playlist foreground", "label_playlist", "foreground")
+    _create_theme_button(tr("theme.swatch_label_playlist_bg"), "label_playlist", "background")
+    _create_theme_button(tr("theme.swatch_label_playlist_fg"), "label_playlist", "foreground")
 
-    _create_theme_button("Playlist name background", "label_playlist_name", "background")
-    _create_theme_button("Playlist name foreground", "label_playlist_name", "foreground")
+    _create_theme_button(tr("theme.swatch_playlist_name_bg"), "label_playlist_name", "background")
+    _create_theme_button(tr("theme.swatch_playlist_name_fg"), "label_playlist_name", "foreground")
 
-    _create_theme_button("Playlist log background", "label_playlist_log", "background")
-    _create_theme_button("Playlist log foreground", "label_playlist_log", "foreground")
+    _create_theme_button(tr("theme.swatch_playlist_log_bg"), "label_playlist_log", "background")
+    _create_theme_button(tr("theme.swatch_playlist_log_fg"), "label_playlist_log", "foreground")
 
-    _create_theme_button("Playlist good background", "label_playlist_good", "background")
-    _create_theme_button("Playlist good foreground", "label_playlist_good", "foreground")
+    _create_theme_button(tr("theme.swatch_playlist_good_bg"), "label_playlist_good", "background")
+    _create_theme_button(tr("theme.swatch_playlist_good_fg"), "label_playlist_good", "foreground")
 
-    _create_theme_button("Playlist warning background", "label_playlist_warning", "background")
-    _create_theme_button("Playlist warning foreground", "label_playlist_warning", "foreground")
+    _create_theme_button(tr("theme.swatch_playlist_warning_bg"), "label_playlist_warning", "background")
+    _create_theme_button(tr("theme.swatch_playlist_warning_fg"), "label_playlist_warning", "foreground")
 
-    _create_theme_button("Playlist error background", "label_playlist_error", "background")
-    _create_theme_button("Playlist error foreground", "label_playlist_error", "foreground")
+    _create_theme_button(tr("theme.swatch_playlist_error_bg"), "label_playlist_error", "background")
+    _create_theme_button(tr("theme.swatch_playlist_error_fg"), "label_playlist_error", "foreground")
 
-    _create_theme_button("Checkbutton background", "checkbutton", "background")
-    _create_theme_button("Checkbutton foreground", "checkbutton", "foreground")
-    _create_theme_button("Checkbutton selectcolor", "checkbutton", "selectcolor")
+    _create_theme_button(tr("theme.swatch_checkbutton_bg"), "checkbutton", "background")
+    _create_theme_button(tr("theme.swatch_checkbutton_fg"), "checkbutton", "foreground")
+    _create_theme_button(tr("theme.swatch_checkbutton_selectcolor"), "checkbutton", "selectcolor")
 
-    _create_theme_button("Button header background", "button_header", "background")
-    _create_theme_button("Button header foreground", "button_header", "foreground")
+    _create_theme_button(tr("theme.swatch_button_header_bg"), "button_header", "background")
+    _create_theme_button(tr("theme.swatch_button_header_fg"), "button_header", "foreground")
 
-    _create_theme_button("Button main background", "button_main", "background")
-    _create_theme_button("Button main foreground", "button_main", "foreground")
+    _create_theme_button(tr("theme.swatch_button_main_bg"), "button_main", "background")
+    _create_theme_button(tr("theme.swatch_button_main_fg"), "button_main", "foreground")
 
-    _create_theme_button("Button playlist background", "button_playlist", "background")
-    _create_theme_button("Button playlist foreground", "button_playlist", "foreground")
+    _create_theme_button(tr("theme.swatch_button_playlist_bg"), "button_playlist", "background")
+    _create_theme_button(tr("theme.swatch_button_playlist_fg"), "button_playlist", "foreground")
 
-    _create_theme_button("Button close background", "button_close", "background")
-    _create_theme_button("Button close foreground", "button_close", "foreground")
+    _create_theme_button(tr("theme.swatch_button_close_bg"), "button_close", "background")
+    _create_theme_button(tr("theme.swatch_button_close_fg"), "button_close", "foreground")
 
-    _create_theme_button("Button save background", "button_save", "background")
-    _create_theme_button("Button save foreground", "button_save", "foreground")
+    _create_theme_button(tr("theme.swatch_button_save_bg"), "button_save", "background")
+    _create_theme_button(tr("theme.swatch_button_save_fg"), "button_save", "foreground")
 
-    _create_theme_button("Entry default background", "entry_default", "background")
-    _create_theme_button("Entry default foreground", "entry_default", "foreground")
-    _create_theme_button("Entry default readonlybackground", "entry_default", "readonlybackground")
+    _create_theme_button(tr("theme.swatch_entry_default_bg"), "entry_default", "background")
+    _create_theme_button(tr("theme.swatch_entry_default_fg"), "entry_default", "foreground")
+    _create_theme_button(tr("theme.swatch_entry_default_readonly_bg"), "entry_default", "readonlybackground")
 
-    _create_theme_button("Entry playlist background", "entry_playlist", "background")
-    _create_theme_button("Entry playlist foreground", "entry_playlist", "foreground")
-    _create_theme_button("Entry playlist readonlybackground", "entry_playlist", "readonlybackground")
+    _create_theme_button(tr("theme.swatch_entry_playlist_bg"), "entry_playlist", "background")
+    _create_theme_button(tr("theme.swatch_entry_playlist_fg"), "entry_playlist", "foreground")
+    _create_theme_button(tr("theme.swatch_entry_playlist_readonly_bg"), "entry_playlist", "readonlybackground")
 
-    _create_theme_button("Playlist stats background", "label_playlist_stats", "background")
-    _create_theme_button("Playlist stats foreground", "label_playlist_stats", "foreground")
+    _create_theme_button(tr("theme.swatch_playlist_stats_bg"), "label_playlist_stats", "background")
+    _create_theme_button(tr("theme.swatch_playlist_stats_fg"), "label_playlist_stats", "foreground")
 
-    _create_theme_button("Search bar background", "search_bar", "background")
-    _create_theme_button("Search bar foreground", "search_bar", "foreground")
+    _create_theme_button(tr("theme.swatch_search_bar_bg"), "search_bar", "background")
+    _create_theme_button(tr("theme.swatch_search_bar_fg"), "search_bar", "foreground")
 
-    _create_theme_button("Search result background", "search_result", "background")
-    _create_theme_button("Search result foreground", "search_result", "foreground")
+    _create_theme_button(tr("theme.swatch_search_result_bg"), "search_result", "background")
+    _create_theme_button(tr("theme.swatch_search_result_fg"), "search_result", "foreground")
 
     _sync_theme_buttons()
     # Cap the window at the screen size so the swatch list scrolls instead

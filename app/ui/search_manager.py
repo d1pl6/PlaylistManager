@@ -10,6 +10,7 @@ import logging
 import threading
 import tkinter as tk
 
+from utils.i18n import tr
 from utils.scaling import ui_font
 from utils.theme import C, btn_colors, dimmed_fg
 
@@ -103,7 +104,10 @@ class SearchManager:
             row=1, column=0, columnspan=self._columns, sticky="ew"
         )
 
-        placeholder = "Search playlists..." if mode == "playlist" else "Search songs..."
+        placeholder = (
+            tr("search.playlist_placeholder") if mode == "playlist"
+            else tr("search.song_placeholder")
+        )
         self._search_var = tk.StringVar()
         self._search_var.trace_add("write", self._on_search_query)
 
@@ -170,7 +174,9 @@ class SearchManager:
         if self._search_entry is None:
             return
         text = self._search_entry.get()
-        if text in ("Search playlists...", "Search songs..."):
+        if text in (
+            tr("search.playlist_placeholder"), tr("search.song_placeholder")
+        ):
             self._search_entry.delete(0, tk.END)
             self._search_entry.configure(foreground=C["search_bar_fg"])
 
@@ -178,7 +184,10 @@ class SearchManager:
         if self._search_entry is None:
             return
         if not self._search_entry.get().strip():
-            placeholder = "Search playlists..." if self._search_mode == "playlist" else "Search songs..."
+            placeholder = (
+                tr("search.playlist_placeholder") if self._search_mode == "playlist"
+                else tr("search.song_placeholder")
+            )
             self._search_entry.delete(0, tk.END)
             self._search_entry.insert(0, placeholder)
             self._search_entry.configure(foreground=dimmed_fg(C["search_bar_fg"], C["search_bar_bg"]))
@@ -191,7 +200,9 @@ class SearchManager:
         if self._search_var is None or self._search_mode is None:
             return
         query = self._search_var.get()
-        if query in ("Search playlists...", "Search songs..."):
+        if query in (
+            tr("search.playlist_placeholder"), tr("search.song_placeholder")
+        ):
             return
         if self._search_mode == "playlist":
             self._filter_playlists(query)
@@ -317,7 +328,7 @@ class SearchManager:
         if not songs:
             no_match = tk.Label(
                 frame,
-                text="No matches",
+                text=tr("search.no_matches"),
                 font=ui_font(10),
                 background=frame_playlist_bg,
                 foreground=dimmed_fg(result_fg, frame_playlist_bg),

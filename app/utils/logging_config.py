@@ -43,10 +43,11 @@ def user_log(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
     should see even without --debug.  Everything else belongs at INFO or
     below so it stays hidden in normal runs.
 
-    Prefer ``%``-style arguments (``user_log(logger, "%s ready", name)``)
-    over pre-built f-strings: the formatting is skipped entirely when the
-    level is disabled, while an f-string is built at the call site no
-    matter what.
+    User-facing messages come through ``tr()`` / ``trn()`` (utils/i18n):
+    pass the already-formatted string as ``msg`` with no ``args``
+    (``user_log(logger, tr("app.tray_unavailable"))``).  Prefer that over
+    ``%``-style arguments - translations keep working and the waste case
+    (formatting a disabled message) is bounded.
     """
     logger.log(USER_LEVEL, msg, *args, **kwargs)
 

@@ -26,6 +26,7 @@ from utils.config import (
     set_setting,
     set_setting_value,
 )
+from utils.i18n import available_languages, language_code_for, language_display, tr
 from utils.scaling import UI_SCALE_PRESETS, px, ui_font
 from utils.platform import is_wayland_session
 from utils.theme import C, btn_colors, hover_bg
@@ -155,7 +156,7 @@ def show_settings_dialog(
 
     tk.Label(
         win,
-        text="Settings",
+        text=tr("settings.title"),
         background=theme_header_bg,
         foreground=theme_label_fg,
         font=ui_font(14),
@@ -206,11 +207,11 @@ def show_settings_dialog(
 
     app_section = tk.Frame(content, background=theme_win_bg)
     app_section.pack(fill="both", padx=8, pady=(0, 8))
-    _section_header(app_section, "App behavior")
+    _section_header(app_section, tr("settings.app_behavior"))
 
     tk.Checkbutton(
         app_section,
-        text="Check for updates on startup",
+        text=tr("settings.check_updates_startup"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -222,25 +223,25 @@ def show_settings_dialog(
     def _do_check_now():
         if not callable(on_check_updates_now):
             return
-        update_btn.configure(state="disabled", text="Checking\u2026")
+        update_btn.configure(state="disabled", text=tr("settings.checking"))
 
         def _on_complete(available, error):
             try:
                 if available:
-                    update_btn.configure(state="normal", text="Check for updates now")
+                    update_btn.configure(state="normal", text=tr("settings.check_updates_now"))
                 elif error:
                     update_btn.configure(
                         state="normal",
-                        text="Check failed \u2014 try again",
+                        text=tr("settings.check_failed_retry"),
                     )
                 else:
-                    update_btn.configure(state="normal", text="Up to date!")
+                    update_btn.configure(state="normal", text=tr("settings.up_to_date"))
             except tk.TclError:
                 return
             try:
                 win.after(
                     4000,
-                    lambda: update_btn.configure(text="Check for updates now"),
+                    lambda: update_btn.configure(text=tr("settings.check_updates_now")),
                 )
             except tk.TclError:
                 pass
@@ -249,7 +250,7 @@ def show_settings_dialog(
 
     update_btn = tk.Button(
         app_section,
-        text="Check for updates now",
+        text=tr("settings.check_updates_now"),
         cursor="hand2",
         **btn_colors(C["button_main_bg"], C["button_main_fg"]),
         font=ui_font(12),
@@ -261,7 +262,7 @@ def show_settings_dialog(
 
     tk.Checkbutton(
         app_section,
-        text="Center windows after launch",
+        text=tr("settings.center_windows"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -275,7 +276,7 @@ def show_settings_dialog(
 
     tk.Checkbutton(
         app_section,
-        text="Remember window size/position",
+        text=tr("settings.remember_window_geometry"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -301,7 +302,7 @@ def show_settings_dialog(
 
     tk.Button(
         app_section,
-        text="Reset window size/position",
+        text=tr("settings.reset_window_geometry"),
         cursor="hand2",
         relief="raised",
         bd=0,
@@ -322,7 +323,7 @@ def show_settings_dialog(
 
     tk.Checkbutton(
         app_section,
-        text="Start window fullscreen",
+        text=tr("settings.start_fullscreen"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -338,7 +339,7 @@ def show_settings_dialog(
 
     tk.Checkbutton(
         app_section,
-        text="Auto-resize main window",
+        text=tr("settings.auto_resize"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -364,7 +365,7 @@ def show_settings_dialog(
 
     global_ck = tk.Checkbutton(
         app_section,
-        text="Use global key listener",
+        text=tr("settings.global_key_listener"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -377,7 +378,7 @@ def show_settings_dialog(
         global_ck.configure(state="disabled", cursor="arrow")
         tk.Label(
             app_section,
-            text="(not available on Wayland - use compositor shortcuts `playlistmanager add N`)",
+            text=tr("settings.wayland_global_hint"),
             background=theme_win_bg,
             foreground=theme_label_fg,
             font=ui_font(9),
@@ -392,7 +393,7 @@ def show_settings_dialog(
 
     tray_ck = tk.Checkbutton(
         app_section,
-        text="Hide in tray on minimize",
+        text=tr("settings.hide_in_tray"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -407,7 +408,7 @@ def show_settings_dialog(
     start_tray_var = tk.IntVar(value=start_tray_var_value)
     start_tray_ck = tk.Checkbutton(
         app_section,
-        text="Start in tray (next launch)",
+        text=tr("settings.start_in_tray"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -422,7 +423,7 @@ def show_settings_dialog(
     pin_buttons_var = tk.BooleanVar(value=get_setting("show_pin_buttons", fallback=True))
     pin_buttons_check = tk.Checkbutton(
         app_section,
-        text="Pin/unpin buttons (on playlist cards)",
+        text=tr("settings.pin_unpin_buttons"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -446,22 +447,28 @@ def show_settings_dialog(
     sort_row.pack(fill="both", pady=(0, 5), padx=16)
     tk.Label(
         sort_row,
-        text="Sort playlists by:",
+        text=tr("settings.sort_playlists_by"),
         background=theme_win_bg,
         fg=C["label_def_fg"],
         font=ui_font(12),
     ).pack(side="left")
 
+    # Combo labels are translated at creation time; the underlying sort
+    # keys (name/platform/added/used) stay untranslated data, so both the
+    # displayed values and the label->key reverse-map share one mapping.
+    _SORT_LABELS = {
+        k: tr(f"settings.sort_key_{k}") for k in GRID_SORT_KEY_LABELS
+    }
     sort_key_var = tk.StringVar(
-        value=GRID_SORT_KEY_LABELS.get(
+        value=_SORT_LABELS.get(
             get_setting_value("grid_sort", "key", GRID_SORT_DEFAULT_KEY),
-            GRID_SORT_KEY_LABELS[GRID_SORT_DEFAULT_KEY],
+            _SORT_LABELS[GRID_SORT_DEFAULT_KEY],
         )
     )
     sort_combo = ttk.Combobox(
         sort_row,
         textvariable=sort_key_var,
-        values=list(GRID_SORT_KEY_LABELS.values()),
+        values=list(_SORT_LABELS.values()),
         state="readonly",
         width=12,
     )
@@ -492,7 +499,7 @@ def show_settings_dialog(
     def _on_sort_key_selected(_event=None) -> None:
         label = sort_key_var.get()
         key = next(
-            (k for k, v in GRID_SORT_KEY_LABELS.items() if v == label),
+            (k for k, v in _SORT_LABELS.items() if v == label),
             GRID_SORT_DEFAULT_KEY,
         )
         set_setting_value("grid_sort", "key", key)
@@ -510,7 +517,7 @@ def show_settings_dialog(
 
     dupcheck_section = tk.Frame(content, background=theme_win_bg)
     dupcheck_section.pack(fill="both", padx=8, pady=(0, 8))
-    _section_header(dupcheck_section, "Duplicate check")
+    _section_header(dupcheck_section, tr("settings.duplicate_check"))
 
     def _on_dup_check_toggle():
         _toggle_setting("duplicate_check", dup_var)
@@ -518,7 +525,7 @@ def show_settings_dialog(
     dup_var = tk.IntVar(value=1 if get_setting("duplicate_check", fallback=False) else 0)
     tk.Checkbutton(
         dupcheck_section,
-        text="Extra duplicate check",
+        text=tr("settings.extra_duplicate_check"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -529,7 +536,7 @@ def show_settings_dialog(
 
     tk.Label(
         dupcheck_section,
-        text="(asks when a similar song is already in the playlist)",
+        text=tr("settings.dup_ask_hint"),
         background=theme_win_bg,
         foreground=theme_label_fg,
         font=ui_font(9),
@@ -559,7 +566,7 @@ def show_settings_dialog(
     threshold_row.pack(fill="both", pady=(0, 2), padx=16)
     tk.Label(
         threshold_row,
-        text="Title similarity:",
+        text=tr("settings.title_similarity"),
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(12),
@@ -605,7 +612,7 @@ def show_settings_dialog(
 
     tk.Label(
         dupcheck_section,
-        text="Match score required for a near-duplicate (higher = stricter)",
+        text=tr("settings.match_score_hint"),
         background=theme_win_bg,
         foreground=theme_label_fg,
         font=ui_font(9),
@@ -627,14 +634,14 @@ def show_settings_dialog(
     tolerance_row.pack(fill="both", pady=(0, 2), padx=16)
     tk.Label(
         tolerance_row,
-        text="Duration tolerance:",
+        text=tr("settings.duration_tolerance"),
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(12),
     ).pack(side="left", pady=(0, 5))
     tolerance_val = tk.Label(
         tolerance_row,
-        text=f"{_tolerance_now} s",
+        text=tr("settings.duration_value", n=_tolerance_now),
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(12),
@@ -642,7 +649,7 @@ def show_settings_dialog(
     tolerance_val.pack(side="right", pady=(0, 5))
 
     def _on_tolerance_drag(value: str) -> None:
-        tolerance_val.configure(text=f"{int(float(value))} s")
+        tolerance_val.configure(text=tr("settings.duration_value", n=int(float(value))))
 
     def _persist_tolerance(_event=None) -> None:
         _persist_setting("duration_tolerance", tolerance_var, lambda v: str(int(v)))
@@ -670,7 +677,7 @@ def show_settings_dialog(
 
     tk.Label(
         dupcheck_section,
-        text="Max length difference between matching tracks, in seconds",
+        text=tr("settings.duration_hint"),
         background=theme_win_bg,
         foreground=theme_label_fg,
         font=ui_font(9),
@@ -681,22 +688,22 @@ def show_settings_dialog(
     def _do_dup_check_now():
         if not callable(on_check_duplicates_now):
             return
-        dup_btn.configure(state="disabled", text="Scanning\u2026")
+        dup_btn.configure(state="disabled", text=tr("settings.scanning"))
 
         def _on_complete(found, error):
             try:
                 if error:
-                    dup_btn.configure(state="normal", text="Scan failed \u2014 try again")
+                    dup_btn.configure(state="normal", text=tr("settings.scan_failed_retry"))
                 elif found:
                     dup_btn.configure(state="normal", text=f"{found} found!")
                 else:
-                    dup_btn.configure(state="normal", text="No duplicates found")
+                    dup_btn.configure(state="normal", text=tr("settings.no_duplicates_found"))
             except tk.TclError:
                 return
             try:
                 win.after(
                     4000,
-                    lambda: dup_btn.configure(text="Check for duplicates now"),
+                    lambda: dup_btn.configure(text=tr("settings.check_duplicates_now")),
                 )
             except tk.TclError:
                 pass
@@ -705,7 +712,7 @@ def show_settings_dialog(
 
     dup_btn = tk.Button(
         dupcheck_section,
-        text="Check for duplicates now",
+        text=tr("settings.check_duplicates_now"),
         cursor="hand2",
         **btn_colors(C["button_main_bg"], C["button_main_fg"]),
         font=ui_font(12),
@@ -717,7 +724,7 @@ def show_settings_dialog(
 
     appearance_section = tk.Frame(content, background=theme_win_bg)
     appearance_section.pack(fill="both", padx=8, pady=(0, 8))
-    _section_header(appearance_section, "Appearance")
+    _section_header(appearance_section, tr("settings.appearance"))
 
     def _on_showcase_count_change(value: str) -> None:
         try:
@@ -738,7 +745,7 @@ def show_settings_dialog(
     showcase_log_var = tk.IntVar(value=showcase_log_value)
     tk.Checkbutton(
         appearance_section,
-        text="Show log row (artist / song / status)",
+        text=tr("settings.show_log_row"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -755,7 +762,7 @@ def show_settings_dialog(
     playlist_stats_var = tk.IntVar(value=playlist_stats_value)
     tk.Checkbutton(
         appearance_section,
-        text="Show playlist stats (songs / duration / followers)",
+        text=tr("settings.show_playlist_stats"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -771,7 +778,7 @@ def show_settings_dialog(
     )
     tk.Checkbutton(
         appearance_section,
-        text="Ask before removing a song",
+        text=tr("settings.ask_before_song_remove"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -800,7 +807,7 @@ def show_settings_dialog(
 
     tk.Checkbutton(
         appearance_section,
-        text="Ask before removing the playlist",
+        text=tr("settings.ask_before_playlist_remove"),
         cursor="hand2",
         selectcolor=theme_check_select,
         **checkbutton_style,
@@ -812,14 +819,17 @@ def show_settings_dialog(
     playlist_remove_default_value = get_setting_value(
         "remove_playlist", "default", REMOVE_PLAYLIST_DEFAULT_MODE
     )
-    playlist_remove_default_label = REMOVE_PLAYLIST_MODE_LABELS.get(
+    _REMOVAL_LABELS = {
+        k: tr(f"settings.removal_mode_{k}") for k in REMOVE_PLAYLIST_MODE_LABELS
+    }
+    playlist_remove_default_label = _REMOVAL_LABELS.get(
         playlist_remove_default_value,
-        REMOVE_PLAYLIST_MODE_LABELS[REMOVE_PLAYLIST_DEFAULT_MODE],
+        _REMOVAL_LABELS[REMOVE_PLAYLIST_DEFAULT_MODE],
     )
 
     def _on_playlist_remove_default_change(label_value):
         chosen = next(
-            (k for k, v in REMOVE_PLAYLIST_MODE_LABELS.items() if v == label_value),
+            (k for k, v in _REMOVAL_LABELS.items() if v == label_value),
             REMOVE_PLAYLIST_DEFAULT_MODE,
         )
         try:
@@ -831,7 +841,7 @@ def show_settings_dialog(
     playlist_remove_default_row.pack(fill="both", pady=(0,5), padx=16)
     tk.Label(
         playlist_remove_default_row,
-        text="Default playlist removal:",
+        text=tr("settings.default_playlist_removal"),
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(12),
@@ -842,7 +852,7 @@ def show_settings_dialog(
         playlist_remove_default_row,
         textvariable=playlist_remove_var,
         cursor="hand2",
-        values=tuple(REMOVE_PLAYLIST_MODE_LABELS.values()),
+        values=tuple(_REMOVAL_LABELS.values()),
         state="disabled" if confirm_playlist_remove_var.get() == 1 else "readonly",
         width=18,
         font=ui_font(12),
@@ -857,7 +867,7 @@ def show_settings_dialog(
     showcase_row.pack(fill="both", pady=(0,5), padx=16)
     tk.Label(
         showcase_row,
-        text="Show last N added songs:",
+        text=tr("settings.show_last_n_added"),
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(12),
@@ -880,7 +890,7 @@ def show_settings_dialog(
     )
     tk.Label(
         showcase_row,
-        text="(0 = off)",
+        text=tr("settings.zero_off_hint"),
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(9),
@@ -896,7 +906,7 @@ def show_settings_dialog(
     scale_row.pack(fill="both", pady=(0, 5), padx=16)
     tk.Label(
         scale_row,
-        text="UI scale:",
+        text=tr("settings.ui_scale"),
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(12),
@@ -919,7 +929,7 @@ def show_settings_dialog(
     )
     tk.Label(
         scale_row,
-        text="(restart to apply)",
+        text=tr("settings.restart_to_apply"),
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(9),
@@ -936,7 +946,7 @@ def show_settings_dialog(
     font_family_row.pack(fill="both", pady=(0,5), padx=16)
     tk.Label(
         font_family_row,
-        text="Font:",
+        text=tr("settings.font"),
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(12),
@@ -971,7 +981,50 @@ def show_settings_dialog(
     )
     tk.Label(
         font_family_row,
-        text="(restart to apply)",
+        text=tr("settings.restart_to_apply"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(9),
+    ).pack(side="left", pady=(0,5))
+
+    # --- Language (restart to apply) ---
+    def _on_language_change(value: str) -> None:
+        try:
+            set_setting_value("language", "lang", language_code_for(value))
+        except Exception as e:
+            logger.error("Failed to write language setting: %s", e)
+
+    _lang_codes = available_languages()
+    language_row = tk.Frame(appearance_section, background=theme_check_bg)
+    language_row.pack(fill="both", pady=(0, 5), padx=16)
+    tk.Label(
+        language_row,
+        text=tr("settings.language"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0,5))
+
+    language_var = tk.StringVar(
+        value=language_display(get_setting_value("language", "lang", "en"))
+    )
+    language_combo = ttk.Combobox(
+        language_row,
+        textvariable=language_var,
+        cursor="hand2",
+        values=tuple(language_display(c) for c in _lang_codes),
+        state="readonly",
+        width=12,
+        font=ui_font(12),
+    )
+    language_combo.pack(side="left", pady=(0,5))
+    language_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_language_change(language_var.get()),
+    )
+    tk.Label(
+        language_row,
+        text=tr("settings.restart_to_apply"),
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(9),
@@ -981,12 +1034,8 @@ def show_settings_dialog(
     # Mode keys match utils.config.THUMBNAIL_MODES; the combo shows
     # friendly labels.  The mode is read per fetch, so a change applies
     # live (existing in-memory/disk entries are simply reused as-is).
-    _THUMBNAIL_LABELS = (
-        ("off", "Off"),
-        ("download", "Download"),
-        ("dedupe", "Dedupe"),
-        ("cache", "Cache"),
-        ("max", "Max"),
+    _THUMBNAIL_LABELS = tuple(
+        (mode, tr(f"settings.thumbnail_mode_{mode}")) for mode in THUMBNAIL_MODES
     )
 
     def _on_thumbnail_mode_change(value: str) -> None:
@@ -1004,7 +1053,7 @@ def show_settings_dialog(
     thumb_row.pack(fill="both", pady=(0,5), padx=16)
     tk.Label(
         thumb_row,
-        text="Data saver:",
+        text=tr("settings.data_saver"),
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(12),
@@ -1045,7 +1094,7 @@ def show_settings_dialog(
                 else f"{size / 1024:.0f} KB"
             )
         else:
-            text = "empty"
+            text = tr("settings.cache_empty")
         cache_size_var.set(f"({text})")
 
     tk.Label(
@@ -1059,13 +1108,7 @@ def show_settings_dialog(
 
     tk.Label(
         appearance_section,
-        text=(
-            "Off: Fetch on every launch\n"
-            "Download: Keep all thumbnails permanently\n"
-            "Dedupe: Save one copy per song and artist; ideal for large libraries across multiple platforms\n"
-            "Cache: Save only visible items; clear the cache when the PC restarts\n"
-            "Max: Save metadata only; do not download thumbnails"
-        ),
+        text=tr("settings.thumbnails_modes_desc"),
         background=theme_win_bg,
         foreground=theme_label_fg,
         justify="left",
@@ -1074,9 +1117,8 @@ def show_settings_dialog(
 
     def _on_clear_cache() -> None:
         if not messagebox.askyesno(
-            "Clear Thumbnail Cache",
-            "Delete all downloaded and deduplicated thumbnails?\n"
-            "They will be re-fetched on demand.",
+            tr("settings.clear_thumbnail_cache_title"),
+            tr("settings.clear_thumbnail_cache_ask"),
             parent=win,
         ):
             return
@@ -1089,7 +1131,7 @@ def show_settings_dialog(
 
     tk.Button(
         appearance_section,
-        text="Clear thumbnail cache",
+        text=tr("settings.clear_thumbnail_cache"),
         cursor="hand2",
         relief="raised",
         bd=0,
@@ -1114,7 +1156,7 @@ def show_settings_dialog(
     columns_row.pack(fill="both", pady=(0,5), padx=16)
     tk.Label(
         columns_row,
-        text="Card columns:",
+        text=tr("settings.card_columns"),
         background=theme_check_bg,
         foreground=theme_check_fg,
         font=ui_font(12),
@@ -1138,7 +1180,7 @@ def show_settings_dialog(
 
     tk.Button(
         appearance_section,
-        text="Theme Settings",
+        text=tr("settings.theme_settings"),
         cursor="hand2",
         **btn_colors(C["button_main_bg"], C["button_main_fg"]),
         font=ui_font(12),
@@ -1157,7 +1199,7 @@ def show_settings_dialog(
         like_button_var = tk.BooleanVar(value=get_setting("like_button"))
         like_button_check = tk.Checkbutton(
             lastfm_section,
-            text="Like button (♥/♡ under remove button)",
+            text=tr("settings.like_button"),
             variable=like_button_var,
             cursor="hand2",
             selectcolor=theme_check_select,
@@ -1180,7 +1222,7 @@ def show_settings_dialog(
         scrobble_on_add_var = tk.BooleanVar(value=get_setting("scrobble_on_add"))
         scrobble_on_add_check = tk.Checkbutton(
             lastfm_section,
-            text="Scrobble added songs",
+            text=tr("settings.scrobble_added_songs"),
             variable=scrobble_on_add_var,
             cursor="hand2",
             selectcolor=theme_check_select,
@@ -1207,7 +1249,7 @@ def show_settings_dialog(
         if _music_platforms:
             tk.Label(
                 scrobble_plat_area,
-                text="Platforms to scrobble from:",
+                text=tr("settings.scrobble_platforms_from"),
                 background=theme_check_bg,
                 foreground=theme_check_fg,
                 font=ui_font(11),
@@ -1251,7 +1293,7 @@ def show_settings_dialog(
         else:
             tk.Label(
                 scrobble_plat_area,
-                text="Install integration first",
+                text=tr("settings.install_integration_first"),
                 background=theme_check_bg,
                 foreground=theme_check_fg,
                 font=ui_font(11),
@@ -1280,7 +1322,7 @@ def show_settings_dialog(
 
         tk.Label(
             scrobble_keybind_row,
-            text="Scrobble keybind:",
+            text=tr("settings.scrobble_keybind"),
             background=theme_check_bg,
             foreground=theme_check_fg,
             font=ui_font(11),
@@ -1288,7 +1330,7 @@ def show_settings_dialog(
 
         scrobble_keybind_display = tk.Label(
             scrobble_keybind_row,
-            text=get_setting_value("scrobble_keybind", "keybind") or "(none)",
+            text=get_setting_value("scrobble_keybind", "keybind") or tr("settings.keybind_none"),
             background=theme_check_bg,
             foreground=theme_check_fg,
             font=ui_font(11),
@@ -1303,7 +1345,7 @@ def show_settings_dialog(
 
             def on_combo(combo_str):
                 set_setting_value("scrobble_keybind", "keybind", combo_str)
-                scrobble_keybind_display.config(text=combo_str or "(none)")
+                scrobble_keybind_display.config(text=combo_str or tr("settings.keybind_none"))
                 if on_scrobble_keybind_change is not None:
                     try:
                         on_scrobble_keybind_change()
@@ -1314,7 +1356,7 @@ def show_settings_dialog(
 
         tk.Button(
             scrobble_keybind_row,
-            text="Record",
+            text=tr("settings.record"),
             cursor="hand2",
             **btn_colors(C["button_main_bg"], C["button_main_fg"]),
             font=ui_font(10),
@@ -1326,7 +1368,7 @@ def show_settings_dialog(
 
         tk.Button(
             scrobble_keybind_row,
-            text="Clear",
+            text=tr("settings.clear"),
             cursor="hand2",
             **btn_colors(C["button_main_bg"], C["button_main_fg"]),
             font=ui_font(10),
@@ -1335,7 +1377,7 @@ def show_settings_dialog(
             bd=0,
             command=lambda: (
                 set_setting_value("scrobble_keybind", "keybind", ""),
-                scrobble_keybind_display.config(text="(none)"),
+                scrobble_keybind_display.config(text=tr("settings.keybind_none")),
                 on_scrobble_keybind_change() if on_scrobble_keybind_change is not None else None,
             ),
         ).pack(side="left")
@@ -1350,7 +1392,7 @@ def show_settings_dialog(
         scmode_row.pack(fill="both", pady=(0, 5), padx=16)
         tk.Label(
             scmode_row,
-            text="Capture current song via:",
+            text=tr("settings.capture_song_via"),
             background=theme_win_bg,
             foreground=theme_label_fg,
             font=ui_font(12),
@@ -1384,12 +1426,7 @@ def show_settings_dialog(
         )
         tk.Label(
             soundcloud_section,
-            text=(
-                "hybrid: prefers the browser extension (exact URL + play/pause),\n"
-                "falls back to recently-played on a receiver miss\n"
-                "api: reads the last played track from SoundCloud's API\n"
-                "extension: extension only (no API fallback)"
-            ),
+            text=tr("settings.soundcloud_mode_desc"),
             background=theme_win_bg,
             foreground=theme_label_fg,
             justify="left",
@@ -1399,7 +1436,7 @@ def show_settings_dialog(
     # -- Profiles section ----------------------------------------------
     profiles_section = tk.Frame(content, background=theme_win_bg)
     profiles_section.pack(fill="both", padx=8, pady=(0, 8))
-    _section_header(profiles_section, "Profiles")
+    _section_header(profiles_section, tr("settings.profiles"))
 
     def _restart_prompt(on_commit=None) -> None:
         """Ask to restart the app so the profile change applies.
@@ -1411,9 +1448,8 @@ def show_settings_dialog(
         left with an un-deletable active profile.
         """
         if not messagebox.askyesno(
-            "Profiles",
-            "The profile change takes effect after the app restarts.\n\n"
-            "Restart now?",
+            tr("settings.profiles"),
+            tr("settings.profile_restart_ask"),
             parent=win,
         ):
             return
@@ -1421,7 +1457,7 @@ def show_settings_dialog(
             try:
                 on_commit()
             except ValueError as e:
-                messagebox.showerror("Profile", str(e), parent=win)
+                messagebox.showerror(tr("settings.profile"), str(e), parent=win)
                 return
         if callable(on_restart_app):
             win.after(50, on_restart_app)
@@ -1432,7 +1468,7 @@ def show_settings_dialog(
     active_row.pack(fill="x", padx=16, pady=(0, 4))
     tk.Label(
         active_row,
-        text="Active profile:",
+        text=tr("settings.active_profile"),
         background=theme_win_bg,
         foreground=theme_label_fg,
         font=ui_font(11),
@@ -1458,8 +1494,8 @@ def show_settings_dialog(
         if not sel or sel == profile_store.active_profile():
             return
         if not messagebox.askyesno(
-            "Switch profile",
-            f'Switch to profile "{sel}"?\n\nThe app must restart to apply.',
+            tr("settings.switch_profile"),
+            tr("settings.switch_profile_ask", sel=sel),
             parent=win,
         ):
             profile_combo.set(profile_store.active_profile())
@@ -1476,7 +1512,7 @@ def show_settings_dialog(
     combo_row.pack(fill="x", padx=16, pady=(0, 4))
     tk.Label(
         combo_row,
-        text="Profiles:",
+        text=tr("settings.profiles_label"),
         background=theme_win_bg,
         foreground=theme_label_fg,
         font=ui_font(11),
@@ -1526,23 +1562,21 @@ def show_settings_dialog(
             return
         if sel == "default":
             messagebox.showinfo(
-                "Delete profile",
-                "The default profile cannot be deleted.",
+                tr("settings.delete_profile_title"),
+                tr("settings.default_profile_not_deletable"),
                 parent=win,
             )
             return
         if not messagebox.askyesno(
-            "Delete profile",
-            f'Are you sure you want to delete "{sel}" profile? '
-            "This will delete all playlist databases that are not in "
-            "other profiles.",
+            tr("settings.delete_profile_title"),
+            tr("settings.delete_profile_ask", sel=sel),
             parent=win,
         ):
             return
         try:
             profile_store.delete(sel)
         except ValueError as e:
-            messagebox.showerror("Delete profile", str(e), parent=win)
+            messagebox.showerror(tr("settings.delete_profile_title"), str(e), parent=win)
             return
         # Deleting a profile is immediate and needs no restart: it cannot be
         # the active profile, so no running path changes.
@@ -1569,17 +1603,14 @@ def show_settings_dialog(
         bd=0,
         command=cmd,
     )
-    _ok_button("Add", _add_profile).pack(side="left", padx=(0, 4), expand=True, fill="x")
-    _ok_button("Rename", _rename_profile).pack(side="left", padx=(0, 4), expand=True, fill="x")
-    _ok_button("Edit", _edit_profile).pack(side="left", padx=(0, 4), expand=True, fill="x")
-    _ok_button("Delete", _delete_profile).pack(side="left", padx=(0, 4), expand=True, fill="x")
+    _ok_button(tr("common.add"), _add_profile).pack(side="left", padx=(0, 4), expand=True, fill="x")
+    _ok_button(tr("settings.rename"), _rename_profile).pack(side="left", padx=(0, 4), expand=True, fill="x")
+    _ok_button(tr("settings.edit"), _edit_profile).pack(side="left", padx=(0, 4), expand=True, fill="x")
+    _ok_button(tr("common.delete"), _delete_profile).pack(side="left", padx=(0, 4), expand=True, fill="x")
 
     tk.Label(
         profiles_section,
-        text=(
-            "Plugins and their settings stay shared across all profiles.\n"
-            "Switching profiles restarts the app."
-        ),
+        text=tr("settings.profiles_note"),
         background=theme_win_bg,
         foreground=C["label_playlist_warn_fg"],
         justify="left",
@@ -1588,10 +1619,10 @@ def show_settings_dialog(
 
     about_section = tk.Frame(content, background=theme_win_bg)
     about_section.pack(fill="both", padx=8, pady=(0, 8))
-    _section_header(about_section, "About")
+    _section_header(about_section, tr("settings.about"))
     tk.Label(
         about_section,
-        text="Author: d1pl",
+        text=tr("settings.author"),
         background=theme_win_bg,
         foreground=theme_label_fg,
         font=ui_font(12),
@@ -1600,7 +1631,7 @@ def show_settings_dialog(
 
     repo_label = tk.Label(
         about_section,
-        text=f"Repo: {REPO_URL}",
+        text=tr("settings.repo", url=REPO_URL),
         background=theme_win_bg,
         foreground=C["button_main_fg"],
         font=ui_font(12),
@@ -1612,7 +1643,7 @@ def show_settings_dialog(
 
     tk.Label(
         about_section,
-        text=f"Version: {__version__}",
+        text=tr("settings.version", version=__version__),
         background=theme_win_bg,
         foreground=theme_label_fg,
         font=ui_font(12),
@@ -1621,7 +1652,7 @@ def show_settings_dialog(
 
     tk.Label(
         about_section,
-        text="Support:",
+        text=tr("settings.support"),
         background=theme_win_bg,
         foreground=theme_label_fg,
         font=ui_font(12),
@@ -1630,7 +1661,7 @@ def show_settings_dialog(
 
     tk.Label(
         about_section,
-        text="monero: soon",
+        text=tr("settings.monero"),
         background=theme_win_bg,
         foreground=theme_label_fg,
         font=ui_font(12),

@@ -29,6 +29,8 @@ from cli import (
     run_uninstall,
 )
 from utils.logging_config import configure_logging
+from utils.config import get_setting_value
+from utils.i18n import set_language
 
 
 def parse_args():
@@ -154,6 +156,10 @@ def main():
     if args.trace:
         verbosity = 3
     configure_logging(verbosity)
+
+    # Same wiring as App.__init__: pick the [language] setting for every
+    # CLI output line (run_* prints go through tr()/trn()).
+    set_language(get_setting_value("language", "lang", "en"))
 
     if args.list_only:
         sys.exit(run_list())

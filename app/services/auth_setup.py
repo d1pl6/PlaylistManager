@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Tuple
 
 from services import profile_store as _profile_store
 
+from utils.i18n import tr
 from utils.logging_config import user_log
 from utils.platform import get_terminal_command, open_directory
 
@@ -117,7 +118,7 @@ def delete_spotify_credentials() -> bool:
     if SPOTIFY_FILE.exists():
         try:
             SPOTIFY_FILE.unlink()
-            user_log(logger, "Deleted Spotify credentials")
+            user_log(logger, tr("auth.deleted_spotify"))
             return True
         except OSError as e:
             logger.error("Failed to delete Spotify credentials: %s", e)
@@ -247,7 +248,7 @@ def delete_lastfm_credentials() -> bool:
     if lastfm_file.exists():
         try:
             lastfm_file.unlink()
-            user_log(logger, "Deleted Last.fm credentials")
+            user_log(logger, tr("auth.deleted_lastfm"))
             return True
         except Exception as e:
             logger.error("Failed to delete Last.fm credentials: %s", e)
@@ -540,7 +541,7 @@ def delete_platform_credentials(
     for path in _credential_paths(plugin_registry, platform):
         if path.exists():
             path.unlink()
-            user_log(logger, "Deleted credentials: %s", path)
+            user_log(logger, tr("auth.deleted_credential_path", path=path))
             deleted.append(path)
         else:
             missing.append(path)

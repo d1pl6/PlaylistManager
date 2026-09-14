@@ -62,8 +62,8 @@ class IntegrationRepo:
     the extension naturally lands at
     ``integrations/<platform>/<platform>-extension/``, which is exactly
     where it must be (the receiver port is pinned jointly by the plugin
-    manifest and the extension's ``host_permissions`` - see AGENTS.md
-    "Integration quirks").
+    manifest and the extension's ``host_permissions`` - see docs/plugins.md
+    "URL receiver protocol").
     """
 
     platform_id: str

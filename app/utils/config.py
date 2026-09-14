@@ -36,6 +36,11 @@ DEFAULT_SETTINGS = {
     "start_in_tray": {"is_true": "no"},  # launch hidden in the system tray (tray must actually start)
     "ui_scale": {"value": "auto"},
     "font": {"family": ""},
+    # UI language for the whole app (see utils/i18n.py).  "en" uses the
+    # code-side English catalog; any other value loads cfg/i18n/<lang>.ini
+    # (user file, merged with new keys) over app/i18n/<lang>.ini over the
+    # code defaults.  Applied at startup; a change needs a restart.
+    "language": {"lang": "en"},
     "showcase": {"count": "0"},          # int, 0 = off, N = show last N added songs
     "showcase_log": {"is_true": "yes"},  # show the log_artist/log_name/log_log row
     "playlist_stats": {"is_true": "yes"},  # show the song count / followers / duration row

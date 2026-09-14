@@ -20,6 +20,7 @@ from typing import Any, Optional, cast
 from services import auth_setup
 from utils.scaling import ui_font
 from utils.icons import IconService
+from utils.i18n import tr
 from utils.window import center_window
 from utils.theme import C, btn_colors
 from utils.logging_config import user_log
@@ -93,7 +94,7 @@ def show_login_dialog(
         return list(integrations or [])
 
     win = tk.Toplevel(parent)
-    win.title("Login")
+    win.title(tr("login.dialog_title"))
     win.configure(background=frame_main_bg)
     win.transient(parent)
     win.update_idletasks()
@@ -104,7 +105,7 @@ def show_login_dialog(
 
     tk.Label(
         header,
-        text="Select platform",
+        text=tr("login.select_platform"),
         background=frame_header_bg,
         foreground=label_fg,
         font=ui_font(14),
@@ -179,7 +180,7 @@ def show_login_dialog(
         if not available:
             tk.Label(
                 body,
-                text="No music services installed",
+                text=tr("login.no_services"),
                 background=label_bg,
                 foreground=label_fg,
                 font=ui_font(10),
@@ -220,7 +221,7 @@ def show_login_dialog(
 
     btn_manage = tk.Button(
         win,
-        text="Manage",
+        text=tr("login.manage"),
         cursor="hand2",
         **btn_colors(C["button_main_bg"], C["button_main_fg"]),
         highlightthickness=0,
@@ -280,7 +281,7 @@ def _on_youtube_music(parent, on_success):
     result = auth_setup.setup_ytmusic_auth()
     if result.get("manual"):
         messagebox.showinfo(
-            "Manual Step Required",
+            tr("login.manual_step_title"),
             f"Open a terminal and run:\n\n"
             f"cd {result['auth_dir']}\n"
             f"ytmusicapi browser\n\n"
@@ -368,10 +369,7 @@ def _poll_for_browser_json(parent, on_success, attempts: int = 0) -> None:
         return
 
     if attempts >= 150:
-        user_log(
-            logger,
-            "browser.json not detected yet - re-login will be picked up on restart",
-        )
+        user_log(logger, tr("login.browser_json_missing"))
         return
 
     try:
@@ -389,7 +387,7 @@ def _poll_for_browser_json(parent, on_success, attempts: int = 0) -> None:
 
 def _on_spotify(parent, on_success):
     win = tk.Toplevel(parent)
-    win.title("Spotify Login")
+    win.title(tr("login.spotify_login"))
     win.configure(background=C["frame_main_bg"])
     win.transient(parent)
     win.update_idletasks()
@@ -418,7 +416,7 @@ def _on_spotify(parent, on_success):
 
     tk.Label(
         header,
-        text="Spotify Credentials",
+        text=tr("login.spotify_credentials"),
         background=header_bg,
         foreground=label_fg,
         font=ui_font(14),
@@ -433,15 +431,15 @@ def _on_spotify(parent, on_success):
     refresh_token_var = tk.StringVar(value=existing.get("refresh_token", ""))
 
     fields = [
-        ("Client ID", client_id_var),
-        ("Client Secret", client_secret_var),
-        ("Refresh Token", refresh_token_var),
+        ("login.client_id", client_id_var),
+        ("login.client_secret", client_secret_var),
+        ("login.refresh_token", refresh_token_var),
     ]
 
     for i, (label_text, var) in enumerate(fields):
         tk.Label(
             fields_frame,
-            text=label_text,
+            text=tr(label_text),
             background=frame_bg,
             foreground=label_fg,
             font=ui_font(10),
@@ -494,23 +492,23 @@ def _on_spotify(parent, on_success):
                 client_secret_var.set("")
                 refresh_token_var.set("")
                 status_label.config(
-                    text="Credentials deleted",
+                    text=tr("login.credentials_deleted"),
                     foreground=C["label_playlist_good_fg"],
                 )
                 if on_success:
                     on_success("spotify")
             else:
-                status_label.config(text="No credentials file found", foreground="red")
+                status_label.config(text=tr("login.no_credentials_file"), foreground="red")
         except Exception as e:
-            status_label.config(text=f"Delete failed: {e}", foreground="red")
+            status_label.config(text=tr("login.delete_failed", error=e), foreground="red")
 
     # ---- Test ----
     def test_credentials():
         creds = _get_creds()
         if not _all_filled(creds):
-            status_label.config(text="All fields are required", foreground="red")
+            status_label.config(text=tr("login.all_fields_required"), foreground="red")
             return
-        status_label.config(text="Testing...", foreground=label_fg)
+        status_label.config(text=tr("login.testing"), foreground=label_fg)
         _set_busy(True)
 
         def run():
@@ -536,19 +534,19 @@ def _on_spotify(parent, on_success):
         _set_busy(False)
         if result.get("ok"):
             status_label.config(
-                text=f"OK: {result['display_name']}",
+                text=tr("login.ok_with_name", name=result['display_name']),
                 foreground=C["label_playlist_good_fg"],
             )
         else:
-            status_label.config(text=result.get("error", "Error"), foreground="red")
+            status_label.config(text=result.get("error", tr("common.error")), foreground="red")
 
     # ---- Save ----
     def save_credentials():
         creds = _get_creds()
         if not _all_filled(creds):
-            status_label.config(text="All fields are required", foreground="red")
+            status_label.config(text=tr("login.all_fields_required"), foreground="red")
             return
-        status_label.config(text="Verifying...", foreground=label_fg)
+        status_label.config(text=tr("login.verifying"), foreground=label_fg)
         _set_busy(True)
 
         def run():
@@ -571,18 +569,18 @@ def _on_spotify(parent, on_success):
         _set_busy(False)
         if result.get("ok"):
             status_label.config(
-                text=f"OK: {result['display_name']}",
+                text=tr("login.ok_with_name", name=result['display_name']),
                 foreground=C["label_playlist_good_fg"],
             )
             if on_success:
                 on_success("spotify")
         else:
-            status_label.config(text=result.get("error", "Error"), foreground="red")
+            status_label.config(text=result.get("error", tr("common.error")), foreground="red")
 
     # ---- layout ----
     btn_delete = tk.Button(
         btn_frame,
-        text="Delete",
+        text=tr("common.delete"),
         cursor="hand2",
         **button_close_btn,
         font=ui_font(10),
@@ -594,7 +592,7 @@ def _on_spotify(parent, on_success):
 
     btn_test = tk.Button(
         btn_frame,
-        text="Test",
+        text=tr("login.test"),
         cursor="hand2",
         **btn_test_btn,
         font=ui_font(10),
@@ -606,7 +604,7 @@ def _on_spotify(parent, on_success):
 
     btn_save = tk.Button(
         btn_frame,
-        text="Save",
+        text=tr("common.save"),
         cursor="hand2",
         **button_save_btn,
         font=ui_font(10),
@@ -633,7 +631,7 @@ def _on_spotify(parent, on_success):
 def _on_lastfm(parent, on_success):
     """Show the Last.fm login dialog (API key + secret)."""
     win = tk.Toplevel(parent)
-    win.title("Last.fm Login")
+    win.title(tr("login.lastfm_login"))
     win.configure(background=C["frame_main_bg"])
     win.transient(parent)
     win.update_idletasks()
@@ -662,7 +660,7 @@ def _on_lastfm(parent, on_success):
 
     tk.Label(
         header,
-        text="Last.fm Credentials",
+        text=tr("login.lastfm_credentials"),
         background=header_bg,
         foreground=label_fg,
         font=ui_font(14),
@@ -676,14 +674,14 @@ def _on_lastfm(parent, on_success):
     api_secret_var = tk.StringVar(value=existing.get("api_secret", ""))
 
     fields = [
-        ("API Key", api_key_var),
-        ("API Secret", api_secret_var),
+        ("login.api_key", api_key_var),
+        ("login.api_secret", api_secret_var),
     ]
 
     for i, (label_text, var) in enumerate(fields):
         tk.Label(
             fields_frame,
-            text=label_text,
+            text=tr(label_text),
             background=frame_bg,
             foreground=label_fg,
             font=ui_font(10),
@@ -734,23 +732,23 @@ def _on_lastfm(parent, on_success):
                 api_key_var.set("")
                 api_secret_var.set("")
                 status_label.config(
-                    text="Credentials deleted",
+                    text=tr("login.credentials_deleted"),
                     foreground=C["label_playlist_good_fg"],
                 )
                 if on_success:
                     on_success("lastfm")
             else:
-                status_label.config(text="No credentials file found", foreground="red")
+                status_label.config(text=tr("login.no_credentials_file"), foreground="red")
         except Exception as e:
-            status_label.config(text=f"Delete failed: {e}", foreground="red")
+            status_label.config(text=tr("login.delete_failed", error=e), foreground="red")
 
     # ---- Test ----
     def test_credentials():
         creds = _get_creds()
         if not _all_filled(creds):
-            status_label.config(text="All fields are required", foreground="red")
+            status_label.config(text=tr("login.all_fields_required"), foreground="red")
             return
-        status_label.config(text="Testing...", foreground=label_fg)
+        status_label.config(text=tr("login.testing"), foreground=label_fg)
         _set_busy(True)
 
         # Test validates the key/secret pair ONLY (a signed auth.getToken
@@ -775,19 +773,19 @@ def _on_lastfm(parent, on_success):
         _set_busy(False)
         if result.get("ok"):
             status_label.config(
-                text="OK: credentials valid - press Save to authorize",
+                text=tr("login.ok_valid_save"),
                 foreground=C["label_playlist_good_fg"],
             )
         else:
-            status_label.config(text=result.get("error", "Error"), foreground="red")
+            status_label.config(text=result.get("error", tr("common.error")), foreground="red")
 
     # ---- Save ----
     def save_credentials():
         creds = _get_creds()
         if not _all_filled(creds):
-            status_label.config(text="All fields are required", foreground="red")
+            status_label.config(text=tr("login.all_fields_required"), foreground="red")
             return
-        status_label.config(text="Verifying...", foreground=label_fg)
+        status_label.config(text=tr("login.verifying"), foreground=label_fg)
         _set_busy(True)
 
         def run():
@@ -808,18 +806,18 @@ def _on_lastfm(parent, on_success):
         _set_busy(False)
         if result.get("ok"):
             status_label.config(
-                text=f"OK: {result.get('username', 'Last.fm')}",
+                text=tr("login.ok_with_name", name=result.get("username", "Last.fm")),
                 foreground=C["label_playlist_good_fg"],
             )
             if on_success:
                 on_success("lastfm")
         else:
-            status_label.config(text=result.get("error", "Error"), foreground="red")
+            status_label.config(text=result.get("error", tr("common.error")), foreground="red")
 
     # ---- layout ----
     btn_delete = tk.Button(
         btn_frame,
-        text="Delete",
+        text=tr("common.delete"),
         cursor="hand2",
         **button_close_btn,
         font=ui_font(10),
@@ -831,7 +829,7 @@ def _on_lastfm(parent, on_success):
 
     btn_test = tk.Button(
         btn_frame,
-        text="Test",
+        text=tr("login.test"),
         cursor="hand2",
         **btn_test_btn,
         font=ui_font(10),
@@ -843,7 +841,7 @@ def _on_lastfm(parent, on_success):
 
     btn_save = tk.Button(
         btn_frame,
-        text="Save",
+        text=tr("common.save"),
         cursor="hand2",
         **button_save_btn,
         font=ui_font(10),
@@ -874,7 +872,7 @@ def _on_soundcloud(parent, on_success):
     owns the single-writer contract.
     """
     win = tk.Toplevel(parent)
-    win.title("SoundCloud Login")
+    win.title(tr("login.soundcloud_login"))
     win.configure(background=C["frame_main_bg"])
     win.transient(parent)
     win.update_idletasks()
@@ -903,7 +901,7 @@ def _on_soundcloud(parent, on_success):
 
     tk.Label(
         header,
-        text="SoundCloud Credentials",
+        text=tr("login.soundcloud_credentials"),
         background=header_bg,
         foreground=label_fg,
         font=ui_font(14),
@@ -918,15 +916,15 @@ def _on_soundcloud(parent, on_success):
     refresh_token_var = tk.StringVar(value=existing.get("refresh_token", ""))
 
     fields = [
-        ("Client ID", client_id_var),
-        ("Client Secret", client_secret_var),
-        ("Refresh Token", refresh_token_var),
+        ("login.client_id", client_id_var),
+        ("login.client_secret", client_secret_var),
+        ("login.refresh_token", refresh_token_var),
     ]
 
     for i, (label_text, var) in enumerate(fields):
         tk.Label(
             fields_frame,
-            text=label_text,
+            text=tr(label_text),
             background=frame_bg,
             foreground=label_fg,
             font=ui_font(10),
@@ -979,23 +977,23 @@ def _on_soundcloud(parent, on_success):
                 client_secret_var.set("")
                 refresh_token_var.set("")
                 status_label.config(
-                    text="Credentials deleted",
+                    text=tr("login.credentials_deleted"),
                     foreground=C["label_playlist_good_fg"],
                 )
                 if on_success:
                     on_success("soundcloud")
             else:
-                status_label.config(text="No credentials file found", foreground="red")
+                status_label.config(text=tr("login.no_credentials_file"), foreground="red")
         except Exception as e:
-            status_label.config(text=f"Delete failed: {e}", foreground="red")
+            status_label.config(text=tr("login.delete_failed", error=e), foreground="red")
 
     # ---- Test ----
     def test_credentials():
         creds = _get_creds()
         if not _all_filled(creds):
-            status_label.config(text="All fields are required", foreground="red")
+            status_label.config(text=tr("login.all_fields_required"), foreground="red")
             return
-        status_label.config(text="Testing...", foreground=label_fg)
+        status_label.config(text=tr("login.testing"), foreground=label_fg)
         _set_busy(True)
 
         def run():
@@ -1016,19 +1014,19 @@ def _on_soundcloud(parent, on_success):
         _set_busy(False)
         if result.get("ok"):
             status_label.config(
-                text=f"OK: {result['display_name']}",
+                text=tr("login.ok_with_name", name=result['display_name']),
                 foreground=C["label_playlist_good_fg"],
             )
         else:
-            status_label.config(text=result.get("error", "Error"), foreground="red")
+            status_label.config(text=result.get("error", tr("common.error")), foreground="red")
 
     # ---- Save ----
     def save_credentials():
         creds = _get_creds()
         if not _all_filled(creds):
-            status_label.config(text="All fields are required", foreground="red")
+            status_label.config(text=tr("login.all_fields_required"), foreground="red")
             return
-        status_label.config(text="Verifying...", foreground=label_fg)
+        status_label.config(text=tr("login.verifying"), foreground=label_fg)
         _set_busy(True)
 
         def run():
@@ -1049,18 +1047,18 @@ def _on_soundcloud(parent, on_success):
         _set_busy(False)
         if result.get("ok"):
             status_label.config(
-                text=f"OK: {result.get('display_name', 'SoundCloud')}",
+                text=tr("login.ok_with_name", name=result.get("display_name", "SoundCloud")),
                 foreground=C["label_playlist_good_fg"],
             )
             if on_success:
                 on_success("soundcloud")
         else:
-            status_label.config(text=result.get("error", "Error"), foreground="red")
+            status_label.config(text=result.get("error", tr("common.error")), foreground="red")
 
     # ---- layout ----
     btn_delete = tk.Button(
         btn_frame,
-        text="Delete",
+        text=tr("common.delete"),
         cursor="hand2",
         **button_close_btn,
         font=ui_font(10),
@@ -1072,7 +1070,7 @@ def _on_soundcloud(parent, on_success):
 
     btn_test = tk.Button(
         btn_frame,
-        text="Test",
+        text=tr("login.test"),
         cursor="hand2",
         **btn_test_btn,
         font=ui_font(10),
@@ -1084,7 +1082,7 @@ def _on_soundcloud(parent, on_success):
 
     btn_save = tk.Button(
         btn_frame,
-        text="Save",
+        text=tr("common.save"),
         cursor="hand2",
         **button_save_btn,
         font=ui_font(10),

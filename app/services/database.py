@@ -366,7 +366,7 @@ def _set_pragmas(conn: sqlite3.Connection) -> None:
     """Set performance and safety pragmas on a connection.
 
     WAL mode provides better concurrency (readers don't block writers) and
-    is more resilient on removable filesystems (exFAT).  synchronous=NORMAL
+    is more resilient on removable filesystems.  synchronous=NORMAL
     paired with WAL gives a good safety/performance balance.
 
     busy_timeout is per-connection, so it must be set on every connection:

@@ -19,6 +19,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from services import profile_store
+from utils.i18n import tr
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
 from utils.window import center_window
@@ -57,7 +58,7 @@ def show_create_profile_dialog(parent, on_created=None):
     (and usually prompts to restart first).
     """
     win = tk.Toplevel(parent)
-    win.title("Add profile")
+    win.title(tr("settings.add_profile"))
     win.configure(background=C["frame_main_bg"])
     win.transient(parent)
     win.grab_set()
@@ -68,7 +69,7 @@ def show_create_profile_dialog(parent, on_created=None):
     header.pack(fill="x")
     tk.Label(
         header,
-        text="Add profile",
+        text=tr("settings.add_profile"),
         background=C["frame_head_bg"],
         foreground=C["label_def_fg"],
         font=ui_font(12),
@@ -79,7 +80,7 @@ def show_create_profile_dialog(parent, on_created=None):
 
     tk.Label(
         content,
-        text="Profile name",
+        text=tr("settings.profile_name"),
         background=C["frame_main_bg"],
         foreground=C["label_def_fg"],
         font=ui_font(10),
@@ -109,7 +110,7 @@ def show_create_profile_dialog(parent, on_created=None):
 
     tk.Label(
         content,
-        text="Capture (what this profile keeps separate):",
+        text=tr("settings.profile_capture_label"),
         background=C["frame_main_bg"],
         foreground=C["label_def_fg"],
         font=ui_font(10),
@@ -139,9 +140,9 @@ def show_create_profile_dialog(parent, on_created=None):
             font=ui_font(11),
         ).pack(anchor="w", padx=8, pady=1)
 
-    _add_check("Logins (login credentials)", var_logins)
-    _add_check("Playlists (playlists.json, extra.json, databases)", var_playlists)
-    _add_check("Settings (settings.ini, theme.ini)", var_settings)
+    _add_check(tr("settings.profile_capture_logins"), var_logins)
+    _add_check(tr("settings.profile_capture_playlists"), var_playlists)
+    _add_check(tr("settings.profile_capture_settings"), var_settings)
 
     def _save():
         name = name_entry.get().strip()
@@ -161,8 +162,8 @@ def show_create_profile_dialog(parent, on_created=None):
 
     btn_row = tk.Frame(content, background=C["frame_main_bg"])
     btn_row.pack(fill="x", pady=(14, 0))
-    _ok_button(btn_row, "Save", _save).pack(side="left", expand=True, fill="x", padx=(0, 4))
-    _ok_button(btn_row, "Cancel", lambda: _on_close(win, parent)).pack(
+    _ok_button(btn_row, tr("common.save"), _save).pack(side="left", expand=True, fill="x", padx=(0, 4))
+    _ok_button(btn_row, tr("common.cancel"), lambda: _on_close(win, parent)).pack(
         side="left", expand=True, fill="x", padx=(4, 0)
     )
 
@@ -176,8 +177,8 @@ def show_rename_profile_dialog(parent, profile_name, on_restart=None):
     """
     if profile_name == "default":
         messagebox.showinfo(
-            "Rename profile",
-            "The default profile cannot be renamed.",
+            tr("settings.rename_profile"),
+            tr("settings.profile_default_not_renameable"),
             parent=parent,
         )
         return
@@ -191,8 +192,8 @@ def show_rename_profile_dialog(parent, profile_name, on_restart=None):
 
     _show_name_dialog(
         parent,
-        "Rename profile",
-        "New name",
+        tr("settings.rename_profile"),
+        tr("settings.profile_new_name"),
         profile_name,
         _save,
         on_restart,
@@ -202,7 +203,7 @@ def show_rename_profile_dialog(parent, profile_name, on_restart=None):
 def show_edit_buckets_dialog(parent, profile_name, on_restart=None):
     """Edit the bucket capture flags for *profile_name*."""
     win = tk.Toplevel(parent)
-    win.title(f"Edit profile: {profile_name}")
+    win.title(tr("settings.edit_profile_title", name=profile_name))
     win.configure(background=C["frame_main_bg"])
     win.transient(parent)
     win.grab_set()
@@ -213,7 +214,7 @@ def show_edit_buckets_dialog(parent, profile_name, on_restart=None):
     header.pack(fill="x")
     tk.Label(
         header,
-        text=f"Edit profile: {profile_name}",
+        text=tr("settings.edit_profile_title", name=profile_name),
         background=C["frame_head_bg"],
         foreground=C["label_def_fg"],
         font=ui_font(12),
@@ -224,7 +225,7 @@ def show_edit_buckets_dialog(parent, profile_name, on_restart=None):
 
     tk.Label(
         content,
-        text="What does this profile keep separate?",
+        text=tr("settings.profile_keep_separate"),
         background=C["frame_main_bg"],
         foreground=C["label_def_fg"],
         font=ui_font(10),
@@ -254,13 +255,13 @@ def show_edit_buckets_dialog(parent, profile_name, on_restart=None):
             font=ui_font(11),
         ).pack(anchor="w", padx=8, pady=2)
 
-    _add_check("Logins (login credentials)", var_logins)
-    _add_check("Playlists (playlists.json, extra.json, databases)", var_playlists)
-    _add_check("Settings (settings.ini, theme.ini)", var_settings)
+    _add_check(tr("settings.profile_capture_logins"), var_logins)
+    _add_check(tr("settings.profile_capture_playlists"), var_playlists)
+    _add_check(tr("settings.profile_capture_settings"), var_settings)
 
     tk.Label(
         content,
-        text="Changes take effect after the app restarts.",
+        text=tr("settings.profile_changes_restart"),
         background=C["frame_main_bg"],
         foreground=C["label_playlist_warn_fg"],
         font=ui_font(9),
@@ -277,8 +278,8 @@ def show_edit_buckets_dialog(parent, profile_name, on_restart=None):
 
     btn_row = tk.Frame(content, background=C["frame_main_bg"])
     btn_row.pack(fill="x", pady=(14, 0))
-    _ok_button(btn_row, "Save", _save).pack(side="left", expand=True, fill="x", padx=(0, 4))
-    _ok_button(btn_row, "Cancel", lambda: _on_close(win, parent)).pack(
+    _ok_button(btn_row, tr("common.save"), _save).pack(side="left", expand=True, fill="x", padx=(0, 4))
+    _ok_button(btn_row, tr("common.cancel"), lambda: _on_close(win, parent)).pack(
         side="left", expand=True, fill="x", padx=(4, 0)
     )
 
@@ -356,8 +357,8 @@ def _show_name_dialog(parent, title, label, initial, save_fn, on_restart):
 
     btn_row = tk.Frame(content, background=C["frame_main_bg"])
     btn_row.pack(fill="x", pady=(12, 0))
-    _ok_button(btn_row, "Save", _save).pack(side="left", expand=True, fill="x", padx=(0, 4))
-    _ok_button(btn_row, "Cancel", lambda: _on_close(win, parent)).pack(
+    _ok_button(btn_row, tr("common.save"), _save).pack(side="left", expand=True, fill="x", padx=(0, 4))
+    _ok_button(btn_row, tr("common.cancel"), lambda: _on_close(win, parent)).pack(
         side="left", expand=True, fill="x", padx=(4, 0)
     )
 

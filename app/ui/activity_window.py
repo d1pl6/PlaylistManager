@@ -27,13 +27,12 @@ import logging
 import tkinter as tk
 import webbrowser
 
+from utils.i18n import tr
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
 from ui.scrollable import ScrollableFrame
 
 logger = logging.getLogger(__name__)
-
-WINDOW_TITLE = "PlaylistManager \u2014 Activity"
 
 # Actions reported through on_song(record, action):
 #   pending cards: "add" | "dismiss"
@@ -110,7 +109,7 @@ def _fmt_artists(artists) -> str:
 class ActivityWindow(tk.Toplevel):
     def __init__(self, parent, *, load_data, on_song, on_close=None):
         super().__init__(parent)
-        self.title(WINDOW_TITLE)
+        self.title(tr("activity.title"))
         self.configure(background=C["root_bg"])
         self.minsize(px(520), px(380))
         self.geometry(f"{px(600)}x{px(520)}")
@@ -123,6 +122,8 @@ class ActivityWindow(tk.Toplevel):
         self._on_song = on_song
         self._on_close_cb = on_close
         self._show_marked = False  # collapsed by default
+        self._tab_errors = tr("activity.tab_errors")
+        self._tab_duplicates = tr("activity.tab_duplicates")
 
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._hide)
@@ -136,7 +137,7 @@ class ActivityWindow(tk.Toplevel):
         tab_bar.pack(side="top", fill="x")
 
         self._tab_buttons = {}
-        for name in ("Errors", "Duplicates"):
+        for name in (self._tab_errors, self._tab_duplicates):
             btn = tk.Button(
                 tab_bar,
                 text=name,
@@ -156,8 +157,8 @@ class ActivityWindow(tk.Toplevel):
         bg = C["scrollable_frame_bg"]
         self._errors_view = ScrollableFrame(self._body, bg=bg)
         self._dups_view = ScrollableFrame(self._body, bg=bg)
-        self._current_tab = "Duplicates"
-        self._select_tab("Duplicates")
+        self._current_tab = self._tab_duplicates
+        self._select_tab(self._tab_duplicates)
 
     def _select_tab(self, name: str) -> None:
         self._current_tab = name
@@ -179,7 +180,7 @@ class ActivityWindow(tk.Toplevel):
                 pass
         self._errors_view.pack_forget()
         self._dups_view.pack_forget()
-        view = self._errors_view if name == "Errors" else self._dups_view
+        view = self._errors_view if name == self._tab_errors else self._dups_view
         view.pack(side="top", fill="both", expand=True)
 
     def _hide(self) -> None:
@@ -294,18 +295,18 @@ class ActivityWindow(tk.Toplevel):
         errors = data.get("errors") or []
         tk.Label(
             header,
-            text=f"Errors ({len(errors)})",
+            text=tr("activity.errors_count", count=len(errors)),
             background=bg,
             foreground=C["label_def_fg"],
             font=ui_font(13, "bold"),
         ).pack(side="left")
         if errors:
-            self._action_button(header, "Clear", self._clear_errors).pack(
+            self._action_button(header, tr("activity.clear"), self._clear_errors).pack(
                 side="right"
             )
 
         if not errors:
-            self._empty_label(content, "No errors logged.")
+            self._empty_label(content, tr("activity.no_errors"))
             return
         for err in errors:
             card = tk.Frame(
@@ -362,19 +363,19 @@ class ActivityWindow(tk.Toplevel):
         pairs = data.get("pairs") or []
         songs = data.get("songs") or {}
 
-        self._section_header(content, f"Pending songs ({len(pending)})")
+        self._section_header(content, tr("activity.pending_songs_count", count=len(pending)))
         if not pending:
             self._empty_label(
-                content, "Nothing waiting - hotkey adds resolved on their own."
+                content, tr("activity.nothing_waiting")
             )
         for record in pending:
             self._pending_card(content, record)
 
-        self._section_header(content, f"Scan results ({len(pairs)})")
+        self._section_header(content, tr("activity.scan_results_count", count=len(pairs)))
         if not pairs:
             self._empty_label(
                 content,
-                'Run Settings \u2192 "Check for duplicates now" to search.',
+                tr("activity.scan_hint"),
             )
         for record in pairs:
             self._pair_card(content, record)
@@ -390,10 +391,10 @@ class ActivityWindow(tk.Toplevel):
         head = tk.Frame(card, background=C["frame_playlist_bg"])
         head.pack(fill="x")
         similarity = record.get("similarity")
-        pct = f" \u00b7 {round(similarity * 100)}% match" if similarity else ""
+        pct = tr("activity.match_pct", pct=round(similarity * 100)) if similarity else ""
         tk.Label(
             head,
-            text="Similar song",
+            text=tr("activity.similar_song"),
             background=C["frame_playlist_bg"],
             foreground=C["label_playlist_warn_fg"],
             font=ui_font(12, "bold"),
@@ -406,28 +407,28 @@ class ActivityWindow(tk.Toplevel):
             font=ui_font(9),
         ).pack(side="right", padx=10)
 
-        self._song_line(card, "already in playlist:", record.get("existing") or {})
+        self._song_line(card, tr("activity.already_in_playlist"), record.get("existing") or {})
         self._link_row(
             card,
             record.get("platform", ""),
             (record.get("existing") or {}).get("track_id"),
-            "existing on song.link \u2197",
+            tr("activity.existing_link"),
         )
-        self._song_line(card, "trying to add:      ", record)
+        self._song_line(card, tr("activity.trying_to_add"), record)
         self._link_row(
             card,
             record.get("platform", ""),
             record.get("track_id"),
-            "new on song.link \u2197",
+            tr("activity.new_link"),
         )
 
         buttons = tk.Frame(card, background=C["frame_playlist_bg"])
         buttons.pack(fill="x", pady=(4, 0))
         self._action_button(
-            buttons, "Don't add", lambda r=dict(record): self._act(r, "dismiss")
+            buttons, tr("activity.dont_add"), lambda r=dict(record): self._act(r, "dismiss")
         ).pack(side="right", padx=10, pady=2)
         self._action_button(
-            buttons, "Add", lambda r=dict(record): self._act(r, "add")
+            buttons, tr("common.add"), lambda r=dict(record): self._act(r, "add")
         ).pack(side="right", pady=2)
 
     def _pair_card(self, parent, record: dict) -> None:
@@ -437,12 +438,13 @@ class ActivityWindow(tk.Toplevel):
         card.pack(fill="x", padx=10, pady=4)
 
         similarity = record.get("similarity")
-        pct = f" \u00b7 {round(similarity * 100)}% match" if similarity else ""
+        pct = tr("activity.match_pct", pct=round(similarity * 100)) if similarity else ""
         tk.Label(
             card,
-            text=(
-                "Both variants already in playlist \u2014 "
-                f"{record.get('playlist_name', '')}{pct}"
+            text=tr(
+                "activity.both_variants",
+                name=record.get("playlist_name", ""),
+                pct=pct,
             ),
             background=C["frame_playlist_bg"],
             foreground=C["label_playlist_fg"],
@@ -450,19 +452,19 @@ class ActivityWindow(tk.Toplevel):
             anchor="w",
         ).pack(fill="x", padx=10)
 
-        self._song_line(card, "older:  ", record.get("older") or {})
-        self._song_line(card, "newer:  ", record.get("newer") or {})
+        self._song_line(card, tr("activity.older"), record.get("older") or {})
+        self._song_line(card, tr("activity.newer"), record.get("newer") or {})
 
         buttons = tk.Frame(card, background=C["frame_playlist_bg"])
         buttons.pack(fill="x", pady=(4, 0))
         self._action_button(
             buttons,
-            "Remove newer",
+            tr("activity.remove_newer"),
             lambda r=dict(record): self._act(r, "remove_newer"),
         ).pack(side="right", padx=10, pady=2)
         self._action_button(
             buttons,
-            "Not duplicates",
+            tr("activity.not_duplicates"),
             lambda r=dict(record): self._act(r, "not_duplicate"),
         ).pack(side="right", pady=2)
 
@@ -476,7 +478,7 @@ class ActivityWindow(tk.Toplevel):
 
         tk.Button(
             parent,
-            text=f"Marked / decided pairs ({len(songs)}) {arrow}",
+            text=tr("activity.marked_pairs", count=len(songs), arrow=arrow),
             cursor="hand2",
             **btn_colors(C["button_main_bg"], C["button_main_fg"]),
             font=ui_font(11),
@@ -505,7 +507,7 @@ class ActivityWindow(tk.Toplevel):
             ).pack(side="left")
             self._action_button(
                 row,
-                "Undo",
+                tr("activity.undo"),
                 lambda k=pair_key: self._act(
                     {"kind": "pair", "pair_key": k}, "undo"
                 ),

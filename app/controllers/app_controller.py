@@ -11,6 +11,7 @@ import logging
 import tkinter as tk
 from typing import Callable, Optional
 
+from utils.i18n import tr
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
 
@@ -165,7 +166,7 @@ class AppController:
 
         try:
             dialog = tk.Toplevel(self.app.root)
-            dialog.title("Error")
+            dialog.title(tr("common.error"))
             dialog.configure(background=C["frame_main_bg"])
             dialog.transient(self.app.root)
             dialog.grab_set()
@@ -173,7 +174,7 @@ class AppController:
 
             tk.Label(
                 dialog,
-                text="An error occurred while closing PlaylistManager:",
+                text=tr("quit.error_while_closing"),
                 background=C["frame_main_bg"],
                 foreground=C["label_def_fg"],
                 font=ui_font(10),
@@ -197,7 +198,7 @@ class AppController:
 
             tk.Button(
                 dialog,
-                text="Force-quit",
+                text=tr("quit.force_quit"),
                 command=lambda: _choose(True),
                 **btn_colors(C["button_main_bg"], C["button_main_fg"]),
                 bd=0,
@@ -205,7 +206,7 @@ class AppController:
 
             tk.Button(
                 dialog,
-                text="Cancel",
+                text=tr("common.cancel"),
                 command=lambda: _choose(False),
                 **btn_colors(C["button_head_bg"], C["button_head_fg"]),
                 bd=0,

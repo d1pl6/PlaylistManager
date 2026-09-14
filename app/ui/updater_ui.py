@@ -3,6 +3,7 @@ import webbrowser
 from tkinter import messagebox
 
 from _version import __version__
+from utils.i18n import tr
 from utils.scaling import ui_font
 from utils.window import center_window
 from utils.theme import C, btn_colors
@@ -13,7 +14,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
     fg = C["label_def_fg"]
 
     win = tk.Toplevel(parent)
-    win.title("Update Available")
+    win.title(tr("updater.title"))
     win.configure(background=bg)
     win.resizable(True, True)
     win.transient(parent)
@@ -35,7 +36,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
 
     tk.Label(
         frame,
-        text=f"PlaylistManager v{latest_version} is available!",
+        text=tr("updater.available", version=latest_version),
         font=ui_font(14, "bold"),
         background=bg,
         foreground=fg,
@@ -43,7 +44,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
 
     tk.Label(
         frame,
-        text=f"Current version: v{__version__}",
+        text=tr("updater.current_version", version=__version__),
         font=ui_font(10),
         background=bg,
         foreground=fg,
@@ -83,8 +84,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
         except Exception:
             messagebox.showerror(
                 "PlaylistManager",
-                "Could not open a browser. Download manually from:\n"
-                + download_url,
+                tr("updater.browser_failed", url=download_url),
                 parent=win,
             )
             return
@@ -92,7 +92,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
 
     tk.Button(
         btn_frame,
-        text="Download",
+        text=tr("updater.download"),
         font=ui_font(10),
         **btn_colors(C["button_main_bg"], C["button_main_fg"]),
         cursor="hand2",
@@ -105,7 +105,7 @@ def show_update_dialog(parent, latest_version, download_url, body):
 
     tk.Button(
         btn_frame,
-        text="Close",
+        text=tr("common.close"),
         font=ui_font(10),
         **btn_colors(C["button_head_bg"], C["button_head_fg"]),
         cursor="hand2",

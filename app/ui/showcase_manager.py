@@ -20,6 +20,7 @@ from services.playlist_store import PlaylistStore
 from services.playlist_url import build_song_url
 from services import scrobble_log
 from ui.tooltip import ToolTip
+from utils.i18n import tr, tr_status, trn
 from utils.config import (
     get_setting,
 )
@@ -264,13 +265,13 @@ class ShowcaseManager:
         follower_count = (store_entry or {}).get("followerCount", 0) if store_entry else 0
 
         if card.stats_songs is not None:
-            card.stats_songs.config(text=f"{song_count} song{'s' if song_count != 1 else ''}")
+            card.stats_songs.config(text=trn("showcase.stats.songs", song_count))
         if card.stats_duration is not None:
             card.stats_duration.config(text=self._format_duration(total_seconds))
         if card.stats_followers is not None:
             if follower_count > 0:
                 card.stats_followers.config(
-                    text=f"{follower_count} follower{'s' if follower_count != 1 else ''}"
+                    text=trn("showcase.stats.followers", follower_count)
                 )
             else:
                 card.stats_followers.config(text="")
@@ -348,7 +349,7 @@ class ShowcaseManager:
                     self._on_remove_song(f, sid, tid, title, artists)
                 ),
             )
-            ToolTip(remove_btn, "Remove from playlist")
+            ToolTip(remove_btn, tr("showcase.remove_tip"))
 
             thumb.grid(
                 row=grid_row, column=0, rowspan=2, sticky="nsew",
@@ -378,7 +379,7 @@ class ShowcaseManager:
                         self._on_like_toggle(t, a, b)
                     )
                 )
-                ToolTip(like_btn, "Like on Last.fm")
+                ToolTip(like_btn, tr("showcase.like_tip"))
                 like_btn.grid(row=grid_row + 1, column=2, sticky="ne")
 
                 # Load like state asynchronously - deferred to a single
@@ -475,7 +476,7 @@ class ShowcaseManager:
             def show():
                 try:
                     win = tk.Toplevel(self.root)
-                    win.title("Image")
+                    win.title(tr("showcase.title_image"))
                     # Fit window to image, but clamp to screen size.
                     screen_w = win.winfo_screenwidth()
                     screen_h = win.winfo_screenheight()
@@ -541,7 +542,7 @@ class ShowcaseManager:
             return
         if not track_id or not song_id:
             status_label.config(
-                text="Error", background=C["label_playlist_error_bg"]
+                text=tr_status("error"), background=C["label_playlist_error_bg"]
             )
             return
         # Decide BEFORE any state changes: confirmation asks through an
@@ -555,7 +556,7 @@ class ShowcaseManager:
                 return
         card.removing = True
 
-        status_label.config(text="Removing", background=C["label_playlist_warn_bg"])
+        status_label.config(text=tr_status("removing"), background=C["label_playlist_warn_bg"])
 
         buttons = self._frame_buttons(main_frame)
         for btn in buttons:
@@ -587,7 +588,7 @@ class ShowcaseManager:
                     pass
             if ok:
                 status_label.config(
-                    text="Removed", background=C["label_playlist_good_bg"]
+                    text=tr_status("removed"), background=C["label_playlist_good_bg"]
                 )
                 cur_idx = self._card_index(card)
                 if cur_idx is not None:
@@ -596,7 +597,7 @@ class ShowcaseManager:
                     self._refresh_stats(cur_idx, pname, card.platform)
             else:
                 status_label.config(
-                    text="Error", background=C["label_playlist_error_bg"]
+                    text=tr_status("error"), background=C["label_playlist_error_bg"]
                 )
 
         def work() -> None:
@@ -694,7 +695,7 @@ class ShowcaseManager:
         result: dict = {"ok": False}
 
         dialog = tk.Toplevel(self.root)
-        dialog.title("Remove song")
+        dialog.title(tr("showcase.title_remove_song"))
         dialog.configure(background=C["root_bg"])
         dialog.resizable(False, False)
         dialog.transient(self.root)
@@ -718,7 +719,7 @@ class ShowcaseManager:
 
         tk.Label(
             body,
-            text=f'Remove "{title}" from {playlist_name}?',
+            text=tr("showcase.confirm_remove_song", title=title, playlist_name=playlist_name),
             font=ui_font(12),
             background=C["root_bg"],
             foreground=C["label_def_fg"],
@@ -753,8 +754,8 @@ class ShowcaseManager:
                 command=lambda p=proceed: choose(p),
             ).pack(side="left", padx=4)
 
-        make_button("Remove", True)
-        make_button("Cancel", False)
+        make_button(tr("showcase.remove"), True)
+        make_button(tr("common.cancel"), False)
 
         dialog.bind("<Escape>", lambda _e: choose(False))
         dialog.protocol("WM_DELETE_WINDOW", lambda: choose(False))

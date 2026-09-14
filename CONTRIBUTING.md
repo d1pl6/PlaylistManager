@@ -109,13 +109,18 @@ a contribution.
 ## Documentation
 
 - **`docs/README.md`** is the index of the structural reference:
-  `modules.md` (who imports whom), `plugins.md` (plugin contract and
-  `plugin.json` schema), `flows.md` (end-to-end call chains). Use it
-  as the source of truth for how the code is wired together - this
-  file and AGENTS.md link to it instead of repeating it.
-- **`AGENTS.md`** (repo root) holds the operational rules: run
-  commands, environment quirks, threading, Wayland, tray. Don't
-  republish those here or in `docs/`.
+  `modules.md` (who imports whom, where file X lives), `plugins.md`
+  (plugin contract and `plugin.json` schema), `flows.md` (end-to-end
+  call chains), plus the per-topic guides `data-paths.md`, `theming.md`,
+  `config.md`, `threading.md`, `environment.md`, `i18n.md`. Use it as
+  the source of truth for how the code is wired together - this file
+  and AGENTS.md link to it instead of repeating it.
+- **`AGENTS.md`** (repo root) holds the condensed operational rules:
+  run commands, testing, filesystem, threading, Wayland, tray - each
+  with a link to the matching docs/ file for the full detail.
+  Machine-specific lines for this dev machine live in `.agents/AGENTS.md`
+  (not committed). Don't republish AGENTS.md's summaries here or in
+  `docs/`.
 - **`README.MD`** is the user guide, **`CLI.MD`** the CLI reference,
   **`INTEGRATIONS.MD`** the per-platform user setup. A change with
   user-visible effects should update the matching one.

@@ -90,7 +90,7 @@ class PlaylistStore:
                         _playlist_cache = json.load(f)
                 except Exception as e:
                     # Keep the previous cache on a transient read error
-                    # (torn read on the exFAT drive, JSON corruption, ...).
+                    # (torn read on the removable drive, JSON corruption, ...).
                     # Poisoning the cache with [] would make every playlist
                     # vanish from the UI for the whole TTL and, worse,
                     # a subsequent add_playlist would dedup against an empty

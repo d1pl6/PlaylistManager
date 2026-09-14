@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, cast
 from plugin_loader import PluginRegistry
 from services import duplicate_queue, integration_manager
 from ui.scrollable import ScrollableFrame
+from utils.i18n import tr, trn
 from utils.icons import IconService
 from utils.scaling import ui_font
 from utils.theme import C, btn_colors
@@ -74,7 +75,7 @@ def show_manage_dialog(
         plugin_registry = PluginRegistry().discover()
 
     win = tk.Toplevel(parent)
-    win.title("Manage integrations")
+    win.title(tr("manage.dialog_title"))
     win.configure(background=win_bg)
     win.transient(parent)
     win.update_idletasks()
@@ -84,7 +85,7 @@ def show_manage_dialog(
 
     tk.Label(
         win,
-        text="Integrations",
+        text=tr("manage.heading"),
         background=header_bg,
         foreground=label_fg,
         font=ui_font(14),
@@ -99,7 +100,7 @@ def show_manage_dialog(
 
     btn_download_all = tk.Button(
         actions,
-        text="Download all",
+        text=tr("manage.download_all"),
         cursor="hand2",
         **btn_colors(C["button_save_bg"], C["button_save_fg"]),
         highlightthickness=0,
@@ -112,7 +113,7 @@ def show_manage_dialog(
 
     btn_uninstall_all = tk.Button(
         actions,
-        text="Uninstall all",
+        text=tr("manage.uninstall_all"),
         cursor="hand2",
         **btn_colors(C["button_close_bg"], C["button_close_fg"]),
         highlightthickness=0,
@@ -125,7 +126,7 @@ def show_manage_dialog(
 
     btn_update_all = tk.Button(
         actions,
-        text="Update all",
+        text=tr("manage.update_all"),
         cursor="hand2",
         **btn_colors(C["button_save_bg"], C["button_save_fg"]),
         highlightthickness=0,
@@ -247,7 +248,7 @@ def show_manage_dialog(
         if not ids:
             tk.Label(
                 rows_frame,
-                text="No integrations available",
+                text=tr("manage.no_integrations_available"),
                 background=content_bg,
                 foreground=label_fg,
                 font=ui_font(10),
@@ -295,7 +296,7 @@ def show_manage_dialog(
 
             status_lbl = tk.Label(
                 row,
-                text="Installed" if is_installed else "Not installed",
+                text=tr("manage.installed") if is_installed else tr("manage.not_installed"),
                 background=content_bg,
                 foreground=good_fg if is_installed else label_fg,
                 font=ui_font(9),
@@ -306,7 +307,9 @@ def show_manage_dialog(
                 # In-flight download or uninstall: no button, just the
                 # status label showing which phase we are in.
                 status_lbl.config(
-                    text="Uninstalling…" if is_installed else "Downloading…",
+                    text=tr("manage.uninstalling_ellipsis")
+                    if is_installed
+                    else tr("manage.downloading_ellipsis"),
                     foreground=label_fg,
                 )
                 continue
@@ -315,7 +318,7 @@ def show_manage_dialog(
             if is_installed:
                 btn = tk.Button(
                     row,
-                    text="Uninstall",
+                    text=tr("manage.uninstall"),
                     cursor="hand2",
                     **btn_colors(C["button_close_bg"], C["button_close_fg"]),
                     highlightthickness=0,
@@ -326,7 +329,7 @@ def show_manage_dialog(
                 if catalog_repo is not None and _has_update(pid):
                     update_btn = tk.Button(
                         row,
-                        text="Update",
+                        text=tr("manage.update"),
                         cursor="hand2",
                         **btn_colors(C["button_save_bg"], C["button_save_fg"]),
                         highlightthickness=0,
@@ -337,7 +340,7 @@ def show_manage_dialog(
             elif catalog_repo is not None:
                 btn = tk.Button(
                     row,
-                    text="Download",
+                    text=tr("manage.download"),
                     cursor="hand2",
                     **btn_colors(C["button_save_bg"], C["button_save_fg"]),
                     highlightthickness=0,
@@ -397,9 +400,9 @@ def show_manage_dialog(
             (w for w in row.winfo_children() if isinstance(w, tk.Button)), None
         )
         if btn is not None:
-            btn.config(state="disabled", text="Downloading…")
+            btn.config(state="disabled", text=tr("manage.downloading_ellipsis"))
         else:
-            status_lbl.config(text="Downloading…", foreground=label_fg)
+            status_lbl.config(text=tr("manage.downloading_ellipsis"), foreground=label_fg)
 
         def _worker() -> None:
             error: Optional[str] = None
@@ -421,7 +424,7 @@ def show_manage_dialog(
                         on_plugins_changed()
                     except Exception as e:
                         logger.exception("Plugin rescan failed after download")
-                        error = f"Downloaded, but reload failed: {e}"
+                        error = tr("manage.downloaded_but_reload_failed", error=e)
                 try:
                     dialog_open = bool(win.winfo_exists())
                 except tk.TclError:
@@ -430,10 +433,10 @@ def show_manage_dialog(
                     return
                 _refresh_rows()
                 if error is not None:
-                    _set_footer(f"Download failed: {error}", error=True)
+                    _set_footer(tr("manage.download_failed", error=error), error=True)
                 else:
                     _set_footer(
-                        f"{catalog_repo.display_name} installed",
+                        tr("manage.plugin_installed", name=catalog_repo.display_name),
                         ok=True,
                     )
 
@@ -523,38 +526,43 @@ def show_manage_dialog(
                     return
                 _refresh_rows()
                 if error is not None:
-                    text = f"Uninstall failed: {error}"
+                    text = tr("manage.uninstall_failed", error=error)
                     if plugin_registry.get(pid) is not None:
-                        text += (" - the integration is still installed; "
-                                 "retry from its row")
+                        text += tr("manage.failed_still_installed")
                     if reload_failed:
-                        text += f" (reload: {reload_failed})"
+                        text += tr("manage.failed_reload", reason=reload_failed)
                     _set_footer(text, error=True)
                     return
                 name = _display_name(plugin, pid)
                 parts = [
-                    f"{report['credentials']} credential file(s)",
-                    f"{report['playlists']} playlist(s)",
-                    f"{report['databases']} database file(s)",
-                    f"{report['pending']} pending",
-                    f"{report['songs']} duplicate(s)",
-                    f"{report['errors']} error(s)",
-                    f"{report['plugin_dirs']} folder(s)",
+                    trn("manage.footer_credentials", report["credentials"]),
+                    trn("manage.footer_playlists", report["playlists"]),
+                    trn("manage.footer_databases", report["databases"]),
+                    trn("manage.footer_pending", report["pending"]),
+                    trn("manage.footer_duplicates", report["songs"]),
+                    trn("manage.footer_errors", report["errors"]),
+                    trn("manage.footer_folders", report["plugin_dirs"]),
                 ]
-                text = f"{name} uninstalled ({', '.join(parts)})"
+                text = tr("manage.uninstalled", name=name, details=", ".join(parts))
                 if report["plugin_dirs"] == 0:
-                    text += " - plugin folder(s) not removed"
+                    text += tr("manage.folders_not_removed")
                     if plugin_registry.get(pid) is not None:
-                        text += " (integration still installed; retry from its row)"
+                        text += tr("manage.integration_still_installed")
                     if reload_failed:
-                        text += f" (reload: {reload_failed})"
+                        text += tr("manage.failed_reload", reason=reload_failed)
                     _set_footer(text, error=True)
                     return
                 if teardown_errors or reload_failed:
                     if reload_failed:
-                        teardown_errors.append(f"reload ({reload_failed})")
+                        teardown_errors.append(
+                            tr("manage.reload_expr", reason=reload_failed)
+                        )
                     _set_footer(
-                        text + f" - with warnings ({', '.join(teardown_errors)})",
+                        tr(
+                            "manage.with_warnings",
+                            summary=text,
+                            warnings=", ".join(teardown_errors),
+                        ),
                         ok=True,
                     )
                 else:
@@ -588,9 +596,9 @@ def show_manage_dialog(
             cred_names = sorted({p.name for p in plugin.auth_paths})
             cred_desc = ", ".join(cred_names)
             if len({p.parent for p in plugin.auth_paths}) > 1:
-                cred_desc += " (auth dir + fallback locations)"
+                cred_desc += tr("manage.auth_dir_and_fallbacks")
         else:
-            cred_desc = f"auth/{pid} files"
+            cred_desc = tr("manage.auth_dir_files", pid=pid)
         dir_desc = (
             str(plugin.directory)
             if plugin is not None
@@ -598,15 +606,15 @@ def show_manage_dialog(
         )
 
         if not messagebox.askyesno(
-            "Uninstall integration",
-            f"Uninstall {name}?\n\n"
-            "This deletes locally:\n"
-            f"  \u2022 credentials ({cred_desc})\n"
-            f"  \u2022 the plugin folder ({dir_desc})\n"
-            f"  \u2022 its playlists from the registry\n"
-            f"  \u2022 the song databases (db/{pid}/)\n"
-            "  \u2022 pending duplicate and error records\n\n"
-            "The online playlists themselves are NOT touched.",
+            tr("manage.uninstall_dialog_title"),
+            tr("manage.confirm_uninstall", name=name)
+            + tr("manage.uninstall_deletes_locally")
+            + tr("manage.uninstall_credentials", desc=cred_desc)
+            + tr("manage.uninstall_plugin_folder", desc=dir_desc)
+            + tr("manage.uninstall_playlists")
+            + tr("manage.uninstall_song_databases", pid=pid)
+            + tr("manage.uninstall_duplicate_records")
+            + tr("manage.online_playlists_not_touched"),
             parent=win,
         ):
             return
@@ -627,8 +635,8 @@ def show_manage_dialog(
         # Disable both buttons (Uninstall + Update) while updating.
         for w in row.winfo_children():
             if isinstance(w, tk.Button):
-                w.config(state="disabled", text="Updating…")
-        status_lbl.config(text="Updating…", foreground=label_fg)
+                w.config(state="disabled", text=tr("manage.updating_ellipsis"))
+        status_lbl.config(text=tr("manage.updating_ellipsis"), foreground=label_fg)
         _update_cache.pop(pid, None)
 
         def _worker() -> None:
@@ -647,7 +655,7 @@ def show_manage_dialog(
                         on_plugins_changed()
                     except Exception as e:
                         logger.exception("Plugin rescan failed after update")
-                        error = f"Updated, but reload failed: {e}"
+                        error = tr("manage.updated_but_reload_failed", error=e)
                 try:
                     dialog_open = bool(win.winfo_exists())
                 except tk.TclError:
@@ -656,10 +664,10 @@ def show_manage_dialog(
                     return
                 _refresh_rows()
                 if error is not None:
-                    _set_footer(f"Update failed: {error}", error=True)
+                    _set_footer(tr("manage.update_failed", error=error), error=True)
                 else:
                     _set_footer(
-                        f"{catalog_repo.display_name} updated",
+                        tr("manage.plugin_updated", name=catalog_repo.display_name),
                         ok=True,
                     )
 
@@ -741,13 +749,11 @@ def show_manage_dialog(
 
         names = ", ".join(_display_name(installed[pid], pid) for pid in targets)
         if not messagebox.askyesno(
-            "Uninstall all integrations",
+            tr("manage.uninstall_all_dialog_title"),
             f"Uninstall all {len(targets)} integrations?\n\n"
-            f"{names}\n\n"
-            "This deletes, for each platform, its credentials, plugin folder, "
-            "playlist registry entries, song databases and pending duplicate "
-            "and error records.\n\n"
-            "The online playlists themselves are NOT touched.",
+            + f"{names}\n\n"
+            + tr("manage.bulk_uninstall_description")
+            + tr("manage.online_playlists_not_touched"),
             parent=win,
         ):
             return
@@ -845,11 +851,10 @@ def show_manage_dialog(
 
         names = ", ".join(_display_name(installed[pid], pid) for pid in targets)
         if not messagebox.askyesno(
-            "Update all integrations",
+            tr("manage.update_all_dialog_title"),
             f"Update {len(targets)} integration(s)?\n\n"
-            f"{names}\n\n"
-            "Each plugin will be replaced with the latest version from "
-            "GitHub.  Credentials, playlists and databases are kept.",
+            + f"{names}\n\n"
+            + tr("manage.bulk_update_description"),
             parent=win,
         ):
             return

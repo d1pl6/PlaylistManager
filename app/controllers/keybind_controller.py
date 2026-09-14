@@ -434,7 +434,7 @@ class KeybindController:
         touches tkinter widgets directly.
         """
         if not self._flow_busy.acquire(blocking=False):
-            callbacks.on_status("Busy", C["label_playlist_warn_bg"])
+            callbacks.on_status("busy", C["label_playlist_warn_bg"])
             logger.warning("Flow already in progress, ignoring keybind")
             return
 
@@ -464,7 +464,7 @@ class KeybindController:
         stored_playlist_id = (entry or {}).get("playlist_id") or None
 
         callbacks.on_entry_state("readonly")
-        callbacks.on_status("Loading", C["label_playlist_warn_bg"])
+        callbacks.on_status("loading", C["label_playlist_warn_bg"])
         callbacks.on_song_info("", "")
 
         if not self._ensure_initialized(platform, callbacks):
@@ -515,7 +515,7 @@ class KeybindController:
             _schedule_ui(
                 lambda: (
                     callbacks.on_reset("readonly"),
-                    callbacks.on_status("Error", C["label_playlist_error_bg"]),
+                    callbacks.on_status("error", C["label_playlist_error_bg"]),
                 )
             )
 
@@ -523,18 +523,18 @@ class KeybindController:
             def _apply():
                 status = result.get("status", "error")
                 if status == "added":
-                    callbacks.on_status("Added", C["label_playlist_good_bg"])
+                    callbacks.on_status("added", C["label_playlist_good_bg"])
                     # Grid "Used" sort: bump only on an actual add
                     # (reloads and exists/duplicate outcomes don't count).
                     PlaylistStore.mark_used(playlist_name, platform, playlist_id)
                 elif status == "exists":
-                    callbacks.on_status("Exists", C["label_playlist_warn_bg"])
+                    callbacks.on_status("exists", C["label_playlist_warn_bg"])
                 elif status == "duplicate":
                     # Queued in db/extra.json, added nowhere - resolved
                     # later in the activity window's Duplicates tab.
-                    callbacks.on_status("Dup?", C["label_playlist_warn_bg"])
+                    callbacks.on_status("duplicate", C["label_playlist_warn_bg"])
                 else:
-                    callbacks.on_status("Error", C["label_playlist_error_bg"])
+                    callbacks.on_status("error", C["label_playlist_error_bg"])
 
                 song_data = result.get("song", {})
                 if song_data:
@@ -738,7 +738,7 @@ class KeybindController:
                 self.song_manager = SongManager()
             except Exception as e:
                 logger.error("Failed to create SongManager: %s", e)
-                callbacks.on_status("Error", C["label_playlist_error_bg"])
+                callbacks.on_status("error", C["label_playlist_error_bg"])
                 callbacks.on_entry_state("readonly")
                 return False
 
@@ -758,14 +758,14 @@ class KeybindController:
         """Build (or fetch) the flow for one platform.  Caller holds _init_lock."""
         integration = self.integrations.get(platform_id)
         if integration is None or not integration.is_authenticated():
-            callbacks.on_status("Error", C["label_playlist_error_bg"])
+            callbacks.on_status("error", C["label_playlist_error_bg"])
             callbacks.on_entry_state("readonly")
             logger.error("%s not authenticated.", platform_id)
             return False
 
         plugin = self.plugin_registry.get(platform_id)
         if plugin is None or not plugin.flow_class:
-            callbacks.on_status("Error", C["label_playlist_error_bg"])
+            callbacks.on_status("error", C["label_playlist_error_bg"])
             callbacks.on_entry_state("readonly")
             logger.error(
                 "No keybind flow declared for platform '%s'", platform_id
@@ -819,7 +819,7 @@ class KeybindController:
             return True
         except Exception as e:
             logger.error("Failed to initialize %s flow: %s", platform_id, e)
-            callbacks.on_status("Error", C["label_playlist_error_bg"])
+            callbacks.on_status("error", C["label_playlist_error_bg"])
             callbacks.on_entry_state("readonly")
             return False
 

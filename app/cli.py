@@ -50,6 +50,7 @@ from services import scrobble_log
 from services.scrobble import scrobble_enabled_for
 from services.song_manager import SongManager
 from utils.config import get_setting
+from utils.i18n import tr, tr_status, trn
 from utils.logging_config import user_log
 from utils.thumbnail import ThumbnailService
 
@@ -288,9 +289,7 @@ def _build_integrations(auth_platforms=None):
             integration_cls = plugin.import_integration()
             registry.register(integration_cls(auth_manager=auth_manager))
         except Exception as e:
-            user_log(
-                logger, "%s integration unavailable (%s)", plugin.display_name, e
-            )
+            user_log(logger, tr("service.integration_unavailable", name=plugin.display_name, error=e))
     # Authenticate after registration - authenticate() is a network round
     # trip and must never keep a broken plugin from being registered.
     for integration in registry.get_all().values():
@@ -334,14 +333,10 @@ def run_list() -> int:
     """Print the numbered playlist registry (CLI numbers = GUI display order)."""
     playlists = PlaylistStore.load_playlists()
     if not playlists:
-        print(
-            "No playlists configured. Add one with "
-            "'playlistmanager -p add <URL>' or from the GUI.",
-            file=sys.stderr,
-        )
+        print(tr("cli.no_playlists"), file=sys.stderr)
         return 2
     for i, playlist in enumerate(playlists, 1):
-        print(f'{i}. "{playlist.get("name")}" ({playlist.get("platform")})')
+        print(tr("cli.list_item", i=i, name=playlist.get("name"), platform=playlist.get("platform")))
     return 0
 
 
@@ -355,11 +350,7 @@ def run_add(spec: str) -> int:
     """
     playlists = PlaylistStore.load_playlists()
     if not playlists:
-        print(
-            "No playlists configured. Add one with "
-            "'playlistmanager -p add <URL>' or from the GUI.",
-            file=sys.stderr,
-        )
+        print(tr("cli.no_playlists"), file=sys.stderr)
         return 2
 
     try:
@@ -463,7 +454,7 @@ def run_add(spec: str) -> int:
                 platform=platform,
             )
 
-        line = f'#{number} "{name}" ({platform}): {message}'
+        line = tr("cli.result_line", number=number, name=name, platform=platform, message=message)
         if ok:
             print(line, flush=True)
         else:
@@ -493,13 +484,12 @@ def run_add_url(url: str) -> int:
     try:
         details = integration.get_playlist_details(playlist_id)
     except Exception as e:
-        print(f"error: failed to fetch playlist details: {e}", file=sys.stderr)
+        print(tr("cli.fetch_details_failed", error=e), file=sys.stderr)
         return 1
     name = details.get("title") if isinstance(details, dict) else None
     if not name:
         print(
-            f"error: playlist not found on {platform} "
-            "(deleted, private, or an invalid URL)",
+            tr("cli.playlist_not_found", platform=platform),
             file=sys.stderr,
         )
         return 1
@@ -522,8 +512,7 @@ def run_add_url(url: str) -> int:
             and not details.get("collaborative")
         ):
             print(
-                f"warning: you are not the owner or a collaborator of "
-                f"'{name}' - adding songs to it will fail on Spotify's side",
+                tr("cli.not_owner_warning", name=name),
                 file=sys.stderr,
             )
 
@@ -554,19 +543,20 @@ def run_add_url(url: str) -> int:
         len(playlists),
     )
 
-    action = "Updated" if existed else "Added"
+    action = tr("cli.updated") if existed else tr("cli.added")
     sync = PlaylistSyncService(integrations)
     try:
         inserted, status = sync.import_tracks_sync(name, platform, playlist_id)
     except Exception as e:
         print(
-            f'#{number} "{name}" ({platform}): {action}, track import failed: {e}',
+            tr("cli.import_failed_line", number=number, name=name, platform=platform, action=action, error=e),
             file=sys.stderr,
         )
         return 1
 
-    import_note = f"imported {inserted} tracks" if inserted else status.lower()
-    print(f'#{number} "{name}" ({platform}): {action}, {import_note}', flush=True)
+    import_note = trn("cli.imported_tracks", inserted) if inserted else tr_status(status).lower()
+    message = f"{action}, {import_note}"
+    print(tr("cli.result_line", number=number, name=name, platform=platform, message=message), flush=True)
     return 0
 
 
@@ -577,7 +567,7 @@ def run_del(spec: str) -> int:
     """
     playlists = PlaylistStore.load_playlists()
     if not playlists:
-        print("No playlists configured.", file=sys.stderr)
+        print(tr("cli.no_playlists_short"), file=sys.stderr)
         return 2
 
     try:
@@ -598,7 +588,7 @@ def run_del(spec: str) -> int:
         DatabaseManager.delete_playlist_db(name, platform, playlist_id=playlist_id)
         scrobble_log.remove_playlist_entries(platform, playlist_id)
         duplicate_queue.purge_playlist(platform, playlist_id, name or "")
-        print(f'#{number} "{name}" ({platform}): deleted', flush=True)
+        print(tr("cli.deleted_line", number=number, name=name, platform=platform), flush=True)
     return 0
 
 
@@ -606,7 +596,7 @@ def run_refresh(spec: str) -> int:
     """Re-import all tracks for playlist(s) from the platform."""
     playlists = PlaylistStore.load_playlists()
     if not playlists:
-        print("No playlists configured.", file=sys.stderr)
+        print(tr("cli.no_playlists_short"), file=sys.stderr)
         return 2
 
     try:
@@ -629,8 +619,7 @@ def run_refresh(spec: str) -> int:
         playlist_id = entry.get("playlist_id", "")
         if not playlist_id:
             print(
-                f'#{number} "{name}" ({platform}): Error: no playlist_id - '
-                "re-add it with 'playlistmanager -p add <URL>'",
+                tr("cli.no_playlist_id_line", number=number, name=name, platform=platform),
                 file=sys.stderr,
             )
             failures += 1
@@ -646,8 +635,9 @@ def run_refresh(spec: str) -> int:
             failures += 1
             continue
 
+        reload_note = trn("cli.new_songs", inserted) if inserted else tr_status(status).lower()
         print(
-            f'#{number} "{name}" ({platform}): refreshed ({status.lower()})',
+            tr("cli.refreshed_line", number=number, name=name, platform=platform, note=reload_note),
             flush=True,
         )
     return 0 if failures == 0 else 1
@@ -679,7 +669,7 @@ def run_scrobble() -> int:
         None,
     )
     if scrobble_integ is None:
-        print("error: no scrobble backend available (is Last.fm configured?)",
+        print(tr("cli.no_scrobble_backend"),
               file=sys.stderr)
         return 1
 
@@ -705,10 +695,9 @@ def run_scrobble() -> int:
                 if scrobble_integ.scrobble(song_data):
                     title = song_data.get("title", "unknown")
                     artist = (song_data.get("artists") or ["unknown"])[0]
-                    print(f"Scrobbled: {artist} - {title}", flush=True)
+                    print(tr("cli.scrobbled", artist=artist, title=title), flush=True)
                     return 0
-                print(f"error: scrobble failed for "
-                      f"{song_data.get('title', 'unknown')}", file=sys.stderr)
+                print(tr("cli.scrobble_failed", title=song_data.get("title", "unknown")), file=sys.stderr)
                 return 1
             # Nothing playing on this platform - try the next.
             logger.debug("No song playing on %s: %s", platform_id, error)
@@ -716,7 +705,7 @@ def run_scrobble() -> int:
             logger.debug("Capture failed on %s: %s", platform_id, e)
             continue
 
-    print("error: no currently-playing song found", file=sys.stderr)
+    print(tr("cli.no_song_found"), file=sys.stderr)
     return 1
 
 
@@ -769,33 +758,31 @@ def _run_soundcloud_login(
     """
     plugin = get_default_registry().get("soundcloud")
     if plugin is None:
-        print("error: SoundCloud plugin not found", file=sys.stderr)
+        print(tr("cli.soundcloud_plugin_not_found"), file=sys.stderr)
         return 2
 
     if not client_id:
-        client_id = _prompt("Client id: ")
+        client_id = _prompt(tr("cli.prompt_client_id"))
     if not client_secret:
-        client_secret = _prompt("Client secret: ", hidden=True)
+        client_secret = _prompt(tr("cli.prompt_client_secret"), hidden=True)
     if not refresh_token:
         stored = _stored_refresh_token_for(plugin)
-        prompt_value = _prompt("Refresh token (leave empty to reuse stored): ", hidden=True)
+        prompt_value = _prompt(tr("cli.prompt_refresh_token"), hidden=True)
         refresh_token = prompt_value or stored
     if not client_id or not client_secret or not refresh_token:
         print(
-            "error: client id, client secret and a refresh token are all "
-            "required (from your SoundCloud app's dashboard)",
+            tr("cli.credentials_required_soundcloud"),
             file=sys.stderr,
         )
         return 2
 
     result = _soundcloud_save_and_verify(client_id, client_secret, refresh_token)
     if result.get("ok"):
-        print(f"soundcloud: logged in as {result.get('display_name')}", flush=True)
+        print(tr("cli.login_ok_soundcloud", display_name=result.get("display_name")), flush=True)
         return 0
 
     print(
-        f"error: soundcloud login failed: {result.get('error')} "
-        "(existing credentials left untouched)",
+        tr("cli.login_failed_soundcloud", reason=result.get("error")),
         file=sys.stderr,
     )
     return 1
@@ -832,12 +819,10 @@ def _run_deezer_login() -> int:
     The ARL is obtained by logging into Deezer in a browser and copying
     the ``arl`` cookie value from DevTools → Application → Cookies.
     """
-    arl = _prompt("ARL cookie: ", hidden=True)
+    arl = _prompt(tr("cli.prompt_arl_cookie"), hidden=True)
     if not arl:
         print(
-            "error: ARL cookie is required (log into Deezer in your "
-            "browser, open DevTools → Application → Cookies → deezer.com → "
-            "copy the 'arl' value)",
+            tr("cli.arl_cookie_required"),
             file=sys.stderr,
         )
         return 2
@@ -845,14 +830,13 @@ def _run_deezer_login() -> int:
     result = auth_setup.save_and_verify_deezer_credentials(arl.strip())
     if result.get("ok"):
         print(
-            f"deezer: logged in as user {result.get('display_name')}",
+            tr("cli.login_ok_deezer", display_name=result.get("display_name")),
             flush=True,
         )
         return 0
 
     print(
-        f"error: deezer login failed: {result.get('error')} "
-        "(existing credentials left untouched)",
+        tr("cli.login_failed_deezer", reason=result.get("error")),
         file=sys.stderr,
     )
     return 1
@@ -885,7 +869,7 @@ def run_login(
     known = get_default_registry().get_platform_ids()
     if platform not in known:
         print(
-            f"error: unknown platform '{platform}' (use {', '.join(known)})",
+            tr("cli.unknown_platform", platform=platform, options=", ".join(known)),
             file=sys.stderr,
         )
         return 2
@@ -895,18 +879,12 @@ def run_login(
         if not result.get("ok"):
             # Terminal could not be launched - fall back to manual steps.
             print(
-                f"youtube_music: no terminal emulator found - manually run:\n"
-                f"  cd {result.get('auth_dir', auth_setup.AUTH_DIR)}\n"
-                f"  ytmusicapi browser\n"
-                f"and place the generated browser.json in "
-                f"{result.get('auth_dir', auth_setup.AUTH_DIR)}",
+                tr("cli.ym_no_terminal", auth_dir=result.get("auth_dir", auth_setup.AUTH_DIR)),
                 file=sys.stderr,
             )
             return 0
         print(
-            f"youtube_music: opened {auth_setup.AUTH_DIR} and a terminal - "
-            "run 'ytmusicapi browser' there and keep the generated "
-            "browser.json in that folder",
+            tr("cli.ym_opened_terminal", auth_dir=auth_setup.AUTH_DIR),
             flush=True,
         )
         return 0
@@ -916,9 +894,7 @@ def run_login(
         # flow that only the GUI login dialog drives (api key + secret, then
         # approve in the browser).  No useful non-interactive path.
         print(
-            "lastfm: GUI-only at the moment - open the app's Settings -> "
-            "Login/Accounts -> Last.fm, enter your API key + secret, and "
-            "approve the browser authorization",
+            tr("cli.lastfm_gui_only"),
             file=sys.stderr,
         )
         return 2
@@ -932,18 +908,16 @@ def run_login(
     # Spotify.  Flags override; missing values are prompted interactively
     # (hidden input for the secret and the token, like sudo).
     if not client_id:
-        client_id = _prompt("Client id: ")
+        client_id = _prompt(tr("cli.prompt_client_id"))
     if not client_secret:
-        client_secret = _prompt("Client secret: ", hidden=True)
+        client_secret = _prompt(tr("cli.prompt_client_secret"), hidden=True)
     if not refresh_token:
         stored = _stored_refresh_token()
-        prompt_value = _prompt("Refresh token (leave empty to reuse stored): ", hidden=True)
+        prompt_value = _prompt(tr("cli.prompt_refresh_token"), hidden=True)
         refresh_token = prompt_value or stored
     if not client_id or not client_secret or not refresh_token:
         print(
-            "error: client id, client secret and a refresh token are all "
-            "required (the refresh token comes from your Spotify app's "
-            "dashboard)",
+            tr("cli.credentials_required_spotify"),
             file=sys.stderr,
         )
         return 2
@@ -956,12 +930,11 @@ def run_login(
         client_id, client_secret, refresh_token
     )
     if result.get("ok"):
-        print(f"spotify: logged in as {result.get('display_name')}", flush=True)
+        print(tr("cli.login_ok_spotify", display_name=result.get("display_name")), flush=True)
         return 0
 
     print(
-        f"error: spotify login failed: {result.get('error')} "
-        "(existing credentials left untouched)",
+        tr("cli.login_failed_spotify", reason=result.get("error")),
         file=sys.stderr,
     )
     return 1
@@ -978,7 +951,7 @@ def run_logout(platform: str) -> int:
     known = get_default_registry().get_platform_ids()
     if platform not in known:
         print(
-            f"error: unknown platform '{platform}' (use {', '.join(known)})",
+            tr("cli.unknown_platform", platform=platform, options=", ".join(known)),
             file=sys.stderr,
         )
         return 2
@@ -989,36 +962,38 @@ def run_logout(platform: str) -> int:
         )
     except OSError as e:
         print(
-            f"error: failed to delete {platform} credentials: {e}",
+            tr("cli.delete_credentials_failed", platform=platform, error=e),
             file=sys.stderr,
         )
         return 1
 
     if deleted:
         print(
-            f"{platform}: logged out (deleted {', '.join(str(p) for p in deleted)})",
+            tr("cli.logged_out", platform=platform, deleted=", ".join(str(p) for p in deleted)),
             flush=True,
         )
     else:
-        print(f"{platform}: no credentials found", flush=True)
+        print(tr("cli.no_credentials", platform=platform), flush=True)
 
     n_registry = PlaylistStore.delete_playlists_for_platform(platform)
     if n_registry:
-        print(f"{platform}: removed {n_registry} playlist(s) from the registry")
+        print(f"{platform}: {trn('cli.removed_registry', n_registry)}")
 
     n_dbs = DatabaseManager.delete_platform_databases(platform)
     if n_dbs:
-        print(f"{platform}: deleted {n_dbs} local database file(s)")
+        print(f"{platform}: {trn('cli.deleted_dbs', n_dbs)}")
 
     # Drop the platform's pending duplicate-decisions and scrobble-ledger
     # records (matching integration_manager.uninstall_platform_data), so a
     # later login can't resurface stale decisions / unscrobbles for it.
     n_pending, n_songs, n_errors = duplicate_queue.purge_platform(platform)
     if n_pending or n_songs or n_errors:
-        print(
-            f"{platform}: purged {n_pending} pending duplicate decision(s), "
-            f"{n_songs} remembered song(s), {n_errors} error(s)"
-        )
+        items = [
+            trn("cli.purge_decisions", n_pending),
+            trn("cli.purge_songs", n_songs),
+            trn("cli.purge_errors", n_errors),
+        ]
+        print(f"{platform}: {', '.join(items)} {tr('cli.purged')}")
     scrobble_log.remove_platform_entries(platform)
     return 0
 
@@ -1061,13 +1036,14 @@ def run_install(platform: str) -> int:
         already = target_dir.is_dir()
         try:
             integration_manager.download_integration(pid)
+            action = tr("cli.install_status_updated") if already else tr("cli.install_status_installed")
             print(
-                f"{pid}: {'updated' if already else 'installed'} ({display})",
+                tr("cli.install_result", pid=pid, action=action, display=display),
                 flush=True,
             )
         except Exception as e:
             logger.exception("Install failed for %s", pid)
-            print(f"error: failed to install {pid}: {e}", file=sys.stderr)
+            print(tr("cli.install_failed", pid=pid, error=e), file=sys.stderr)
             failures.append(pid)
 
     if failures:
@@ -1106,8 +1082,7 @@ def run_uninstall(platform: str) -> int:
         registry = get_default_registry()
         if platform not in catalog and registry.get(platform) is None:
             print(
-                f"error: unknown platform '{platform}' "
-                f"(use {', '.join(catalog)})",
+                tr("cli.unknown_platform", platform=platform, options=", ".join(catalog)),
                 file=sys.stderr,
             )
             return 2
@@ -1118,17 +1093,17 @@ def run_uninstall(platform: str) -> int:
         registry = get_default_registry()
         plugin = registry.get(pid)
         if plugin is None and not (PluginRegistry().base_dir / pid).is_dir():
-            print(f"{pid}: not installed (nothing to uninstall)")
+            print(tr("cli.not_installed", pid=pid))
             continue
         try:
             report = integration_manager.uninstall_platform_data(
                 pid, plugin=plugin
             )
             parts = [
-                f"{report['credentials']} credential(s)",
-                f"{report['playlists']} playlist(s)",
-                f"{report['databases']} DB(s)",
-                f"{report['plugin_dirs']} folder(s)",
+                trn("cli.uninstall_credentials", report["credentials"]),
+                trn("cli.uninstall_playlists", report["playlists"]),
+                trn("cli.uninstall_dbs", report["databases"]),
+                trn("cli.uninstall_folders", report["plugin_dirs"]),
             ]
             print(
                 f"{pid}: uninstalled ({', '.join(parts)})",
@@ -1136,7 +1111,7 @@ def run_uninstall(platform: str) -> int:
             )
         except Exception as e:
             logger.exception("Uninstall failed for %s", pid)
-            print(f"error: failed to uninstall {pid}: {e}", file=sys.stderr)
+            print(tr("cli.uninstall_failed", pid=pid, error=e), file=sys.stderr)
             failures.append(pid)
 
     if failures:

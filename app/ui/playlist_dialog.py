@@ -12,6 +12,7 @@ import threading
 import tkinter as tk
 from queue import Empty, Queue
 from ui.scrollable import ScrollableFrame
+from utils.i18n import tr
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
 from utils.thumbnail import ThumbnailService
@@ -63,7 +64,7 @@ class PlaylistDialog:
 
         tk.Label(
             title_frame,
-            text="Select a Playlist below",
+            text=tr("playlist_picker.select_hint"),
             background=dialog_bg,
             foreground=label_fg,
             font=ui_font(12),
@@ -71,7 +72,7 @@ class PlaylistDialog:
 
         tk.Button(
             title_frame,
-            text="Close",
+            text=tr("common.close"),
             cursor="hand2",
             **close_btn,
             font=ui_font(12),

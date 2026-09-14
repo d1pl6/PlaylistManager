@@ -20,6 +20,7 @@ from services import duplicate_queue, scrobble_log
 from ui.card import PlaylistCard
 from ui.close_playlist_dialog import show_close_playlist_dialog
 from ui.tooltip import ToolTip
+from utils.i18n import tr, tr_status
 from utils.config import (
     REMOVE_PLAYLIST_DEFAULT_MODE,
     REMOVE_PLAYLIST_MODE_LABELS,
@@ -135,7 +136,7 @@ class CardGridManager:
 
         self.empty_state_btn = tk.Button(
             self._content_frame,
-            text="Click '+' to add a playlist",
+            text=tr("grid.empty_state"),
             cursor="hand2",
             **btn_colors(C["button_main_bg"], C["button_main_fg"]),
             font=ui_font(12),
@@ -313,7 +314,7 @@ class CardGridManager:
                 highlightthickness=0,
                 relief="raised",
             )
-            ToolTip(close_playlist, "Close playlist")
+            ToolTip(close_playlist, tr("card.close_playlist_tip"))
             self._close_buttons.append(close_playlist)
 
             # Pin/unpin toggle - sits immediately LEFT of the close button.
@@ -331,8 +332,8 @@ class CardGridManager:
                 ToolTip(
                     pin_btn,
                     lambda b=pin_btn: (
-                        "Unpin playlist" if getattr(b, "_pm_pinned", False)
-                        else "Pin playlist"
+                        tr("card.unpin_playlist") if getattr(b, "_pm_pinned", False)
+                        else tr("card.pin_playlist")
                     ),
                 )
             self._pin_buttons.append(pin_btn)
@@ -346,7 +347,7 @@ class CardGridManager:
                 readonlybackground=entry_playlist_ro_bg,
                 state="readonly",
             )
-            ToolTip(playlist_keybind, "Click to record a keybind")
+            ToolTip(playlist_keybind, tr("card.record_keybind_tip"))
 
             reload_database = tk.Button(
                 main_header_frame,
@@ -356,7 +357,7 @@ class CardGridManager:
                 highlightthickness=0,
                 relief="raised",
             )
-            ToolTip(reload_database, "Reload from platform")
+            ToolTip(reload_database, tr("card.reload_tip"))
 
             log_artist = tk.Label(
                 main_log_frame,
@@ -384,7 +385,7 @@ class CardGridManager:
             )
             log_status = tk.Label(
                 main_log_frame,
-                text="Waiting",
+                text=tr_status("waiting"),
                 font=ui_font(12),
                 background=label_playlist_good_bg,
                 foreground=label_playlist_good_fg,

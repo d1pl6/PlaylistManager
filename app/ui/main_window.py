@@ -29,6 +29,7 @@ from services.playlist_sync import PlaylistSyncService
 from services.song_manager import SongManager
 from utils.icons import IconService
 from utils.scaling import px, ui_font
+from utils.i18n import tr, tr_status
 from ui.activity_window import show_activity_window
 from ui.card_grid import CardGridManager
 from ui.search_manager import SearchManager
@@ -50,11 +51,6 @@ from utils.logging_config import user_log
 from utils.platform import is_wayland_session, x11_root_desktop_state
 
 logger = logging.getLogger(__name__)
-
-INTEGRATION_ERROR_MSG = (
-    "Add integrations following INTEGRATIONS.MD. "
-    "Check your internet connection and check if the API is down."
-)
 
 # Lightweight TCP targets for service-health probes (host, port).
 _PLATFORM_API_TARGETS: dict[str, tuple[str, int]] = {
@@ -148,7 +144,7 @@ class MainWindow:
         style = ttk.Style(self.root)
         style.theme_use("clam")
 
-        self.root.title("PlaylistManager")
+        self.root.title(tr("app.title"))
         self.root.configure(background=C["root_bg"])
         self.root.geometry(f"{px(650)}x{px(460)}")
         self.root.minsize(px(325), px(150))
@@ -355,7 +351,7 @@ class MainWindow:
                 on_plugins_changed=self._on_plugins_changed,
             ),
         )
-        ToolTip(self.btn_login, "Log in to music services")
+        ToolTip(self.btn_login, tr("main.tooltip_login"))
 
         add_playlist_img_path = assets_dir / "addPlaylist.png"
         self.add_playlist_img = IconService.get(add_playlist_img_path, 32)
@@ -368,7 +364,7 @@ class MainWindow:
             relief="raised",
             command=self._open_playlist_dialog,
         )
-        ToolTip(self.btn_add_playlist, "Add a playlist")
+        ToolTip(self.btn_add_playlist, tr("main.tooltip_add_playlist"))
 
         # Grid sort lives in the Settings dialog (App behavior section);
         # no header cluster (keeps the toolbar to login/add/activity/settings).
@@ -411,11 +407,11 @@ on_like_button_change=self._apply_like_button_visibility,
                 },
             ),
         )
-        ToolTip(self.btn_open_settings, "Settings")
+        ToolTip(self.btn_open_settings, tr("settings.title"))
 
         self.btn_activity = tk.Button(
             self._header_right,
-            text="Activity",
+            text=tr("main.activity"),
             cursor="hand2",
             **btn_header_colors,
             highlightthickness=0,
@@ -423,7 +419,7 @@ on_like_button_change=self._apply_like_button_visibility,
             font=ui_font(11),
             command=self._open_activity_window,
         )
-        ToolTip(self.btn_activity, "Errors and duplicate songs")
+        ToolTip(self.btn_activity, tr("main.tooltip_activity"))
         self.btn_activity.pack(side="left", padx=(0, 4))
         self.btn_open_settings.pack(side="left")
 
@@ -485,14 +481,14 @@ on_like_button_change=self._apply_like_button_visibility,
             win.destroy()
 
         win = tk.Toplevel(self.root)
-        win.title("Choose Platform")
+        win.title(tr("main.title_choose_platform"))
         win.configure(background=win_bg)
         win.transient(self.root)
         win.protocol("WM_DELETE_WINDOW", _do_cancel)
 
         tk.Label(
             win,
-            text="Select platform to fetch playlists from:",
+            text=tr("main.pick_platform_prompt"),
             background=win_bg,
             foreground=label_fg,
             font=ui_font(11),
@@ -512,7 +508,7 @@ on_like_button_change=self._apply_like_button_visibility,
 
         tk.Button(
             win,
-            text="Cancel",
+            text=tr("common.cancel"),
             **cancel_cols,
             highlightthickness=0,
             relief="raised",
@@ -543,7 +539,10 @@ on_like_button_change=self._apply_like_button_visibility,
         dialog.show(playlists)
 
     def _show_integration_error(self) -> None:
-        messagebox.showerror("Integration Error", INTEGRATION_ERROR_MSG)
+        messagebox.showerror(
+            tr("main.integration_error_title"),
+            tr("main.integration_error_msg"),
+        )
 
     def _on_uninstall_integration(self, platform_id: str) -> None:
         """Close every playlist card for *platform_id* (uninstall path).
@@ -572,12 +571,11 @@ on_like_button_change=self._apply_like_button_visibility,
                         platform_id,
                     )
                     if failure is None:
-                        failure = "one or more playlist cards could not be closed"
+                        failure = tr("main.uninstall_cards_failure")
         if failure:
             user_log(
                 logger,
-                "Uninstalling %s: %s - their keybinds/databases may remain",
-                platform_id, failure,
+                tr("main.uninstalling_cards_failed", platform=platform_id, reason=failure),
             )
 
     def _on_plugins_changed(self) -> None:
@@ -614,7 +612,7 @@ on_like_button_change=self._apply_like_button_visibility,
             card.playlist_id = playlist_id
 
             status_label = card.log_status
-            status_label.config(text="Sync", background=C["label_playlist_warn_bg"])
+            status_label.config(text=tr_status("sync"), background=C["label_playlist_warn_bg"])
 
             if thumb_url:
                 self.showcase.set_playlist_cover(card.cover_label, thumb_url, card=card)
@@ -679,9 +677,13 @@ on_like_button_change=self._apply_like_button_visibility,
         card = self.card_grid.cards[frame_idx]
         card.syncing = False
         if count > 0:
-            card.log_status.config(text="OK", background=C["label_playlist_good_bg"])
-        elif status_text == "Error":
-            card.log_status.config(text=status_text, background=C["label_playlist_error_bg"])
+            card.log_status.config(
+                text=tr_status("ok"), background=C["label_playlist_good_bg"]
+            )
+        elif status_text == "error":
+            card.log_status.config(
+                text=tr_status(status_text), background=C["label_playlist_error_bg"]
+            )
             # Persist for the activity window's Errors tab.
             try:
                 duplicate_queue.record_error(
@@ -690,7 +692,9 @@ on_like_button_change=self._apply_like_button_visibility,
             except Exception:
                 logger.debug("Could not log import error", exc_info=True)
         else:
-            card.log_status.config(text=status_text, background=C["label_playlist_warn_bg"])
+            card.log_status.config(
+                text=tr_status(status_text), background=C["label_playlist_warn_bg"]
+            )
         self.showcase.update_log_labels_from_db(
             frame_idx, playlist_name, card.platform
         )
@@ -752,7 +756,9 @@ on_like_button_change=self._apply_like_button_visibility,
                 pass
 
         def on_status(text: str, background: str) -> None:
-            _set(card.log_status, text=text, background=background)
+            # Known status codes render translated ("added" -> tr'd text);
+            # opaque flow/plugin messages pass through unchanged.
+            _set(card.log_status, text=tr_status(text), background=background)
 
         def on_song_info(artist: str, name: str) -> None:
             _set(card.log_artist, text=artist)
@@ -821,7 +827,7 @@ on_like_button_change=self._apply_like_button_visibility,
             n = 0
         try:
             self.btn_activity.configure(
-                text="Activity" if not n else f"Activity ({n})"
+                text=tr("main.activity") if not n else tr("main.activity_count", n=n)
             )
         except tk.TclError:
             pass
@@ -1829,7 +1835,7 @@ on_like_button_change=self._apply_like_button_visibility,
             self.search.dismiss()
 
         status_label = card.log_status
-        status_label.config(text="Sync", background=C["label_playlist_warn_bg"])
+        status_label.config(text=tr_status("sync"), background=C["label_playlist_warn_bg"])
 
         # Disable the reload button for this card during the sync to
         # prevent double-clicks; re-enabled in _on_reload_done.
@@ -1949,7 +1955,7 @@ on_like_button_change=self._apply_like_button_visibility,
     def _on_connectivity_result(self, ok: bool) -> None:
         self._set_warning(
             "connectivity",
-            None if ok else "No internet connection",
+            None if ok else tr("main.warning_no_internet"),
         )
         # Schedule the next probe.
         try:
@@ -2008,7 +2014,7 @@ on_like_button_change=self._apply_like_button_visibility,
             else:
                 integration = self.integrations.get(platform)
                 name = integration.display_name if integration else platform
-                self._set_warning(key, f"{name} service is unreachable")
+                self._set_warning(key, tr("main.service_unreachable", name=name))
         self._reschedule_service_check()
 
     def _reschedule_service_check(self) -> None:

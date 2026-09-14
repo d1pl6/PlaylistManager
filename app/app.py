@@ -16,6 +16,7 @@ from utils.window import center_window, restore_window_geometry, save_window_geo
 from utils import updater
 from utils.config import get_setting, get_setting_value, set_setting_value
 from utils.logging_config import user_log
+from utils import i18n
 from utils import scaling
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,10 @@ class App:
         # settings + display Xft.dpi, which every ui_font()/px()/IconService
         # call reads afterwards (see utils/scaling.py).
         scaling.init(self.root)
+        # Pick the UI language before any widget exists (English by default;
+        # translations live under cfg/i18n/<lang>.ini, see utils/i18n.py).
+        # This runs once at startup - the setting is restart-only by design.
+        i18n.set_language(get_setting_value("language", "lang", "en"))
         # Default font for any widget that doesn't set its own font (entries,
         # dialogs, ...). Under a manual profile TkDefaultFont would keep
         # following the display Xft.dpi while the rest of the UI follows the
@@ -119,9 +124,7 @@ class App:
             # gracefully exactly like the pre-plugin code did.
             user_log(
                 logger,
-                "%s integration unavailable (%s)",
-                plugin.display_name,
-                e,
+                i18n.tr("service.integration_unavailable", name=plugin.display_name, error=e),
             )
             return False
         except Exception as e:
@@ -135,9 +138,7 @@ class App:
             except ImportError as e:
                 user_log(
                     logger,
-                    "%s integration unavailable (%s)",
-                    plugin.display_name,
-                    e,
+                    i18n.tr("service.integration_unavailable", name=plugin.display_name, error=e),
                 )
                 return False
             except Exception as e:
@@ -183,7 +184,7 @@ class App:
             if pid in self.integrations.get_all():
                 continue
             if self._register_plugin(plugin):
-                user_log(logger, "%s integration loaded", plugin.display_name)
+                user_log(logger, i18n.tr("service.integration_loaded", name=plugin.display_name))
 
     def _bootstrap_auth(self) -> None:
         """Initial authentication for every registered integration.
@@ -204,7 +205,7 @@ class App:
         if yt_integration is not None and yt_integration.auth_manager is not None:
             try:
                 if yt_integration.authenticate():
-                    user_log(logger, "YouTube Music authenticated")
+                    user_log(logger, i18n.tr("app.authenticated", name="YouTube Music"))
                 else:
                     logger.warning("YouTube Music not configured (no browser.json)")
             except ImportError as e:
@@ -212,16 +213,14 @@ class App:
                 # dependency disables the integration quietly (log, no modal).
                 user_log(
                     logger,
-                    "ytmusicapi not installed - YouTube Music integration "
-                    "disabled (%s)",
-                    e,
+                    i18n.tr("service.ytmusicapi_missing", error=e),
                 )
             except Exception as e:
                 yt_integration.yt_client = None
                 logger.error("YouTube Music auth failed: %s", e)
                 messagebox.showwarning(
                     "YouTube Music",
-                    f"YouTube Music authentication failed:\n{e}",
+                    i18n.tr("app.ym_auth_failed", error=e),
                 )
 
         lf_integration = self.integrations.get("lastfm")
@@ -231,7 +230,7 @@ class App:
             # YouTube Music).  An unconfigured plugin returns False quietly.
             try:
                 if lf_integration.authenticate():
-                    user_log(logger, "Last.fm authenticated")
+                    user_log(logger, i18n.tr("app.authenticated", name="Last.fm"))
                 else:
                     logger.debug("Last.fm not configured (no lastfm.json)")
             except Exception as e:
@@ -259,7 +258,7 @@ class App:
                     # No login/refresh landed in the meantime - safe to swap.
                     sp_integration.spotify_api = api
                 if ok:
-                    user_log(logger, "Spotify authenticated")
+                    user_log(logger, i18n.tr("app.authenticated", name="Spotify"))
 
             try:
                 self.root.after(0, _apply)
@@ -348,7 +347,7 @@ class App:
                     )
                     ok = False
                 if ok:
-                    user_log(logger, "%s re-authenticated", integration.display_name)
+                    user_log(logger, i18n.tr("app.reauthenticated", name=integration.display_name))
                     refreshed_ids.append(integration.id)
                 else:
                     logger.error("%s re-authentication failed", integration.display_name)
@@ -391,7 +390,7 @@ class App:
         """
         def on_result(available, latest_version=None, download_url=None, body=None, error=None):
             if available:
-                user_log(logger, "Update v%s available at %s", latest_version, download_url)
+                user_log(logger, i18n.tr("app.update_available", version=latest_version, url=download_url))
                 try:
                     self.root.after(0, show_update_dialog, self.root, latest_version, download_url, body)
                 except Exception:
@@ -403,7 +402,7 @@ class App:
                 # No modal: an offline/blocked network at startup would pop
                 # an unavoidable dialog on every launch.  USER level keeps
                 # it visible in normal runs without stealing focus.
-                user_log(logger, "Update check failed: %s", error)
+                user_log(logger, i18n.tr("app.update_check_failed", error=error))
 
             if on_done:
                 try:
@@ -423,7 +422,7 @@ class App:
         """
         tray = TrayService()
         if not tray.available:
-            user_log(logger, "Tray unavailable - hide-to-tray disabled")
+            user_log(logger, i18n.tr("app.tray_unavailable"))
             self.main_window.tray_service = None
             return
 
@@ -496,7 +495,7 @@ class App:
             if start_hidden and getattr(self, "_tray_service", None) is None:
                 user_log(
                     logger,
-                    "Start-in-tray requested but the tray is unavailable - showing the window",
+                    i18n.tr("app.start_in_tray_unavailable"),
                 )
                 self.root.deiconify()
             # Kick off the update check here, immediately before the

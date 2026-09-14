@@ -18,6 +18,7 @@ uses the new palette.
 
 import tkinter as tk
 
+from utils.i18n import tr
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
 from utils.window import center_window
@@ -41,7 +42,7 @@ def show_close_playlist_dialog(
 
     win = tk.Toplevel(parent)
     win.withdraw()
-    win.title("Close Playlist")
+    win.title(tr("close_dialog.title"))
     win.configure(background=win_bg, padx=px(12), pady=px(10))
     win.transient(parent)
 
@@ -52,7 +53,7 @@ def show_close_playlist_dialog(
 
     tk.Label(
         win,
-        text=f'Close playlist "{playlist_name}"?',
+        text=tr("close_dialog.ask", name=playlist_name),
         background=win_bg,
         foreground=label_fg,
         font=ui_font(11),
@@ -61,8 +62,7 @@ def show_close_playlist_dialog(
 
     tk.Label(
         win,
-        text="Keep DB keeps the local song cache; Confirm deletes "
-        "the playlist and its database.",
+        text=tr("close_dialog.explain"),
         background=win_bg,
         foreground=label_fg,
         font=ui_font(9),
@@ -75,7 +75,7 @@ def show_close_playlist_dialog(
 
     cancel_btn = tk.Button(
         btn_row,
-        text="Cancel",
+        text=tr("common.cancel"),
         cursor="hand2",
         **btn_colors(C["button_main_bg"], C["button_main_fg"]),
         font=ui_font(10),
@@ -88,7 +88,7 @@ def show_close_playlist_dialog(
 
     tk.Button(
         btn_row,
-        text="Keep DB",
+        text=tr("close_dialog.keep_db"),
         cursor="hand2",
         **btn_colors(C["button_save_bg"], C["button_save_fg"]),
         font=ui_font(10),
@@ -100,7 +100,7 @@ def show_close_playlist_dialog(
 
     tk.Button(
         btn_row,
-        text="Confirm",
+        text=tr("close_dialog.confirm"),
         cursor="hand2",
         **btn_colors(C["button_close_bg"], C["button_close_fg"]),
         font=ui_font(10),

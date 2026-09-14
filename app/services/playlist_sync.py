@@ -57,12 +57,12 @@ class PlaylistSyncService:
         """
         if not playlist_id:
             logger.warning("No playlist_id for '%s', skipping import", playlist_name)
-            on_done(playlist_name, 0, "No tracks")
+            on_done(playlist_name, 0, "no_tracks")
             return
 
         if self.integrations.get(platform) is None:
             logger.warning("No integration for platform '%s'", platform)
-            on_done(playlist_name, 0, "Error")
+            on_done(playlist_name, 0, "error")
             return
 
         def _run() -> None:
@@ -76,7 +76,7 @@ class PlaylistSyncService:
                 on_done(playlist_name, inserted, status)
             except Exception as e:
                 logger.error("Import failed for '%s': %s", playlist_name, e)
-                on_done(playlist_name, 0, "Error")
+                on_done(playlist_name, 0, "error")
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -106,12 +106,12 @@ class PlaylistSyncService:
         """
         if not playlist_id:
             logger.warning("No playlist_id for '%s', cannot reload", playlist_name)
-            on_done(playlist_name, 0, "No tracks", None)
+            on_done(playlist_name, 0, "no_tracks", None)
             return
 
         integration = self.integrations.get(platform)
         if integration is None:
-            on_done(playlist_name, 0, "Error", None)
+            on_done(playlist_name, 0, "error", None)
             return
 
         def _run() -> None:
@@ -131,7 +131,7 @@ class PlaylistSyncService:
                 on_done(playlist_name, inserted, status, thumb_url)
             except Exception as e:
                 logger.error("Reload failed for '%s': %s", playlist_name, e)
-                on_done(playlist_name, 0, "Error", None)
+                on_done(playlist_name, 0, "error", None)
             finally:
                 if lock_gate is not None:
                     lock_gate.release()
@@ -164,7 +164,7 @@ class PlaylistSyncService:
 
         tracks = integration.get_playlist_tracks(playlist_id)
         if not tracks:
-            return 0, "No tracks"
+            return 0, "no_tracks"
         # The platform may have been uninstalled while the fetch was in
         # flight - a Manage-dialog uninstall deletes db/<platform>/ and this
         # call would otherwise silently recreate it.  Abort like a dead
@@ -175,7 +175,7 @@ class PlaylistSyncService:
         inserted = sm.add_songs_bulk(
             playlist_name, tracks, platform=platform, playlist_id=playlist_id
         )
-        return inserted, f"{inserted} new"
+        return inserted, "ok"
 
     def reload_database_sync(
         self,
@@ -245,14 +245,14 @@ class PlaylistSyncService:
             PlaylistStore.update_thumbnail(playlist_name, platform, thumb_url)
 
         if not tracks:
-            return 0, "No tracks", thumb_url
+            return 0, "no_tracks", thumb_url
 
         sm = SongManager()
         inserted = sm.add_songs_bulk(
             playlist_name, tracks, platform=platform, playlist_id=playlist_id
         )
 
-        return inserted, f"{inserted} new", thumb_url
+        return inserted, "ok", thumb_url
 
     @staticmethod
     def prefer_library_thumbnail(

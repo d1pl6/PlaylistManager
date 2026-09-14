@@ -10,15 +10,22 @@ live in docstrings.
 
 | Question | File |
 |---|---|
-| Who imports module X? What does X import? | [modules.md](modules.md) |
+| Where is file X? Who imports module X? What does X import? | [modules.md](modules.md) |
 | What keys does plugin.json need? Who reads each key? | [plugins.md](plugins.md) |
 | How does feature Y work end to end? | [flows.md](flows.md) |
+| Where does app data live? What is profile-aware? | [data-paths.md](data-paths.md) |
+| How do colors work? How do I add a color? | [theming.md](theming.md) |
+| Which settings exist in cfg/settings.ini? | [config.md](config.md) |
+| What are the threading / root.after / pynput rules? | [threading.md](threading.md) |
+| How does Wayland / the system tray behave? | [environment.md](environment.md) |
+| How do I translate the app / add a language? | [i18n.md](i18n.md) |
 
 Other documentation lives elsewhere on purpose:
 
-- `AGENTS.md` (repo root): run commands, environment quirks, threading /
-  Wayland / tray gotchas. Operational rules. This folder does not repeat
-  them, it links instead.
+- `AGENTS.md` (repo root): run commands, testing, filesystem, and the
+  condensed operational rules — each topic links to the per-topic file
+  above for the full detail. This folder holds that detail; it does not
+  repeat the rule summaries.
 - `README.MD`: user guide. `CLI.MD`: cli and global install guides.
   `INTEGRATIONS.MD`: per-platform setup for users.
 - Each integration documents its own internals in its own repository.
@@ -53,6 +60,7 @@ at the bottom of [modules.md](modules.md).
 
 Update the relevant file in the same commit as the code change: a moved
 or renamed module edits `modules.md`, a new manifest key edits
-`plugins.md`, a changed call chain edits `flows.md`. Entries stay at one
+`plugins.md`, a changed call chain edits `flows.md`. A new topic doc
+registers in this README's navigation table. Entries stay at one
 line per fact. If a fact needs a paragraph, it belongs in the module's
 docstring, not here.

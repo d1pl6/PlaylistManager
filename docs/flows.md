@@ -2,7 +2,7 @@
 
 Traces of the main call chains, named file by file. Threads crossing into
 tkinter always marshal with guarded `root.after(0, ...)` calls; the guard
-pattern and its reasons are documented in AGENTS.md (threading section)
+pattern and its reasons are documented in [threading.md](threading.md)
 and are not repeated per step here.
 
 ## 1. Startup (`python main.py` or `python -m app`)
@@ -40,7 +40,7 @@ and are not repeated per step here.
    falls back to recently-played.
 4. `flow.execute_flow(...)`: the platform API add runs FIRST. A False
    return or missing playlist id raises, fires `on_error`, and nothing is
-   written locally (invariant in AGENTS.md "Add-flow invariant").
+   written locally (invariant in [plugins.md](plugins.md) "Integration quirks").
 5. Success writes through `SongManager` into
    `db/platform/<sanitized>_<hash8>.db`, then callbacks reach the UI via
    `root.after(0, ...)`.
@@ -122,7 +122,7 @@ cached handle, worker re-fetches and rebuilds songs, UI refreshes via
 ## 7. Quit
 
 `App.quit_app` -> cleanup chain: `kc.stop_listener(wait=False)` (never
-join the pynput thread; AGENTS.md threading section), tray stop,
+join the pynput thread; [threading.md](threading.md)), tray stop,
 `MainWindow.cleanup`, `root.destroy`. Worker threads holding pending
 `root.after` calls swallow the resulting TclError/RuntimeError.
 
@@ -172,7 +172,7 @@ synchronously by reading `lastfm.json` (no network); a login/refresh
 
 Profile data paths are module-level constants bound on first import, so a
 profile change **must** restart the app (see ``services/profile_store.py``
-and AGENTS.md "Key data paths"). The active
+and [data-paths.md](data-paths.md)). The active
 name is read by `services/profile_store.initialize()` during
 `utils/config.py` import, before `App.__init__` runs.
 

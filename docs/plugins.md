@@ -25,7 +25,7 @@ on `sys.path`.
 | `login_module` / `login_class` | no | `PluginInfo.import_login()` -> `ui.login_ui` | a callable `(parent, on_success)` that renders the platform's login tile; lets a downloaded plugin get a login tile with no core change. Without it the login dialog uses its built-in handler for the three bundled platforms. |
 | `login_logo` | no | `PluginInfo.login_logo_path` / `logo_path` -> `ui.login_ui`, `ui.manage_integrations_ui` | logo file relative to the plugin directory, overriding the standard `logo.png`; see the logo convention below. Software that ships the standard `logo.png` omits it. Falls back to a generic placeholder. |
 | `receiver_module` / `receiver_class` | extension-type (and hybrid add-flow platforms) | `PluginInfo.import_receiver_class()` / `build_receiver(**kwargs)` | receiver manager handed to the flow. `KeybindController._ensure_initialized` builds it for ANY plugin that declares a `receiver_class` (not just `flow_type == "extension"`), so a `flow_type: "api"` platform like SoundCloud can still receive a browser-extension receiver for a hybrid capture path. |
-| `receiver_port` | extension/hybrid | `PluginInfo.build_receiver()` | localhost port for the URL receiver. Pinned jointly with the browser extension's manifest; see AGENTS.md "URL receiver" |
+| `receiver_port` | extension/hybrid | `PluginInfo.build_receiver()` | localhost port for the URL receiver. Pinned jointly with the browser extension's manifest; see [URL receiver protocol](#url-receiver-protocol) |
 | `url_hosts` | no | `services.playlist_url.parse_playlist_url()` | hosts whose URLs resolve to this platform. Hosts are matched against the shared URL shapes (query/path/URI); a platform with path-form URLs (every path on the host is a resource URL, SoundCloud) opts in via core's `_PATH_FORM_PLATFORMS` set, and the stored id is the URL path (`user/sets/slug`), resolved through the platform's `/resolve` on first use |
 | `playlist_url_template` | no | `services.playlist_url.build_playlist_url()` | browseable playlist URL template with `{host}` / `{id}` placeholders. The manifest is the single source of URL shapes, no core fallback list exists |
 | `song_url_template` | no | `services.playlist_url.build_song_url()` | browseable song URL template, same placeholders |
@@ -59,6 +59,39 @@ generic placeholder.
 5. CLI uses the same lazy resolution via `cli._init_platform` and the
    `get_default_registry()` singleton (also the fallback inside
    `parse_playlist_url` when no registry is passed).
+
+## Integration quirks
+
+Core-relevant behavior of the bundled platforms. Per-platform internals
+beyond these stay in each plugin's own repository.
+
+- **YouTube Music auth**: Expects `browser.json` from `ytmusicapi browser` command. Searched in platformdirs auth folder, then two fallback locations. The `ytmusicapi.get_library_playlists` method gets an instance-level MethodType patch with a fallback implementation installed on each client at auth time (`youtube_music.py`, NOT at import time). On macOS, "open terminal" uses AppleScript (`utils/platform.py`) — do not change it back to `open -a Terminal <dir>`, which opens Finder.
+- **Spotify auth**: Expects `spotify.json` with `client_id`, `client_secret`, `refresh_token`. Tokens are auto-refreshed; new refresh tokens are persisted back to disk. **All writes go through `save_spotify_credentials_file()` in `spotify.py`** (600 perms) — don't duplicate the write logic in new code.
+- **Add-flow invariant**: the keybind flows (`integrations/*/flow.py`) add to the **platform API first** and abort on failure — a `False` return or missing playlist ID raises, `on_error` fires, and the song is **never** written only to the local DB. Keep this ordering; a platform failure must not leave a "successful" local entry.
+- **Uninstall ordering (login window → Manage)**: `ui/manage_integrations_ui.py` orchestrates, `services/integration_manager.uninstall_platform_data()` does the disk work ("with database, etc."). The order is fixed: close the platform's playlist cards first (per-card keybind unregister + store entry + song DB via `close_main_frame`), then stop the flow/receiver (`KeybindController.update_credentials(refreshed_ids=[platform])`), then unregister the live `PluginRegistry`/`IntegrationRegistry` objects, and only then delete credentials, registry entries, `db/<platform>/`, and duplicate-queue records. Reversing it lets a live listener or flow resurrect the platform mid-cleanup.
+- **Spotify flow**: Uses `GET /me/player/currently-playing` instead of URL receiver — no local server needed.
+- **ytmusicapi is optional**: the plugin flow modules use `from __future__ import annotations` so they import without `ytmusicapi` installed (the import happens lazily inside methods). Don't add a top-level `from ytmusicapi import ...` in service-layer files either.
+
+### URL receiver protocol
+
+The YouTube Music flow starts a **plain HTTP** Flask server on `localhost`
+(port from `plugin.json` `"receiver_port"`, fallback `DEFAULT_RECEIVER_PORT` in
+the receiver module). Short-lived (only while waiting for a URL, ~30 s).
+Pull-based protocol, **token-authenticated**:
+
+1. Flow controller starts the server and calls `set_waiting(True)`; the server generates a fresh per-flow token.
+2. Extension polls `GET /status` → `{"ready": true, "token": "..."}`.
+3. Extension POSTs `/receive-url` with header `X-PM-Token: <token>`.
+4. Server validates the token (403 otherwise), consumes the URL, shuts down.
+
+CORS is restricted to `https://music.youtube.com`. **The port is pinned in two
+places that must stay in sync**: `integrations/youtube_music/plugin.json`
+`"receiver_port"` (Python side; `PluginInfo.build_receiver()` passes it to the
+receiver) and
+`integrations/youtube_music/youtube-music-extension/manifest.json`
+`host_permissions` (extension side). `content.js` derives its candidate server
+URLs from the manifest at runtime (`chrome.runtime.getManifest()`) — no
+hardcoded port there.
 
 ## Service-only plugins (no add-flow)
 

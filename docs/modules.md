@@ -11,6 +11,86 @@ To regenerate the raw edge list while updating this file:
 grep -rn "^from \|^import " app/ --include="*.py"
 ```
 
+## Layout at a glance
+
+The annotated file tree. One line per file; the dependency tables below add
+"Used by"/"Uses" per module, and [flows.md](flows.md) traces the call chains.
+
+```
+main.py                  # root launcher (inserts repo root, delegates to app.main)
+theme.txt                # palette spec: short key names, 1:1 with THEME_MAP (see theming.md)
+app/
+  main.py                # CLI entry point + argparse (works because it's inside app/)
+  cli.py                 # headless CLI implementation (-a, -p add/del/ref, --list, --login/--logout; see CLI.MD)
+  __main__.py            # enables `python -m app`
+  app.py                 # App class: bootstraps tkinter, auth, plugin discovery
+  plugin_loader.py       # PluginRegistry — scans integrations/*/plugin.json, lazy class refs
+  _version.py            # single source of version (pyproject.toml reads it)
+  i18n/                  # bundled translation catalogs (per-language .ini; user catalogs live in cfg/i18n/ — see i18n.md)
+  controllers/
+    app_controller.py      # quit, refresh auth; force-quit dialog
+    keybind_controller.py  # pynput global/local listener loop, dispatches flows (plugin-driven)
+    keybind_registry.py    # KeybindRegistry — hotkey -> playlist mapping (UI-driven)
+    playlist_controller.py # "add playlist" workflow orchestration (no widget code)
+  services/
+    integration.py         # BaseIntegration, IntegrationRegistry, BaseFlowController protocol
+    profile_store.py       # profiles: active-profile metadata + the single path resolver (db_dir/cfg_dir/auth_dir — see data-paths.md)
+    duplicate_check.py     # near-duplicate matcher + shared add-path policy (resolve_near_duplicate)
+    duplicate_queue.py     # db/extra.json: pending decisions, pair memory, error log
+    scrobble_log.py        # db/scrobbles.json: the accepted scrobble timestamp per (platform, playlist_id, song_id) so remove-song deletes THAT scrobble
+    playlist_sync.py       # PlaylistSyncService — threaded import/reload
+    playlist_store.py      # reads/writes db/playlists.json (thread-safe, TTL cache)
+    playlist_url.py        # parse_playlist_url — host table from manifests, shared URL shapes
+    song_manager.py        # SQLite CRUD per-playlist (songs table)
+    database.py            # DatabaseManager — per-playlist .db files under db/platform/, per-thread conn cache
+    auth_setup.py          # YT/Spotify/Last.fm/SoundCloud/Deezer credential setup, verification, deletion
+    integration_manager.py # download/uninstall platform plugins ("with database, etc." — see plugins.md "Integration quirks")
+    tray.py                # TrayService — pystray wrapper, optional (see environment.md)
+  ui/
+    main_window.py          # composition root: toolbar, card grid, search, showcase rows, dialog wiring; Activity window host (badge, decision dispatcher)
+    card_grid.py            # CardGridManager — grid of playlist cards; per-card actions (keybind capture, remove, reload)
+    card.py                 # PlaylistCard dataclass + card widget
+    showcase_manager.py     # last-N-added-songs row per card (cfg [showcase] count, default "0" = off); song-aware thumb fetch + cache-mode prune
+    search_manager.py       # search bar filtering the grid
+    activity_window.py      # non-modal Errors log + duplicate-decision window (hide-on-close singleton)
+    playlist_dialog.py      # playlist picker (async thumbnails)
+    scrollable.py           # ScrollableFrame — reusable Canvas+Scrollbar+mousewheel container; use it for any new scrollable window
+    login_ui.py             # first-run login dialog + per-platform tiles; "Manage" button
+    manage_integrations_ui.py  # download/uninstall dialog for platform plugins (uninstall orchestration, see plugins.md "Integration quirks")
+    settings_ui.py          # Settings dialog (booleans, ui_scale, columns, font family, thumbnails mode + clear-cache button, duplicate-check, profiles section)
+    settings_theme_ui.py    # theme picker Toplevel, writes cfg/theme.ini directly
+    profiles_ui.py          # profile create/rename/bucket-edit dialogs (uses services/profile_store.py)
+    updater_ui.py, tooltip.py, close_playlist_dialog.py
+  utils/
+    config.py              # SETTINGS_PATH, THEME_PATH, DEFAULT_THEME, THUMBNAIL_MODES, ensure_settings_file(), ensure_theme_file() (see config.md)
+    i18n.py                # tr()/trn()/tr_status(), DEFAULT_STRINGS, set_language() — the translation engine (see i18n.md)
+    theme.py               # central theme palette: THEME_MAP, C dict, load_theme() (see theming.md)
+    thumbnail.py           # ThumbnailService — fetch_image()/fetch_song_image() (any thread), to_photoimage() (main thread only); data-saver modes + on-disk cache (see data-paths.md; modes see config.md)
+    scaling.py             # HiDPI: init(root), ui_font(), px() — single source of scale factor
+    icons.py               # IconService — PIL-resized PhotoImages, LANCZOS + cache, main-thread-only
+    key_mapping.py         # pynput key normalization/parsing
+    platform.py            # get_terminal_command (per-OS shell command for ytmusicapi browser), is_wayland_session()
+    window.py              # pure geometry: center_window, resize_window, fit_window_to_screen, window-geometry persistence (save/restore + validation)
+    updater.py             # GitHub release version check
+    logging_config.py      # root logger setup, --verbose/--debug/--trace levels
+
+integrations/              # platform plugins (0.3.0 step 1) — each dir is a separate repo (gitignored), declared by plugin.json; the working tree ships deezer/, lastfm/, soundcloud/, spotify/, youtube_music/ (the two below show the full layout)
+  youtube_music/
+    plugin.json                 # id/display_name/auth_file/auth_file_fallbacks/url_hosts/flow_type/receiver_port/login_module/login_class/login_logo/url templates/class refs; logo.png in the dir root is the standard logo (PluginInfo.logo_path); imports use the DIR name
+    youtube_music.py            # YouTubeAuthManager, ytmusicapi monkey-patch
+    youtube_music_receiver.py   # Flask HTTP receiver (localhost:5000) — pull-based URL protocol
+    integration.py              # YouTubeMusicIntegration (BaseIntegration subclass)
+    flow.py                     # YouTubeMusicFlow (BaseFlowController) + capture() for CLI batch mode
+    youtube-music-extension/    # Firefox browser extension (Manifest V3, gecko-only) — lives inside its plugin
+      manifest.json
+      content.js                 # Polls server /status, sends URL with X-PM-Token when ready; server URL derives from manifest host_permissions
+  spotify/
+    plugin.json
+    spotify.py                  # SpotifyAuthManager, SpotifyAPI (OAuth refresh flow), save_spotify_credentials_file()
+    integration.py              # SpotifyIntegration
+    flow.py                     # SpotifyFlow
+```
+
 ## Entry points and bootstrap
 
 | File | Role | Used by | Uses |
@@ -78,6 +158,7 @@ grep -rn "^from \|^import " app/ --include="*.py"
 | File | Role | Used by | Uses |
 |---|---|---|---|
 | `config.py` | `SETTINGS_PATH`/`THEME_PATH` (profile-aware via `profile_store.cfg_dir()`; imported first so the active profile is initialised before paths bind), `DEFAULT_SETTINGS`/`DEFAULT_THEME`, `ensure_*_file()`, `get_setting(_value)`, `THUMBNAIL_MODES` (valid `[thumbnails] mode` keys, other values fall back to `off`), `REMOVE_PLAYLIST_MODES`/`REMOVE_PLAYLIST_MODE_LABELS` (valid `[remove_playlist] default` keys + Settings labels, other values fall back to `remove`), `GRID_SORT_KEYS`/`GRID_SORT_KEY_LABELS`/`GRID_SORT_DIRECTIONS` + defaults (valid `[grid_sort] key`/`direction` values, other values fall back to `name`/`asc`; `show_pin_buttons` gates the per-card pin buttons), named-theme CRUD: `THEMES_DIR` (`cfg/themes/`, one full-palette INI per saved theme), `list_themes()`/`save_theme()`/`apply_theme()`/`delete_theme()`/`rename_theme()` with `_NAME_RE`-style validation and reserved built-in names ("Default theme"/"White Theme") | most modules (theme, scaling, key_mapping, updater, settings dialogs, main_window, app.app, thumbnail) | `services.profile_store` |
+| `i18n.py` | `tr(key, **fmt)`/`trn(key, count)` translation lookup (.format only when args passed; loader order user file -> bundled file -> English `DEFAULT_STRINGS` in code -> the key, so a stale key never raises), `set_language()`/`ensure_i18n_file()` (merge-missing-keys, preserves translator work, "en" needs no file), `available_languages()` (feeds the Settings picker), `language_display(code)` (native names for the picker; unknown codes fall back to the code) / `language_code_for(display)` (reverse map), `tr_status(code)` (renders `CARD_STATUS_KEYS` codes via `card_status.*` rows; opaque plugin/flow messages pass through unchanged). Translation maintenance: `tools/i18n_report.py` (`export` writes the full English template `app/i18n/example.ini` from `DEFAULT_STRINGS`; `diff <lang>` reports still-English rows against the resolved bundled<-user catalog as missing/placeholder/identity buckets, `--list`/`--write-missing=FILE`/`--strict`) — see docs/i18n.md; `tests/test_i18n_tool.py` pins the template to the code defaults. Catalogs: user `cfg/i18n/<lang>.ini` (profile-aware, self-healing) over bundled `app/i18n/<lang>.ini`; plurals via `<key>.one`/`<key>.other` + `{count}`. `[language] lang` setting applied at startup - change needs a restart. Card statuses are stable IDs on the wire (`keybind_controller`/`playlist_sync` emit e.g. `"error"`/`"no_tracks"`, never English text; UI compares/renders the codes). 0.3.x migration: every user-facing literal in `app/` goes through `tr()`/`trn()` (~680 call sites, catalog ~410 keys, domain-namespaced `common.*`/`settings.*`/`cli.*`/`main.*`/`card.*`/`activity.*`/`theme.*`/...); value-keyed combobox labels resolve per stored-key rows (`settings.sort_key_*`, `settings.thumbnail_mode_*`, `settings.removal_mode_*`) so both the displayed items and the label->key reverse-map stay translated consistently (raw sort/mode keys stay untranslated data); escaped `%%` in INI writes (BasicInterpolation unwraps on read). Count-bearing strings all use `trn()` (CLI removal/purge/uninstall reports, showcase stats, `-p ref`/import notes); the manage-integrations footer and the CLI uninstall report join `trn()` item rows into one sentence template per case; `user_log` calls are lazy (pre-formatted `tr()`/`trn()` result, no `%`-style args). Bundled example catalog `app/i18n/de.ini` (read-only). Deferred: plugin/flow messages (translates at the flow->UI boundary), live re-apply (restart-only) | `app.app` (startup), `keybind_controller`, `playlist_sync`, `main_window`, `card_grid`, `showcase_manager`, `cli`, every migrated UI/CLI call site | `utils.config`, `services.profile_store` |
 | `theme.py` | `THEME_MAP`, flat dict `C`, `load_theme()`, `btn_colors()` | every UI module, `app_controller`, `keybind_controller` | `utils.{config,scaling}` |
 | `scaling.py` | `init(root)` / `ui_font()` / `px()`: single source of scale factor and font family; must run before any widget; validates font family against `tk.font.families()` at startup | `app.app` (first), then icons, theme, all UI | `utils.config` |
 | `icons.py` | `IconService`: PIL-resized PhotoImages, LANCZOS + cache, main-thread only | `login_ui`, `main_window`, `showcase_manager` | `utils.scaling` |
@@ -97,7 +178,7 @@ Core touchpoints, for orientation when reading a plugin repo:
 |---|---|
 | `<plat>/integration.py` | subclass of `BaseIntegration`; instantiated in `App.__init__` with `auth_manager=` |
 | `<plat>/flow.py` | subclass of `BaseFlowController`; ctor takes the integration plus `SongManager` (a plugin declaring `receiver_class` also gets the receiver - not just extension-type; SoundCloud receives it so its hybrid mode can prefer the browser extension); implements `execute_flow` and `capture(timeout)` for CLI batch mode |
-| `youtube_music/youtube_music_receiver.py` | Flask receiver on localhost, token-authenticated; port pinned jointly with the extension manifest (see AGENTS.md) |
+| `youtube_music/youtube_music_receiver.py` | Flask receiver on localhost, token-authenticated; port pinned jointly with the extension manifest (see plugins.md "URL receiver protocol") |
 | `spotify/spotify.py` | owns credential writes via `save_spotify_credentials_file()`; `auth_setup` delegates to it |
 | `soundcloud/soundcloud.py` | owns credential writes via `save_soundcloud_credentials_file()` (verify-first, like Spotify); `SoundCloudAPI` wrapper (OAuth `Authorization: OAuth <token>`, fetch-modify-write `/playlists/{urn}` PUT because there is no add-track endpoint), `SoundCloudAuthManager`, and the self-contained login tile `show_soundcloud_login(parent, on_success)` via `login_module`/`login_class` (no `auth_setup` change) |
 | `soundcloud/integration.py` | `SoundCloudIntegration` - `BaseIntegration`; `get_library_playlists` filters non-`playlist` `set_type`s (albums/station can't take adds); `add_tracks_to_playlist`/`remove_track` delegate to the wrapper's whole-array PUT; `_normalize_playlist_id` accepts URN / numeric / `user/slug` (the last via `/resolve`, cached) |
