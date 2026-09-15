@@ -12,7 +12,7 @@ import tkinter as tk
 import webbrowser
 from typing import TYPE_CHECKING, Callable
 
-from controllers.keybind_registry import KeybindCallbacks
+from controllers.callbacks import KeybindCallbacks
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
 from services.playlist_url import build_playlist_url
@@ -547,9 +547,12 @@ class CardGridManager:
             # Pending duplicate decisions, pair-memory and error-log lines
             # reference this playlist - purge them too, or they linger in
             # db/extra.json and resurface if the playlist is re-added.
-            duplicate_queue.purge_playlist(
-                platform, playlist_id, playlist_name
-            )
+            try:
+                duplicate_queue.purge_playlist(
+                    platform, playlist_id, playlist_name
+                )
+            except OSError as e:
+                logger.error("Could not purge duplicate queue for '%s': %s", playlist_name, e)
 
             card.frame.grid_forget()
             card.frame.destroy()

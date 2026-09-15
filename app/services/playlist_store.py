@@ -8,11 +8,9 @@ a fallback so existing data is never orphaned.
 
 import json
 import os
-import tempfile
 import time
 import threading
 import logging
-from pathlib import Path
 from typing import Callable, Optional
 
 # Legacy entries predate the platform field; they were all YouTube Music.
@@ -21,7 +19,12 @@ PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 logger = logging.getLogger(__name__)
 
 from services import profile_store as _profile_store
+from utils.atomic_json import atomic_json_write
 
+# Bound at import time: profile_store.initialize() has already run (it is
+# triggered by importing utils.config, which every entry point does first),
+# so this resolves to the profile-correct path once per process.  Do not
+# re-resolve at call time - a mid-process profile switch is impossible.
 playlists_json = _profile_store.db_dir() / "playlists.json"
 
 # In-memory cache so we don't re-read the file on every operation.
@@ -228,11 +231,13 @@ class PlaylistStore:
     @staticmethod
     def update_thumbnail(
         name: str, platform: str, thumbnail_url: str, playlist_id: str = ""
-    ):
+    ) -> bool:
         """Update the thumbnail URL for a single playlist.
 
         Matches by ``(platform, playlist_id)`` when available, falling back
-        to ``(platform, name)`` for legacy entries.
+        to ``(platform, name)`` for legacy entries.  Returns whether the
+        playlist was found (and written) - mirroring ``add_playlist``'s
+        bool contract so callers can react to a failed persist.
         """
         with _lock:
             playlists = PlaylistStore.load_playlists()
@@ -241,7 +246,8 @@ class PlaylistStore:
             )
             if target is not None:
                 target["thumbnail_url"] = thumbnail_url
-                PlaylistStore._write(playlists)
+                return PlaylistStore._write(playlists)
+            return False
 
     @staticmethod
     def update_metadata(
@@ -483,31 +489,16 @@ class PlaylistStore:
         """Write the playlist list to disk atomically (temp-file + rename).
 
         Also updates the in-memory cache so subsequent reads skip the file.
-        Uses :func:`tempfile.mkstemp` for unique temp names so concurrent
-        processes (CLI + GUI) never clobber the same temp file.
+        The atomic write mechanic is shared via
+        :func:`utils.atomic_json.atomic_json_write` (unique temp names,
+        same-directory rename - safe for concurrent processes).
 
         Returns ``True`` on success, ``False`` on write failure.
         """
         global _playlist_cache, _cache_timestamp
         ok = True
         try:
-            # The db/ directory is gitignored and does not exist on a
-            # fresh clone - create it before the first write.
-            playlists_json.parent.mkdir(parents=True, exist_ok=True)
-            # Write to a unique temporary file, then atomically replace.
-            fd, tmp = tempfile.mkstemp(
-                dir=str(playlists_json.parent), suffix=".json"
-            )
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(playlists, f, ensure_ascii=False, indent=2)
-                Path(tmp).replace(playlists_json)
-            except BaseException:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
-                raise
+            atomic_json_write(playlists_json, playlists)
         except Exception as e:
             ok = False
             logger.error("Failed to write playlists.json: %s", e)
@@ -522,26 +513,26 @@ class PlaylistStore:
             _cache_timestamp = time.monotonic()
         return ok
 
+    @staticmethod
+    def playlist_still_registered(
+        playlist_name: str, platform: str, playlist_id: str | None
+    ) -> bool:
+        """True when the playlist is still registered in the store.
 
-def playlist_still_registered(
-    playlist_name: str, platform: str, playlist_id: Optional[str]
-) -> bool:
-    """True when the playlist is still registered in the store.
-
-    A playlist frame closed mid-flow deletes the store entry and its
-    local database; without this check a keybind flow would resurrect
-    the deleted DB (song_exists()/add_song() recreate the file on first
-    access) and leave an orphan behind.  Legacy entries (no id) resolve
-    by name.  A store read failure errs on the permissive side - the
-    platform add may already have succeeded and must not be reported as
-    a failure.
-    """
-    try:
-        return (
-            PlaylistStore.find_playlist(
-                playlist_name, platform=platform, playlist_id=playlist_id or ""
+        A playlist frame closed mid-flow deletes the store entry and its
+        local database; without this check a keybind flow would resurrect
+        the deleted DB (song_exists()/add_song() recreate the file on first
+        access) and leave an orphan behind.  Legacy entries (no id) resolve
+        by name.  A store read failure errs on the permissive side - the
+        platform add may already have succeeded and must not be reported as
+        a failure.
+        """
+        try:
+            return (
+                PlaylistStore.find_playlist(
+                    playlist_name, platform=platform, playlist_id=playlist_id or ""
+                )
+                is not None
             )
-            is not None
-        )
-    except Exception:
-        return True
+        except Exception:
+            return True

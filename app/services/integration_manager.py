@@ -239,9 +239,25 @@ def download_integration(platform_id: str) -> List[Path]:
                 # below can fail on content (only on filesystem errors).
                 for staging, dst in prepared:
                     dst.parent.mkdir(parents=True, exist_ok=True)
+                    # Park the existing installation aside instead of
+                    # deleting it, so a failure between teardown and
+                    # the swap can never leave the platform with no
+                    # files at all.
+                    backup = dst.parent / f".{dst.name}.old"
                     if dst.exists():
-                        shutil.rmtree(dst, ignore_errors=True)
-                    staging.rename(dst)
+                        if backup.exists():
+                            shutil.rmtree(backup, ignore_errors=True)
+                        shutil.move(str(dst), str(backup))
+                    try:
+                        staging.rename(dst)
+                    except OSError:
+                        # Restore the parked installation so the
+                        # platform stays usable.
+                        if backup.exists():
+                            shutil.move(str(backup), str(dst))
+                        raise
+                    if backup.exists():
+                        shutil.rmtree(backup, ignore_errors=True)
                     installed.append(dst)
                     logger.info(
                         "Installed %s integration files into %s",

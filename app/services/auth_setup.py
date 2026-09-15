@@ -242,7 +242,8 @@ def delete_lastfm_credentials() -> bool:
     """Remove the Last.fm credential file.
 
     Returns ``True`` when the file was deleted, ``False`` when it
-    did not exist.
+    did not exist.  Raises ``OSError`` on a failed unlink (same
+    contract as :func:`delete_spotify_credentials`).
     """
     lastfm_file = AUTH_DIR / "lastfm.json"
     if lastfm_file.exists():
@@ -250,9 +251,9 @@ def delete_lastfm_credentials() -> bool:
             lastfm_file.unlink()
             user_log(logger, tr("auth.deleted_lastfm"))
             return True
-        except Exception as e:
+        except OSError as e:
             logger.error("Failed to delete Last.fm credentials: %s", e)
-            return False
+            raise
     return False
 
 
@@ -471,20 +472,6 @@ def save_and_verify_deezer_credentials(arl: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def delete_deezer_credentials(plugin_registry=None) -> tuple:
-    """Delete Deezer credential files.  Returns ``(deleted, missing)``."""
-    from services.profile_store import auth_dir as _auth_dir
-    path = _auth_dir() / "deezer.json"
-    deleted = []
-    missing = []
-    if path.exists():
-        path.unlink()
-        deleted.append(path)
-    else:
-        missing.append(path)
-    return deleted, missing
-
-
 # ---------------------------------------------------------------------------
 # Multi-platform credential deletion (CLI --logout)
 # ---------------------------------------------------------------------------
@@ -506,9 +493,10 @@ PLATFORM_CREDENTIAL_FILES = {
 def _credential_paths(plugin_registry, platform: str) -> List[Path]:
     """Every file that may hold *platform*'s credentials.
 
-    Manifest-declared paths (``PluginInfo.auth_paths``: auth-dir file +
-    declared repo-root fallbacks) first, then the hardcoded map entries
-    for the known platforms as defense in depth.  Deleting all of them
+    Hardcoded map entries (known platforms, from
+    :data:`PLATFORM_CREDENTIAL_FILES`) first, then the manifest-declared
+    paths (``PluginInfo.auth_paths``: auth-dir file + declared repo-root
+    fallbacks) appended when the plugin is present.  Deleting all of them
     is what makes logout / uninstall complete - a surviving fallback
     browser.json would otherwise re-authenticate the platform on the
     next login.

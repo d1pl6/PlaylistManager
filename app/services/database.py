@@ -249,13 +249,18 @@ class DatabaseManager:
         except OSError as e:
             logger.warning("Failed to migrate legacy database %s: %s", legacy.name, e)
 
-    def get_db_connection(
+    def _get_db_connection(
         self,
         playlist_name: str,
         platform: str = "youtube_music",
         playlist_id: str = "",
     ) -> sqlite3.Connection:
-        """Get a connection to the playlist's database, creating it if needed."""
+        """Open a fresh (uncached) connection to the playlist's database.
+
+        Internal helper for :meth:`get_connection` - the raw connection
+        is not registered in the thread cache and must not be handed out
+        directly, or callers would leak per-operation connections.
+        """
         db_path = self.get_playlist_db_path(
             playlist_name, platform=platform, playlist_id=playlist_id
         )
@@ -303,7 +308,7 @@ class DatabaseManager:
                     # use - drop it instead; the connection is finalized
                     # with the entry.
                     del DatabaseManager._connections[cache_key]
-                conn = self.get_db_connection(
+                conn = self._get_db_connection(
                     playlist_name, platform=platform, playlist_id=playlist_id
                 )
                 DatabaseManager._connections[cache_key] = (
@@ -332,9 +337,10 @@ class DatabaseManager:
                     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_track_id ON songs(track_id)"
-            )
+            # track_id's UNIQUE constraint already creates an implicit
+            # index; an explicit one is redundant disk + write cost.  Drop
+            # it if a pre-fix database created one.
+            cursor.execute("DROP INDEX IF EXISTS idx_track_id")
             conn.commit()
             logger.debug("Initialized playlist database schema")
         except sqlite3.Error as e:

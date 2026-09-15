@@ -27,7 +27,6 @@ import difflib
 import logging
 import unicodedata
 from collections.abc import Iterable
-from typing import List, Optional
 
 from services import duplicate_queue
 
@@ -110,17 +109,41 @@ def _pair_ratio(
     *,
     threshold: float,
     duration_tolerance: int,
-) -> Optional[float]:
-    """Similarity for two songs, or None when a gate fails."""
-    set_a = _artist_set(artists_a)
-    set_b = _artist_set(artists_b)
+) -> float | None:
+    """Similarity for two songs, or None when a gate fails.
+
+    Thin wrapper over :func:`_pair_ratio_precomputed` that normalises both
+    sides fresh - kept for callers with single pairs (tests).  The O(N^2)
+    scans below precompute the keys once and skip this wrapper.
+    """
+    return _pair_ratio_precomputed(
+        _normalize_text(title_a), _artist_set(artists_a), dur_a,
+        _normalize_text(title_b), _artist_set(artists_b), dur_b,
+        threshold=threshold,
+        duration_tolerance=duration_tolerance,
+    )
+
+
+def _pair_ratio_precomputed(
+    nt_a: str, set_a: set[str], dur_a,
+    nt_b: str, set_b: set[str], dur_b,
+    *,
+    threshold: float,
+    duration_tolerance: int,
+) -> float | None:
+    """Similarity for two songs over ALREADY normalised keys.
+
+    Callers fold each song once (``_normalize_text`` title + ``_artist_set``
+    artists) and reuse the keys for every pair - re-folding text inside an
+    O(N^2) scan is pure waste.
+    """
     # Artist gate: >=1 shared normalised artist name.
     if not (set_a & set_b):
         return None
     if not _artists_known((set_a, set_b)):
         return None
 
-    ratio = title_ratio(title_a, title_b)
+    ratio = difflib.SequenceMatcher(None, nt_a, nt_b).ratio()
 
     try:
         int_a, int_b = int(dur_a or 0), int(dur_b or 0)
@@ -155,26 +178,30 @@ def _pair_ratio(
 # ----------------------------------------------------------------------
 
 def find_similar(
-    songs: List[dict],
+    songs: list[dict],
     title: str,
     artists,
     duration,
     *,
     threshold: float = 0.85,
     duration_tolerance: int = 5,
-) -> Optional[dict]:
+) -> dict | None:
     """Best near-duplicate of (title, artists, duration) inside *songs*.
 
     Returns a copy of the winning song dict with an extra ``"similarity"``
     key, or None when nothing matches.  Song dicts need title / artists /
     duration keys (the shape ``SongManager.get_all_songs`` returns).
     """
-    best: Optional[tuple[float, dict]] = None
+    nt_q = _normalize_text(title)
+    set_q = _artist_set(artists)
+    best: tuple[float, dict] | None = None
     for song in songs:
         try:
-            ratio = _pair_ratio(
-                title, artists, duration,
-                song.get("title"), song.get("artists"), song.get("duration"),
+            ratio = _pair_ratio_precomputed(
+                nt_q, set_q, duration,
+                _normalize_text(song.get("title", "")),
+                _artist_set(song.get("artists")),
+                song.get("duration"),
                 threshold=threshold,
                 duration_tolerance=duration_tolerance,
             )
@@ -193,11 +220,11 @@ def find_similar(
 
 
 def find_duplicate_pairs(
-    songs: List[dict],
+    songs: list[dict],
     *,
     threshold: float = 0.85,
     duration_tolerance: int = 5,
-) -> List[dict]:
+) -> list[dict]:
     """All near-duplicate pairs within one playlist's songs.
 
     *songs* must be ordered newest-first (the ``get_all_songs``
@@ -219,7 +246,7 @@ def find_duplicate_pairs(
         )
 
     unknown_unknown = _normalize_text(UNKNOWN_ARTIST)
-    pairs: List[dict] = []
+    pairs: list[dict] = []
     n = len(rows)
     for i in range(n):
         nt_a, set_a, dur_a, song_a = rows[i]
@@ -231,9 +258,11 @@ def find_duplicate_pairs(
                 continue
             if not (set_a & set_b):
                 continue
-            ratio = _pair_ratio(
-                song_a.get("title"), song_a.get("artists"), dur_a,
-                song_b.get("title"), song_b.get("artists"), dur_b,
+            # Normalised keys are already in hand from the rows pre-screen -
+            # passing the raw song dicts here would re-fold every pair.
+            ratio = _pair_ratio_precomputed(
+                nt_a, set_a, dur_a,
+                nt_b, set_b, dur_b,
                 threshold=threshold,
                 duration_tolerance=duration_tolerance,
             )
@@ -282,7 +311,7 @@ def read_settings() -> tuple[bool, float, int]:
 
 def resolve_near_duplicate(
     *,
-    songs: List[dict],
+    songs: list[dict],
     title: str,
     artists,
     duration,
@@ -290,9 +319,9 @@ def resolve_near_duplicate(
     platform: str,
     playlist_id: str,
     playlist_name: str,
-    url: Optional[str] = None,
-    thumbnail: Optional[str] = None,
-) -> tuple[str, Optional[dict]]:
+    url: str | None = None,
+    thumbnail: str | None = None,
+) -> tuple[str, dict | None]:
     """The add-path duplicate policy, shared by every platform flow.
 
     Returns ``(action, match)`` where *action* is:

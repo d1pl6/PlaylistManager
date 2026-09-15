@@ -374,7 +374,7 @@ class App:
 
         threading.Thread(target=_refresh_worker, daemon=True).start()
 
-    def _check_updates(self, *, force: bool = False, on_done=None):
+    def check_updates(self, *, force: bool = False, on_done=None):
         """Check GitHub for a newer release.
 
         Args:
@@ -503,7 +503,7 @@ class App:
             # complete the check before mainloop() ran, and the marshaled
             # root.after(0, ...) would raise "main thread is not in main
             # loop" - dropping the update dialog on the fastest startups.
-            self._check_updates()
+            self.check_updates()
             self.root.mainloop()
         except Exception:
             logger.exception("Unhandled exception")

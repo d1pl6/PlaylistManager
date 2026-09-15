@@ -48,6 +48,7 @@ from services.playlist_sync import PlaylistSyncService
 from services.playlist_url import parse_playlist_url
 from services import scrobble_log
 from services.scrobble import scrobble_enabled_for
+from services.scrobble_service import scrobble_current_song
 from services.song_manager import SongManager
 from utils.config import get_setting
 from utils.i18n import tr, tr_status, trn
@@ -673,39 +674,28 @@ def run_scrobble() -> int:
               file=sys.stderr)
         return 1
 
-    # Try each authenticated platform's capture path until one produces a
-    # song - mirrors keybind_controller._scrobble_current_action.
-    for platform_id, integration in integrations.get_all().items():
-        if not integration.is_authenticated():
-            continue
-
+    def flow_provider(platform_id: str):
         plugin = plugin_registry.get(platform_id)
-        if plugin is None or not plugin.flow_class:
-            continue
+        flow_cls = plugin.import_flow()
+        integ = integrations.get(platform_id)
+        if plugin.flow_type == "extension":
+            return flow_cls(integ, song_manager, plugin.build_receiver())
+        return flow_cls(integ, song_manager)
 
-        try:
-            flow_cls = plugin.import_flow()
-            if plugin.flow_type == "extension":
-                flow = flow_cls(integration, song_manager, plugin.build_receiver())
-            else:
-                flow = flow_cls(integration, song_manager)
-
-            _url, song_data, error = flow.capture(URL_WAIT_TIMEOUT)
-            if song_data:
-                if scrobble_integ.scrobble(song_data):
-                    title = song_data.get("title", "unknown")
-                    artist = (song_data.get("artists") or ["unknown"])[0]
-                    print(tr("cli.scrobbled", artist=artist, title=title), flush=True)
-                    return 0
-                print(tr("cli.scrobble_failed", title=song_data.get("title", "unknown")), file=sys.stderr)
-                return 1
-            # Nothing playing on this platform - try the next.
-            logger.debug("No song playing on %s: %s", platform_id, error)
-        except Exception as e:
-            logger.debug("Capture failed on %s: %s", platform_id, e)
-            continue
-
-    print(tr("cli.no_song_found"), file=sys.stderr)
+    captured = scrobble_current_song(
+        integrations, plugin_registry, flow_provider, scrobble_integ,
+        URL_WAIT_TIMEOUT,
+    )
+    if captured is None:
+        print(tr("cli.no_song_found"), file=sys.stderr)
+        return 1
+    song_data, ts = captured
+    if ts:
+        title = song_data.get("title", "unknown")
+        artist = (song_data.get("artists") or ["unknown"])[0]
+        print(tr("cli.scrobbled", artist=artist, title=title), flush=True)
+        return 0
+    print(tr("cli.scrobble_failed", title=song_data.get("title", "unknown")), file=sys.stderr)
     return 1
 
 

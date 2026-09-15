@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import sqlite3
 import json
 import logging
 import re
 import threading
-from typing import Dict, List, Optional, Callable
+from typing import Callable
 # Platform ids are declared by the plugin manifests (integrations/*/
 # plugin.json); these local constants mirror the built-in ids so this
 # service stays importable without the loader.
@@ -56,7 +58,7 @@ def _parse_duration(duration_str: str) -> int:
 # Platform track extractors for bulk insert
 # ------------------------------------------------------------------
 
-def _extract_youtube_track(track: dict) -> Optional[tuple]:
+def _extract_youtube_track(track: dict) -> tuple | None:
     """Extract fields from a ytmusicapi track dict.
 
     Returns (title, artists, duration_seconds, video_id, thumbnail_url)
@@ -67,7 +69,10 @@ def _extract_youtube_track(track: dict) -> Optional[tuple]:
         return None
 
     title = track.get("title", "Unknown")
-    artists = [a.get("name", "Unknown") for a in track.get("artists", [])]
+    # ytmusicapi can report "artists": null for edge-case items (header
+    # rows, local tracks) - treat it as no artists instead of crashing
+    # the track extractor.
+    artists = [a.get("name", "Unknown") for a in (track.get("artists") or [])]
     if not artists:
         artists = ["Unknown Artist"]
 
@@ -81,7 +86,7 @@ def _extract_youtube_track(track: dict) -> Optional[tuple]:
     return (title, artists, duration, track_id, thumbnail_url)
 
 
-def _extract_spotify_track(track: dict) -> Optional[tuple]:
+def _extract_spotify_track(track: dict) -> tuple | None:
     """Extract fields from a Spotify track dict.
 
     Returns (title, artists, duration_seconds, id, thumbnail_url)
@@ -101,14 +106,16 @@ def _extract_spotify_track(track: dict) -> Optional[tuple]:
         return None
 
     title = track.get("name", "Unknown")
-    artists = [a.get("name", "Unknown") for a in track.get("artists", [])]
+    artists = [a.get("name", "Unknown") for a in (track.get("artists") or [])]
     if not artists:
         artists = ["Unknown Artist"]
 
     duration_ms = track.get("duration_ms", 0)
     duration = duration_ms // 1000 if duration_ms else 0
 
-    images = track.get("album", {}).get("images", [])
+    # "album" can be null for local files - fall back to no images rather
+    # than crashing the extractor (the track is then silently dropped).
+    images = (track.get("album") or {}).get("images", [])
     thumbnail_url = None
     if len(images) >= 2:
         # Spotify returns images in descending resolution; index 1 is ~300×300.
@@ -119,7 +126,7 @@ def _extract_spotify_track(track: dict) -> Optional[tuple]:
     return (title, artists, duration, track_id, thumbnail_url)
 
 
-def _extract_soundcloud_track(track: dict) -> Optional[tuple]:
+def _extract_soundcloud_track(track: dict) -> tuple | None:
     """Extract fields from a SoundCloud track dict.
 
     Returns (title, artists, duration_seconds, track_urn, thumbnail_url)
@@ -145,7 +152,7 @@ def _extract_soundcloud_track(track: dict) -> Optional[tuple]:
     return (title, artists, duration, track_id, thumbnail_url)
 
 
-def _extract_deezer_track(track: dict) -> Optional[tuple]:
+def _extract_deezer_track(track: dict) -> tuple | None:
     """Extract fields from a Deezer Pipe GraphQL track dict.
 
     Returns (title, artists, duration_seconds, track_id, thumbnail_url)
@@ -185,7 +192,7 @@ def _extract_deezer_track(track: dict) -> Optional[tuple]:
 
 # Maps platform name → extractor callable.  Extractor signature:
 #   (track: dict) -> (title, artists, duration, track_id, thumbnail_url) | None
-_TRACK_EXTRACTORS: dict[str, Callable[[dict], Optional[tuple]]] = {
+_TRACK_EXTRACTORS: dict[str, Callable[[dict], tuple | None]] = {
     PLATFORM_YOUTUBE_MUSIC: _extract_youtube_track,
     PLATFORM_SPOTIFY: _extract_spotify_track,
     PLATFORM_SOUNDCLOUD: _extract_soundcloud_track,
@@ -202,7 +209,7 @@ _TRACK_EXTRACTORS: dict[str, Callable[[dict], Optional[tuple]]] = {
 _COVER_SIZE_RE = re.compile(r"(\d+)x\d+")
 
 
-def _pick_deezer_cover(urls: list) -> Optional[str]:
+def _pick_deezer_cover(urls: list) -> str | None:
     """Pick the most appropriate Deezer cover URL.
 
     Pipe's ``cover.urls`` is a list of URL strings at the requested
@@ -230,7 +237,7 @@ def _pick_deezer_cover(urls: list) -> Optional[str]:
     return best or smallest
 
 
-def _pick_thumbnail(thumbnails: list) -> Optional[str]:
+def _pick_thumbnail(thumbnails: list) -> str | None:
     """Pick the most appropriate thumbnail URL from a platform thumbnail list.
 
     Prefers the smallest image that is at least 64 px wide, falling back
@@ -254,7 +261,13 @@ def _pick_thumbnail(thumbnails: list) -> Optional[str]:
 # normaliser (duplicate_check.py has its own); keep the names distinct so
 # they are never swapped by accident.
 def _normalize_title_key(text: str) -> str:
-    return text.strip().lower()
+    # SQLite's LOWER() only folds ASCII - Unicode folding (ICU) is not
+    # available to the DB side.  Match that exactly: a Unicode-aware
+    # str.lower() would fold "É" -> "é" where the DB leaves the stored
+    # "É" alone, and the dedupe/identity lookups would miss every
+    # accented title (SD2.2 vs 2.2 style mismatches).
+    stripped = text.strip()
+    return stripped.lower() if stripped.isascii() else stripped
 
 # ------------------------------------------------------------------
 # SongManager
@@ -291,7 +304,7 @@ class SongManager:
     def add_songs_bulk(
         self,
         playlist_name: str,
-        tracks: List[Dict],
+        tracks: list[dict],
         platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
     ) -> int:
@@ -324,8 +337,8 @@ class SongManager:
     def _add_songs_bulk(
         self,
         playlist_name: str,
-        tracks: List[Dict],
-        extractor: Callable[[dict], Optional[tuple]],
+        tracks: list[dict],
+        extractor: Callable[[dict], tuple | None],
         platform: str,
         playlist_id: str = "",
     ) -> int:
@@ -388,6 +401,11 @@ class SongManager:
                 )
                 conn.commit()
 
+                # rowcount after executemany reports the number of rows
+                # actually inserted (IGNOREd duplicates excluded).  Older
+                # CPython sqlite3 builds (3.10/3.11, pre gh-93103) could
+                # undercount this in edge cases - cosmetic only, the "N new
+                # songs" counter shown in the UI may under-report there.
                 inserted = cursor.rowcount
                 logger.info(
                     "Bulk insert (%s) into %s: %d/%d new songs",
@@ -414,7 +432,7 @@ class SongManager:
         self,
         playlist_name: str,
         title: str,
-        artists: List[str],
+        artists: list[str],
         duration: int,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
@@ -444,10 +462,10 @@ class SongManager:
         self,
         playlist_name: str,
         title: str,
-        artists: List[str],
+        artists: list[str],
         duration: int,
         track_id: str,
-        thumbnail_url: Optional[str] = None,
+        thumbnail_url: str | None = None,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
     ) -> int:
@@ -548,10 +566,10 @@ class SongManager:
         self,
         playlist_name: str,
         title: str,
-        artists: List[str],
+        artists: list[str],
         duration: int,
         track_id: str,
-        thumbnail_url: Optional[str] = None,
+        thumbnail_url: str | None = None,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
     ) -> int:
@@ -664,7 +682,7 @@ class SongManager:
         track_id: str,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         """
         Get song data by track ID.
 
@@ -730,7 +748,7 @@ class SongManager:
         playlist_name: str,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         Get all songs from the playlist's database.
 
@@ -764,7 +782,7 @@ class SongManager:
         playlist_name: str,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         """
         Get the most recently added song from the playlist.
 
@@ -805,7 +823,7 @@ class SongManager:
         limit: int,
         platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """Get the most recently added songs from the playlist.
 
         Args:
@@ -912,7 +930,7 @@ class SongManager:
         platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
         limit: int = 5,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """Search songs by title or artist (case-insensitive LIKE).
 
         Wildcard characters (``%``, ``_``) in *query* are escaped so they
@@ -929,16 +947,44 @@ class SongManager:
                 playlist_name, platform=platform, playlist_id=playlist_id
             ) as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT id, title, artists, thumbnail_url, duration, track_id "
-                    "FROM songs "
-                    "WHERE title LIKE ? ESCAPE '\\' "
-                    "OR artists LIKE ? ESCAPE '\\' "
-                    "ORDER BY added_at DESC, id DESC LIMIT ?",
-                    (pattern, pattern, limit),
-                )
+                if query.strip().isascii():
+                    # SQLite LIKE is ASCII-case-insensitive, so the SQL
+                    # pre-filter is exact for pure-ASCII queries.
+                    cursor.execute(
+                        "SELECT id, title, artists, thumbnail_url, duration, track_id "
+                        "FROM songs "
+                        "WHERE title LIKE ? ESCAPE '\\' "
+                        "OR artists LIKE ? ESCAPE '\\' "
+                        "ORDER BY added_at DESC, id DESC LIMIT ?",
+                        (pattern, pattern, limit),
+                    )
+                    rows = cursor.fetchall()
+                else:
+                    # SQLite's LIKE cannot fold non-ASCII case ("É" vs "é"),
+                    # so an SQL pre-filter would silently miss accented
+                    # results.  Fold in Python (str.casefold() is
+                    # Unicode-aware) over the full table; per-playlist song
+                    # tables are small enough that this stays fast.
+                    cursor.execute(
+                        "SELECT id, title, artists, thumbnail_url, duration, track_id "
+                        "FROM songs ORDER BY added_at DESC, id DESC",
+                    )
+                    folded = query.strip().casefold()
+                    rows = []
+                    for row in cursor.fetchall():
+                        if folded in row[1].casefold():
+                            rows.append(row)
+                            continue
+                        try:
+                            joined = " ".join(json.loads(row[2])).casefold()
+                        except (ValueError, TypeError):
+                            joined = ""
+                        if folded in joined:
+                            rows.append(row)
+                        if len(rows) >= limit:
+                            break
                 songs = []
-                for row in cursor.fetchall():
+                for row in rows[:limit]:
                     songs.append({
                         "id": row[0],
                         "title": row[1],

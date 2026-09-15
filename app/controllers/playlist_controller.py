@@ -1,10 +1,10 @@
 """
 Playlist dialog workflow controller.
 
-Extracted from ``app/ui/main_window.py`` (Issue #1).  Orchestrates the
-"add playlist" flow (platform choice, playlist list, selection) without
-directly creating tkinter widgets.  UI actions are delegated to callbacks
-provided by the window layer.
+Extracted from ``app/ui/main_window.py``.  Orchestrates the "add
+playlist" flow (platform choice, playlist list, selection) without
+directly creating tkinter widgets.  UI actions are delegated to
+callbacks provided by the window layer.
 """
 
 import logging
@@ -57,7 +57,7 @@ class PlaylistController:
         self._on_refresh = on_refresh
 
         # State
-        self._choose_open = False
+        self._workflow_open = False
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -68,7 +68,7 @@ class PlaylistController:
 
         Called when the user clicks the + button.  The whole workflow
         (platform picker, fetch, selection dialog) is guarded by
-        ``_choose_open`` so a re-entrant click cannot open a second
+        ``_workflow_open`` so a re-entrant click cannot open a second
         picker or fetch.
 
         When no integration is authenticated the workflow normally fails
@@ -78,20 +78,20 @@ class PlaylistController:
         once and the workflow re-started before the error is shown, so
         the login "just works" instead of requiring an app restart.
         """
-        if self._choose_open:
+        if self._workflow_open:
             return
-        self._choose_open = True
+        self._workflow_open = True
 
         active = self.integrations.get_active()
         if not active:
             if attempt == 0 and self._on_refresh is not None:
                 def retry() -> None:
-                    self._choose_open = False
+                    self._workflow_open = False
                     self.open_playlist_dialog(attempt=1)
 
                 self._on_refresh(on_done=retry)
                 return
-            self._choose_open = False
+            self._workflow_open = False
             self._on_show_error()
             return
 
@@ -123,7 +123,7 @@ class PlaylistController:
 
         The platform call is a network round trip, so it runs in a daemon
         worker; the UI continues via ``after(0, ...)`` instead of freezing
-        the window.  ``_choose_open`` stays set for the whole fetch, so a
+        the window.  ``_workflow_open`` stays set for the whole fetch, so a
         re-entrant + click cannot open a second picker meanwhile.
 
         A failed or empty fetch is retried exactly once (via a scoped
@@ -214,15 +214,15 @@ class PlaylistController:
                 playlist_id,
                 follower_count=follower_count,
             )
-        self._choose_open = False
+        self._workflow_open = False
         self._on_add_playlist_frame(playlist_name, platform, playlist_id, thumb_url)
 
     def _on_cancel(self) -> None:
         """User cancelled the dialog."""
-        self._choose_open = False
+        self._workflow_open = False
         self._on_dialog_cancel()
 
     def _cancel_and_show_error(self) -> None:
-        self._choose_open = False
+        self._workflow_open = False
         self._on_dialog_cancel()
         self._on_show_error()

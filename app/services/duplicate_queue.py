@@ -28,20 +28,29 @@ lock, atomic temp-file + rename, defensive parent mkdir).  Unlike
 playlist_store there is no in-memory cache - the file is tiny (<50 pending
 records), so every operation re-reads it under the lock, which removes
 cache-invalidation bugs by construction.
+
+Write failures RAISE (via :mod:`utils.atomic_json`): mutating callers
+keep a process-wide guarantee that a failed persist is never mistaken
+for a successful one.  Best-effort bookkeeping is the task of the
+*flow* layer - it decides whether a failed persist is worth an error
+card; this module never swallows silently.
 """
 
 import json
 import logging
-import os
+import tempfile
 import threading
 import uuid
 from datetime import datetime
-from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 from services import profile_store as _profile_store
+from utils.atomic_json import atomic_json_write
 
+# Bound at import time so paths resolve exactly once per process; the
+# active profile can only change via restart, so re-evaluating here
+# would be both wasted work and wrong mid-process.
 extra_json = _profile_store.db_dir() / "extra.json"
 
 # Serialise all read/write access across flow threads and the UI thread.
@@ -93,26 +102,10 @@ def _load() -> dict:
 def _write(data: dict) -> None:
     """Atomically persist the store (caller holds *_lock*).
 
-    removable filesystems-safe: unique temp file in the same directory + rename, like
-    playlist_store._write.  Uses :func:`tempfile.mkstemp` so concurrent
-    processes never clobber the same temp file.
+    Delegates to :func:`utils.atomic_json.atomic_json_write`; failures
+    raise - a persist that fails must never look like it succeeded.
     """
-    import tempfile as _tempfile
-    try:
-        extra_json.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = _tempfile.mkstemp(dir=str(extra_json.parent), suffix=".json")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, str(extra_json))
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
-    except Exception as e:
-        logger.error("Failed to write %s: %s", extra_json, e)
+    atomic_json_write(extra_json, data)
 
 
 def make_pair_key(platform: str, playlist_id: str, track_a: str, track_b: str) -> str:
@@ -131,7 +124,7 @@ def make_pair_key(platform: str, playlist_id: str, track_a: str, track_b: str) -
 # Pending records
 # ----------------------------------------------------------------------
 
-def list_pending(prune_unregistered: bool = True) -> List[dict]:
+def list_pending(prune_unregistered: bool = True) -> list[dict]:
     """Return pending song records (newest first).
 
     Recency is the file's append order - ``add_pending`` re-appends a
@@ -160,9 +153,9 @@ def _playlist_alive(record: dict) -> bool:
     try:
         # Local import: keeps module import side-effect free for headless
         # harnesses that patch the store path.
-        from services.playlist_store import playlist_still_registered
+        from services.playlist_store import PlaylistStore
 
-        return playlist_still_registered(
+        return PlaylistStore.playlist_still_registered(
             record.get("playlist_name", ""),
             record.get("platform", ""),
             record.get("playlist_id") or None,
@@ -171,7 +164,7 @@ def _playlist_alive(record: dict) -> bool:
         return True  # err permissive - same policy as the flow guard
 
 
-def add_pending(record: dict) -> Optional[str]:
+def add_pending(record: dict) -> str | None:
     """Queue one near-duplicate song; returns its id.
 
     Re-enqueueing the same ``(playlist_name, playlist_id, track_id)``
@@ -219,7 +212,7 @@ def remove_pending(record_id: str) -> bool:
         return removed
 
 
-def find_pending(playlist_id: str, track_id: str, playlist_name: str = "") -> Optional[dict]:
+def find_pending(playlist_id: str, track_id: str, playlist_name: str = "") -> dict | None:
     """Locate one queued record by its natural key (no pruning on read).
 
     Mirrors :func:`add_pending`'s dedup key: ``playlist_name`` disambiguates
@@ -241,7 +234,7 @@ def find_pending(playlist_id: str, track_id: str, playlist_name: str = "") -> Op
 # song memory
 # ----------------------------------------------------------------------
 
-def get_song(pair_key: str) -> Optional[dict]:
+def get_song(pair_key: str) -> dict | None:
     with _lock:
         stored = _load().get("songs", {}).get(pair_key)
         return dict(stored) if stored else None
@@ -302,7 +295,7 @@ def record_error(playlist_name: str, platform: str, message: str) -> dict:
     return record
 
 
-def list_errors() -> List[dict]:
+def list_errors() -> list[dict]:
     """Error log entries, newest first."""
     with _lock:
         errors = [
@@ -322,7 +315,7 @@ def clear_errors() -> int:
         return n
 
 
-def purge_platform(platform: str) -> Tuple[int, int, int]:
+def purge_platform(platform: str) -> tuple[int, int, int]:
     """Drop every record referencing *platform* (uninstall cleanup).
 
     Removes pending duplicate records, pair-memory entries (keys start
@@ -358,7 +351,7 @@ def purge_platform(platform: str) -> Tuple[int, int, int]:
         )
 
 
-def purge_playlist(platform: str, playlist_id: str, playlist_name: str) -> Tuple[int, int, int]:
+def purge_playlist(platform: str, playlist_id: str, playlist_name: str) -> tuple[int, int, int]:
     """Drop every record referencing one playlist (playlist-delete cleanup).
 
     Mirrors :func:`purge_platform` scoped to a single playlist.  Without

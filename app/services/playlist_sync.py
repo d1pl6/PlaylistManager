@@ -1,14 +1,13 @@
 """
 Playlist track import / reload service.
 
-Extracted from ``app/ui/main_window.py`` (Issue #1).  Handles the
-threading and integration-API calls so the UI only needs to provide
-thin callbacks for status updates.
+Handles the threading and integration-API calls so the UI only needs to
+provide thin callbacks for status updates.
 """
 
 import logging
 import threading
-from typing import Callable, Optional
+from typing import Callable
 
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
@@ -17,19 +16,15 @@ from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
 
+# How long reload_database() waits for an in-flight add to drain before
+# giving up and reporting an error (the add path can sit in a URL-receiver
+# capture for up to URL_WAIT_TIMEOUT, plus the platform API round trip).
+GATE_ACQUIRE_TIMEOUT = 60.0
+
 # Type alias for import / reload result callbacks.
 # (playlist_name, inserted_count, status_text[, thumbnail_url])
 OnDoneCallback = Callable[[str, int, str], None]
-OnReloadDoneCallback = Callable[[str, int, str, Optional[str]], None]
-
-
-def _extract_thumbnail(data: dict) -> Optional[str]:
-    """Extract a thumbnail URL from an API response dict.
-
-    Accepts either a ``thumbnails`` list of ``{"url": ...}`` dicts (the
-    smallest by area wins) or a bare ``thumbnail`` URL string.
-    """
-    return ThumbnailService.from_data(data)
+OnReloadDoneCallback = Callable[[str, int, str, str | None], None]
 
 
 class PlaylistSyncService:
@@ -86,7 +81,7 @@ class PlaylistSyncService:
         platform: str,
         playlist_id: str,
         on_done: OnReloadDoneCallback,
-        gate: Optional[threading.Lock] = None,
+        gate: threading.Lock | None = None,
     ) -> None:
         """Delete the local database and re-import all tracks.
 
@@ -117,10 +112,19 @@ class PlaylistSyncService:
         def _run() -> None:
             lock_gate = gate
             if lock_gate is not None:
-                # Blocking: drain any in-flight add before deleting the DB
-                # (see docstring).  The keybind side acquires non-blocking
-                # and skips, so there is no circular wait.
-                lock_gate.acquire()
+                # Drain any in-flight add before deleting the DB (see
+                # docstring).  The keybind side acquires non-blocking and
+                # skips, so there is no circular wait.  A lock that never
+                # frees (e.g. a hung platform API round trip) must not wedge
+                # the reload thread forever - give up after a sane ceiling.
+                if not lock_gate.acquire(timeout=GATE_ACQUIRE_TIMEOUT):
+                    logger.error(
+                        "Could not acquire the flow gate within %.0fs - "
+                        "reload aborted for '%s'",
+                        GATE_ACQUIRE_TIMEOUT, playlist_name,
+                    )
+                    on_done(playlist_name, 0, "error", None)
+                    return
             try:
                 inserted, status, thumb_url = self.reload_database_sync(
                     playlist_name, platform, playlist_id
@@ -208,7 +212,7 @@ class PlaylistSyncService:
                 f"could not fetch details for '{playlist_name}' "
                 f"from platform '{platform}'"
             )
-        thumb_url = _extract_thumbnail(details)
+        thumb_url = ThumbnailService.from_data(details)
         thumb_url = self.prefer_library_thumbnail(
             platform, integration, playlist_id, thumb_url
         )
@@ -259,8 +263,8 @@ class PlaylistSyncService:
         platform: str,
         integration,
         playlist_id: str,
-        details_thumb: Optional[str],
-    ) -> Optional[str]:
+        details_thumb: str | None,
+    ) -> str | None:
         """Prefer the library-listing thumbnail for YouTube playlists.
 
         Only the YouTube integration distinguishes custom uploaded playlist
@@ -275,7 +279,7 @@ class PlaylistSyncService:
             for p in integration.get_library_playlists():
                 if p.get("playlistId") != playlist_id:
                     continue
-                lib_url = _extract_thumbnail(p)
+                lib_url = ThumbnailService.from_data(p)
                 if lib_url:
                     return lib_url
                 break

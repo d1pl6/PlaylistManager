@@ -16,8 +16,6 @@ are explicit user commands and deliberately bypass this gate.
 
 from __future__ import annotations
 
-from typing import List
-
 from utils.config import (
     SCROBBLE_PLATFORMS_OPTION,
     SCROBBLE_PLATFORMS_SECTION,
@@ -32,7 +30,7 @@ from utils.config import (
 SCROBBLE_NONE = "none"
 
 
-def split_platforms(value: str) -> List[str]:
+def split_platforms(value: str) -> list[str]:
     """Split a stored platform list into stable, deduped ids.
 
     Comma-separated, whitespace-trimmed, empty entries dropped, order
@@ -67,4 +65,6 @@ def scrobble_enabled_for(platform: str) -> bool:
         return True
     if raw.strip().lower() == SCROBBLE_NONE:
         return False
-    return platform in split_platforms(raw)
+    # Match the "none" marker's case-folding: a user typing "Spotify" in
+    # settings.ini must not silently disable scrobbling for "spotify".
+    return platform.lower() in (p.lower() for p in split_platforms(raw))

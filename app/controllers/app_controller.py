@@ -4,16 +4,12 @@ App-level controller - quit and auth-refresh entry points for the UI.
 Quit orchestration lives here so the tkinter layer (MainWindow buttons,
 WM_DELETE_WINDOW) never reaches into :class:`App` internals.  If cleanup
 or teardown raises, the user is offered a choice between force-quitting
-(destroy the window regardless) and cancelling.
+(destroy the window regardless) and cancelling — the dialog itself lives
+in :mod:`ui.dialogs` so the controller stays free of widget code.
 """
 
 import logging
-import tkinter as tk
 from typing import Callable, Optional
-
-from utils.i18n import tr
-from utils.scaling import px, ui_font
-from utils.theme import C, btn_colors
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +23,7 @@ class AppController:
         # request can arrive while the Force-quit dialog is open
         # (wait_window re-enters the mainloop).  Without the guard the
         # second call re-runs teardown and root.destroy() on an already
-        # destroyed window raises TclError that escapes _confirm_force_quit.
+        # destroyed window raises TclError that escapes the dialog.
         self._quitting = False
 
     def quit_app(self):
@@ -48,7 +44,7 @@ class AppController:
             self.app.cleanup()
         except Exception as e:
             logger.exception("Cleanup failed: %s", e)
-            if not self._confirm_force_quit(e):
+            if not self._confirm_force_quit(self.app, e):
                 self._quitting = False
                 logger.info("Quit cancelled by user")
                 return
@@ -69,8 +65,8 @@ class AppController:
                 logger.exception("Failed to force-destroy the root window")
 
     def check_updates(self, *, force: bool = True, on_done=None) -> None:
-        """Proxy for App._check_updates - keeps the controller boundary."""
-        self.app._check_updates(force=force, on_done=on_done)
+        """Check for application updates and show a dialog when one is found."""
+        self.app.check_updates(force=force, on_done=on_done)
 
     def restart_app(self) -> None:
         """Cleanly quit and re-launch the app.
@@ -82,9 +78,13 @@ class AppController:
 
         Re-launch mirrors how the user started the app: ``sys.executable
         main.py`` when they ran it directly, otherwise the global
-        ``playlistmanager`` command.  A restart failure (the helper
-        process raises) leaves the app stopped rather than silently
-        half-closed.
+        ``playlistmanager`` command.  The subprocess is spawned *before*
+        the window is destroyed so that a compositor-side close binding
+        (e.g. Hyprland's ``hl.dsp.window.close()``) or a Wayland window
+        manager tearing down the surface cannot prevent the relaunch —
+        the child process is already running in its own session.  If
+        ``Popen`` fails the error is logged but the app is left running
+        (the window still exists at that point).
         """
         import subprocess
         import sys
@@ -109,11 +109,9 @@ class AppController:
             # Fall back to the user-installed global command.
             cmd = ["playlistmanager"]
 
-        try:
-            self.app.root.destroy()
-        except Exception:
-            pass
-
+        # Spawn the child first.  start_new_session=True keeps the
+        # child alive if the parent dies or a compositor close action
+        # arrives between Popen and root.destroy().
         try:
             subprocess.Popen(
                 cmd,
@@ -122,6 +120,12 @@ class AppController:
             )
         except OSError as e:
             logger.error("Failed to restart the app: %s", e)
+            return  # window still exists — leave the app running
+
+        try:
+            self.app.root.destroy()
+        except Exception:
+            pass
 
     def refresh_auth(
         self,
@@ -140,86 +144,12 @@ class AppController:
         """
         self.app.refresh_auth(platform, on_done)
 
-    def _confirm_force_quit(self, error: BaseException) -> bool:
+    @staticmethod
+    def _confirm_force_quit(app, error: BaseException) -> bool:
         """Show a Force-quit / Cancel dialog; return True to force-quit.
 
-        If the root window is already destroyed there is nothing left to
-        cancel (and nowhere to host a dialog), so force-quit is the only
-        meaningful outcome.
+        Delegates to :func:`ui.dialogs.confirm_force_quit` so the
+        controller layer never touches tkinter widgets directly.
         """
-        try:
-            if not self.app.root.winfo_exists():
-                return True
-        except tk.TclError:
-            return True
-
-        result = {"force": False}
-
-        # If the main window is withdrawn (hidden to tray) the error
-        # dialog, being transient to it, can hide behind the tray icon -
-        # make the root visible again so the dialog has a parent on screen.
-        try:
-            if self.app.root.state() != "normal":
-                self.app.root.deiconify()
-        except tk.TclError:
-            pass
-
-        try:
-            dialog = tk.Toplevel(self.app.root)
-            dialog.title(tr("common.error"))
-            dialog.configure(background=C["frame_main_bg"])
-            dialog.transient(self.app.root)
-            dialog.grab_set()
-            dialog.resizable(False, False)
-
-            tk.Label(
-                dialog,
-                text=tr("quit.error_while_closing"),
-                background=C["frame_main_bg"],
-                foreground=C["label_def_fg"],
-                font=ui_font(10),
-            ).pack(padx=16, pady=(12, 0))
-
-            tk.Label(
-                dialog,
-                text=str(error),
-                background=C["frame_main_bg"],
-                foreground=C["label_playlist_error_fg"],
-                font=ui_font(9),
-                wraplength=px(360),
-                justify="left",
-            ).pack(padx=16, pady=(4, 12))
-
-            def _choose(force: bool) -> None:
-                result["force"] = force
-                dialog.destroy()
-
-            dialog.protocol("WM_DELETE_WINDOW", lambda: _choose(False))
-
-            tk.Button(
-                dialog,
-                text=tr("quit.force_quit"),
-                command=lambda: _choose(True),
-                **btn_colors(C["button_main_bg"], C["button_main_fg"]),
-                bd=0,
-            ).pack(side="left", padx=(16, 4), pady=(0, 12))
-
-            tk.Button(
-                dialog,
-                text=tr("common.cancel"),
-                command=lambda: _choose(False),
-                **btn_colors(C["button_head_bg"], C["button_head_fg"]),
-                bd=0,
-            ).pack(side="left", padx=(4, 16), pady=(0, 12))
-
-            self.app.root.wait_window(dialog)
-            return result["force"]
-        except Exception:
-            # The dialog itself failed to build (grab conflict, a root
-            # destroyed between the checks above, ...) - there is no
-            # place left to host it and nothing to cancel, so force-quit
-            # is the only meaningful outcome.  Returning False here would
-            # let the exception escape quit_app's handler with _quitting
-            # still True, permanently blocking every later quit request.
-            logger.exception("Failed to show the force-quit dialog")
-            return True
+        from ui.dialogs import confirm_force_quit
+        return confirm_force_quit(app.root, error)

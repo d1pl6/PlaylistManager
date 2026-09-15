@@ -173,7 +173,11 @@ class TrayService:
                     self._icon.run()
                 except Exception as e:
                     logger.warning("Tray backend failed at runtime: %s", e)
+                    # Backend died: mark unavailable AND not-started so a
+                    # later start() sees consistent state instead of a
+                    # stopped icon with the _started flag still set.
                     self._icon = None
+                    self._started = False
 
             threading.Thread(target=_run_guarded, daemon=True).start()
         else:

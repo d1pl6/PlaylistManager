@@ -26,15 +26,17 @@ cannot grow without bound.
 
 import json
 import logging
-import os
 import threading
 from datetime import datetime
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 from services import profile_store as _profile_store
+from utils.atomic_json import atomic_json_write
 
+# Bound at import time so paths resolve exactly once per process; the
+# active profile can only change via restart, so re-evaluating here
+# would be both wasted work and wrong mid-process.
 scrobbles_json = _profile_store.db_dir() / "scrobbles.json"
 
 # Serialise all read/write access across flow threads and the UI thread.
@@ -80,26 +82,12 @@ def _load() -> dict:
 def _write(data: dict) -> None:
     """Atomically persist the ledger (caller holds *_lock*).
 
-    removable filesystems-safe: unique temp file in the same directory + rename, like
-    duplicate_queue._write.  Uses :func:`tempfile.mkstemp` so concurrent
-    processes never clobber the same temp file.
+    Delegates to :func:`utils.atomic_json.atomic_json_write`.  Failures
+    are logged and swallowed - this is bookkeeping, never worth crashing
+    the add flow over (see module docstring).
     """
-    import tempfile as _tempfile
     try:
-        scrobbles_json.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = _tempfile.mkstemp(
-            dir=str(scrobbles_json.parent), suffix=".json"
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, str(scrobbles_json))
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        atomic_json_write(scrobbles_json, data)
     except Exception as e:
         logger.error("Failed to write %s: %s", scrobbles_json, e)
 
@@ -200,7 +188,7 @@ def record_scrobble(platform: str, playlist_id: str, song_id, timestamp: int) ->
         _write(data)
 
 
-def lookup_scrobble(platform: str, playlist_id: str, song_id) -> Optional[int]:
+def lookup_scrobble(platform: str, playlist_id: str, song_id) -> int | None:
     """Return the recorded accepted scrobble timestamp for a local DB row,
     or ``None`` when no auto-scrobble was recorded for that row (the
     add's auto-scrobble was off, the row was re-imported by a reload

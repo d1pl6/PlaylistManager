@@ -152,8 +152,8 @@ class TestMisc:
 
     def test_still_registered(self, store):
         store.PlaylistStore.add_playlist("Chill", "spotify", "pl1")
-        assert ps.playlist_still_registered("Chill", "spotify", "pl1") is True
-        assert ps.playlist_still_registered("Gone", "spotify", "nope") is False
+        assert store.PlaylistStore.playlist_still_registered("Chill", "spotify", "pl1") is True
+        assert store.PlaylistStore.playlist_still_registered("Gone", "spotify", "nope") is False
 
     def test_reload_after_external_change(self, store, monkeypatch):
         import time

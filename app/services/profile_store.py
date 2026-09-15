@@ -20,8 +20,11 @@ import json
 import logging
 import os
 import re
+import shutil
 import threading
 from pathlib import Path
+
+from utils.atomic_json import atomic_json_write
 
 logger = logging.getLogger(__name__)
 
@@ -67,29 +70,16 @@ _MIGRATE_LEGACY = True
 
 
 def _write_json(path: Path, data: object) -> None:
-    """Atomically write *data* to *path* (unique temp + rename).
+    """Atomically write *data* to *path* (see :func:`atomic_json_write`).
 
-    Uses :func:`tempfile.mkstemp` so concurrent processes never clobber
-    the same temp file (the CLI and GUI can run simultaneously).
+    Let exceptions propagate - callers that are user-facing (profile
+    create/rename/delete/switch) surface the failure instead of silently
+    dropping the write and diverging the in-memory state from disk.
+    Startup bootstrap callers (:func:`_ensure_active_file`,
+    :func:`_ensure_profiles_file`) wrap this best-effort because a
+    read-only data dir must not prevent the app from launching.
     """
-    import tempfile
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".json")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, str(path))
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
-    except Exception:
-        logger.exception("Failed to write %s", path)
+    atomic_json_write(path, data)
 
 
 def _read_json(path: Path) -> dict | list | None:
@@ -109,7 +99,12 @@ def _read_json(path: Path) -> dict | list | None:
 
 
 def _ensure_active_file() -> None:
-    """Create ``cfg/profile.json`` with the ``default`` profile if absent."""
+    """Create ``cfg/profile.json`` with the ``default`` profile if absent.
+
+    Best-effort: a read-only data dir must not prevent the app from
+    launching, so a write failure here is logged and ignored (the
+    in-memory default still serves the session).
+    """
     if ACTIVE_JSON.exists():
         return
     data = {
@@ -122,7 +117,10 @@ def _ensure_active_file() -> None:
             }
         },
     }
-    _write_json(ACTIVE_JSON, data)
+    try:
+        _write_json(ACTIVE_JSON, data)
+    except Exception:
+        logger.exception("Failed to seed %s", ACTIVE_JSON)
 
 
 def _persist_active() -> None:
@@ -140,7 +138,11 @@ def _persist_active() -> None:
 
 
 def _ensure_profiles_file() -> None:
-    """Create ``db/profiles.json`` with the ``default`` profile if absent."""
+    """Create ``db/profiles.json`` with the ``default`` profile if absent.
+
+    Best-effort like :func:`_ensure_active_file` - a write failure here
+    must not prevent startup.
+    """
     if PROFILES_JSON.exists():
         return
     data = {
@@ -153,7 +155,10 @@ def _ensure_profiles_file() -> None:
             }
         },
     }
-    _write_json(PROFILES_JSON, data)
+    try:
+        _write_json(PROFILES_JSON, data)
+    except Exception:
+        logger.exception("Failed to seed %s", PROFILES_JSON)
 
 
 def _load_profiles() -> dict:
@@ -227,7 +232,6 @@ def _migrate_legacy_dirs() -> None:
     and the **legacy** dir has content - a downgrade that leaves both
     populated means the user chose to keep the old layout.
     """
-    import shutil
 
     for legacy, dest, label in (
         (_LEGACY_DB_DIR, _DEFAULT_DB_DIR, "db"),
@@ -237,7 +241,14 @@ def _migrate_legacy_dirs() -> None:
         if sentinel.exists():
             continue  # already migrated (or fresh install)
         dest.mkdir(parents=True, exist_ok=True)
-        if legacy.is_dir() and any(legacy.iterdir()):
+        try:
+            legacy_has_items = legacy.is_dir() and any(legacy.iterdir())
+        except OSError:
+            # Unreadable legacy dir (permissions / broken mount) - skip
+            # the migration instead of crashing app startup.
+            logger.warning("Cannot read legacy %s dir %s - skipping migration", label, legacy)
+            legacy_has_items = False
+        if legacy_has_items:
             if not dest.exists() or not any(dest.iterdir()):
                 # Destination is empty - safe to migrate.
                 for item in legacy.iterdir():
@@ -327,8 +338,6 @@ def create(
             "Profile name must start with a letter or digit "
             "and contain only letters, digits, underscores, and hyphens"
         )
-    if name.startswith("."):
-        raise ValueError("Profile name must not start with a dot")
 
     with _lock:
         profiles = _load_profiles()
@@ -357,7 +366,6 @@ def _copy_dir_contents(src: Path, dst: Path) -> None:
     """
     if not src.is_dir():
         return
-    import shutil
 
     dst.mkdir(parents=True, exist_ok=True)
     for item in src.iterdir():
@@ -408,8 +416,6 @@ def delete(name: str) -> None:
         progs.pop(name)
         _save_profiles(profiles)
     # Remove owned playlists directory.
-    import shutil
-
     owned = _DEFAULT_DB_DIR / "profiles" / name
     if owned.is_dir():
         shutil.rmtree(owned, ignore_errors=True)
@@ -442,7 +448,6 @@ def rename(old: str, new: str) -> None:
         progs[new] = progs.pop(old)
         _save_profiles(profiles)
         # Move owned data on disk.
-        import shutil
         for base in (_DEFAULT_DB_DIR / "profiles", _DEFAULT_CFG_DIR / "profiles"):
             src = base / old
             if src.is_dir():

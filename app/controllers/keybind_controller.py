@@ -1,7 +1,7 @@
 """
 Keybind controller - keybind recording and flow dispatch.
 
-Responsibilities (after the A4 split):
+Responsibilities:
   1. Key event processing (recording state machine)
   2. Credential management / flow invalidation
   3. Flow controller lazy-initialisation and dispatch
@@ -11,9 +11,9 @@ Delegates keybind storage/matching to :class:`KeybindRegistry` and key
 normalisation to :mod:`utils.key_mapping`.
 """
 
-import threading
 import logging
-from typing import Callable, Dict, Optional, Set
+import threading
+from typing import Callable, Optional
 
 from pynput import keyboard
 from utils.key_mapping import (
@@ -23,10 +23,14 @@ from utils.key_mapping import (
 )
 from utils.config import get_setting
 from utils.platform import is_wayland_session
-from controllers.keybind_registry import KeybindCallbacks, KeybindRegistry
-from services import duplicate_queue
-from services import scrobble_log
+from controllers.callbacks import KeybindCallbacks
+from controllers.keybind_registry import (
+    KeybindRegistry,
+    PLATFORM_YOUTUBE_MUSIC,
+)
+from services import duplicate_queue, scrobble_log
 from services.scrobble import scrobble_enabled_for
+from services.scrobble_service import scrobble_current_song
 from services.playlist_store import PlaylistStore
 from services.song_manager import SongManager
 from utils.theme import C
@@ -62,8 +66,12 @@ class KeybindController:
 
         # Flow controllers / URL receivers, keyed by platform id -
         # lazily created on first keybind trigger for that platform.
-        self._flows: Dict[str, object] = {}
-        self._receivers: Dict[str, object] = {}
+        self._flows: dict[str, object] = {}
+        self._receivers: dict[str, object] = {}
+        # Receivers whose port is still occupied by a mid-flight flow when
+        # update_credentials() runs.  Stopped as soon as the flow unwinds
+        # (next keybind rebuilds a fresh receiver for that platform).
+        self._stale_receivers: dict[str, object] = {}
 
         # Registry
         self.registry = KeybindRegistry()
@@ -99,8 +107,10 @@ class KeybindController:
         did not touch).  ``None`` clears all flows - legacy callers that
         re-authenticated everything.
 
-        The affected URL receivers are stopped to free their ports before
-        a new receiver is created on the next keybind.
+        A URL receiver that is in use by a mid-flight flow (``_flow_busy``
+        held) is parked in ``_stale_receivers`` and stopped once the flow
+        unwinds (in ``_build_flow``, before a new receiver is built), so
+        the capture is not torn down under it.
         """
         # Take _init_lock so we don't pop a flow/receiver that a concurrent
         # worker (activity-window Add, keybind/scrobble path via
@@ -113,12 +123,15 @@ class KeybindController:
                     self._flows.pop(pid, None)
                     receiver = self._receivers.pop(pid, None)
                     if receiver is not None:
-                        try:
-                            receiver.stop()
-                        except Exception as e:
-                            logger.error("Error stopping URL receiver: %s", e)
+                        if self._flow_busy.locked():
+                            # A flow is mid-capture - tear the receiver
+                            # down only after it unwinds so the capture
+                            # is not cancelled mid-wait.
+                            self._stale_receivers[pid] = receiver
+                        else:
+                            self._stop_receiver_safe(pid, receiver)
             else:
-                self.stop_receiver()
+                self._stop_all_receivers()
                 self._flows.clear()
                 self._receivers.clear()
         logger.info("KeybindController credentials updated, flows invalidated")
@@ -181,6 +194,9 @@ class KeybindController:
                 )
                 self._listener.daemon = True
                 self._listener.start()
+                # Keep the focus-out guard so that a focus-away cancels an
+                # in-progress recording consistently in both modes.
+                self._bind_focus_out()
                 logger.info("Global keybind listener started")
             except Exception as e:
                 logger.error("Failed to start keybind listener: %s", e)
@@ -190,6 +206,7 @@ class KeybindController:
         with self._listener_lock:
             listener = self._listener
             self._listener = None
+        self._unbind_focus_out()
         if listener is not None:
             listener.stop()
             if wait:
@@ -201,7 +218,7 @@ class KeybindController:
             return
         self._root.bind("<KeyPress>", self._on_tk_press)
         self._root.bind("<KeyRelease>", self._on_tk_release)
-        self._root.bind("<FocusOut>", self._on_focus_out)
+        self._bind_focus_out()
         logger.info("Local key listener bound")
 
     def _unbind_local_keys(self):
@@ -209,10 +226,26 @@ class KeybindController:
             return
         self._root.unbind("<KeyPress>")
         self._root.unbind("<KeyRelease>")
-        self._root.unbind("<FocusOut>")
+        self._unbind_focus_out()
         with self._pressed_keys_lock:
             self._pressed_keys.clear()
         logger.info("Local key listener unbound")
+
+    def _bind_focus_out(self):
+        """Bind the <FocusOut> guard in both local and global mode.
+
+        Kept separate from the local KeyPress/KeyRelease bindings so a
+        focus-away cancels an in-progress recording consistently,
+        regardless of listener mode.
+        """
+        if self._root is None:
+            return
+        self._root.bind("<FocusOut>", self._on_focus_out)
+
+    def _unbind_focus_out(self):
+        if self._root is None:
+            return
+        self._root.unbind("<FocusOut>")
 
     def _on_focus_out(self, event):
         with self._pressed_keys_lock:
@@ -355,9 +388,9 @@ class KeybindController:
         playlist_name: str,
         keybind: str,
         callbacks: KeybindCallbacks,
-        platform: str = "youtube_music",
+        platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         """Register *keybind* for *playlist_name*; see KeybindRegistry.register.
 
         *playlist_id* disambiguates two playlists that share a name on
@@ -397,7 +430,7 @@ class KeybindController:
                 callbacks = info["callbacks"]
                 # Legacy bindings predate the platform field - they were all
                 # YouTube Music entries.
-                platform = info.get("platform", "youtube_music")
+                platform = info.get("platform", PLATFORM_YOUTUBE_MUSIC)
                 playlist_id = info.get("playlist_id", "")
                 if self._root:
                     try:
@@ -425,7 +458,7 @@ class KeybindController:
         self,
         playlist_name: str,
         callbacks: KeybindCallbacks,
-        platform: str = "youtube_music",
+        platform: str = PLATFORM_YOUTUBE_MUSIC,
         playlist_id: str = "",
     ):
         """Execute the add-to-playlist flow for the given keybind.
@@ -559,10 +592,9 @@ class KeybindController:
                     # path can later delete THIS exact scrobble (not the
                     # track's most recent one).
                     if get_setting("scrobble_on_add") and scrobble_enabled_for(platform):
-                        song_data = result.get("song", {})
                         if song_data and self.integrations:
                             song_id = result.get("song_id")
-                            playlist_id = stored_playlist_id or ""
+                            scrobble_playlist_id = stored_playlist_id or ""
 
                             def scrobble_async():
                                 try:
@@ -571,7 +603,7 @@ class KeybindController:
                                         ts = scrobble_integ.scrobble(song_data)
                                         if ts is not None and song_id is not None:
                                             scrobble_log.record_scrobble(
-                                                platform, playlist_id, song_id, ts
+                                                platform, scrobble_playlist_id, song_id, ts
                                             )
                                 except Exception as e:
                                     logger.debug("Failed to scrobble song: %s", e)
@@ -654,9 +686,10 @@ class KeybindController:
     def _scrobble_current_action(self) -> None:
         """Scrobble the currently-playing song without adding to any playlist.
 
-        Captures the current song via the platform's existing capture path
-        (exactly as add-flow would), then scrobbles it if Last.fm is available.
-        Runs on a worker thread to avoid blocking the UI during capture.
+        Captures the current song via the first platform that reports one
+        (via the shared ``scrobble_current_song`` service), then scrobbles
+        it if Last.fm is available.  Runs on a worker thread to avoid
+        blocking the UI during capture.
 
         Holds ``_flow_busy`` for the capture + scrobble so a standalone
         scrobble action does not run its receiver concurrently with an
@@ -676,46 +709,29 @@ class KeybindController:
                     logger.info("Last.fm integration not available for scrobble")
                     return
 
-                # Try each authenticated platform's capture path until one succeeds
-                for platform_id, integration in self.integrations.get_all().items():
-                    if not integration.is_authenticated():
-                        continue
-                    
-                    plugin = self.plugin_registry.get(platform_id)
-                    if plugin is None or not plugin.flow_class:
-                        continue
+                def flow_provider(platform_id: str):
+                    # The KeybindCallbacks is a throwaway: it is only used on
+                    # the LazyInit path, and that path is skipped (early
+                    # return) when the flow is already in ``self._flows``,
+                    # so the real add-flow callbacks are never displaced.
+                    if not self._ensure_initialized(platform_id, KeybindCallbacks()):
+                        return None
+                    return self._flows.get(platform_id)
 
-                    try:
-                        # Ensure flow is initialized for this platform.  The
-                        # KeybindCallbacks is a throwaway: it is only used on
-                        # the LazyInit path, and that path is skipped (early
-                        # return) when the flow is already in ``self._flows``,
-                        # so the real add-flow callbacks are never displaced.
-                        if not self._ensure_initialized(platform_id, KeybindCallbacks()):
-                            continue
-
-                        flow = self._flows.get(platform_id)
-                        if flow is None:
-                            continue
-
-                        # Capture the current song using the flow's capture path
-                        url, song_data, error = flow.capture(30)  # 30s timeout
-
-                        if song_data:
-                            # Found a currently-playing song, scrobble it
-                            result = scrobble_integ.scrobble(song_data)
-                            if result:
-                                logger.info("Scrobbled: %s", song_data.get("title", ""))
-                            else:
-                                logger.debug("Failed to scrobble: %s", song_data.get("title", ""))
-                            return
-                        else:
-                            logger.debug("No song playing on %s: %s", platform_id, error)
-                    except Exception as e:
-                        logger.debug("Failed to scrobble from %s: %s", platform_id, e)
-                        continue
-
-                logger.info("No currently-playing song found")
+                captured = scrobble_current_song(
+                    self.integrations,
+                    self.plugin_registry,
+                    flow_provider,
+                    scrobble_integ,
+                )
+                if captured is None:
+                    logger.info("No currently-playing song found")
+                    return
+                song_data, ts = captured
+                if ts:
+                    logger.info("Scrobbled: %s", song_data.get("title", ""))
+                else:
+                    logger.debug("Failed to scrobble: %s", song_data.get("title", ""))
             except Exception as e:
                 logger.error("Scrobble action failed: %s", e, exc_info=True)
             finally:
@@ -772,6 +788,13 @@ class KeybindController:
             )
             return False
 
+        # Stop any stale receiver that was parked by update_credentials()
+        # while a previous flow was mid-capture - by now the flow has
+        # unwound (the caller holds _flow_busy) so the port is safe to free.
+        stale = self._stale_receivers.pop(platform_id, None)
+        if stale is not None:
+            self._stop_receiver_safe(platform_id, stale)
+
         try:
             flow_cls = plugin.import_flow()
 
@@ -794,12 +817,15 @@ class KeybindController:
                 flow = flow_cls(integration, self.song_manager, receiver)
             elif plugin.flow_type == "extension":
                 logger.error(
-                    "Extension-type plugin %s declares no receiver_class",
+                    "Extension-type plugin %s failed to build its "
+                    "receiver (declared receiver_class: %s)",
                     platform_id,
+                    plugin.receiver_class,
                 )
                 raise RuntimeError(
-                    f"Extension-type plugin '{plugin.display_name}' is missing "
-                    "its receiver_class"
+                    f"Extension-type plugin '{plugin.display_name}' "
+                    f"failed to build its receiver "
+                    f"({plugin.receiver_class})"
                 )
             else:
                 # "api" type - reads the platform directly, no receiver.
@@ -827,13 +853,26 @@ class KeybindController:
     # Cleanup
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _stop_receiver_safe(pid: str, receiver) -> None:
+        """Stop a URL receiver, logging errors but never raising."""
+        try:
+            receiver.stop()
+        except Exception as e:
+            logger.error("Error stopping URL receiver for %s: %s", pid, e)
+
+    def _stop_all_receivers(self) -> None:
+        """Stop every registered URL receiver and any pending stale ones."""
+        for pid, receiver in list(self._receivers.items()):
+            self._stop_receiver_safe(pid, receiver)
+        for pid, receiver in list(self._stale_receivers.items()):
+            self._stop_receiver_safe(pid, receiver)
+        self._stale_receivers.clear()
+
     def stop_receiver(self):
-        """Stop every URL receiver (all extension-type platforms)."""
-        for receiver in list(self._receivers.values()):
-            try:
-                receiver.stop()
-            except Exception as e:
-                logger.error("Error stopping URL receiver: %s", e)
+        """Stop every active URL receiver (all platforms with a URL receiver)."""
+        for pid, receiver in list(self._receivers.items()):
+            self._stop_receiver_safe(pid, receiver)
 
     def stop_listener(self, wait: bool = True):
         if self._global_mode:
@@ -845,10 +884,11 @@ class KeybindController:
         # Don't wait on the listener thread at quit - it may never exit
         # (see _stop_global_listener) and the process is about to die anyway.
         self.stop_listener(wait=False)
-        self.stop_receiver()
+        self._stop_all_receivers()
         self.song_manager = None
         self._flows.clear()
         self._receivers.clear()
+        self._stale_receivers.clear()
         # Drop any half-finished keybind recording state so a stray FocusOut
         # or press callback after cleanup cannot fire into a dead window.
         with self._pressed_keys_lock:

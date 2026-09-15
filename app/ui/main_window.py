@@ -18,13 +18,13 @@ PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 PLATFORM_SPOTIFY = "spotify"
 PLATFORM_SOUNDCLOUD = "soundcloud"
 PLATFORM_DEEZER = "deezer"
-from controllers.keybind_registry import KeybindCallbacks
+from controllers.callbacks import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
 from services import duplicate_queue
 from services.database import DatabaseManager
 from services.duplicate_check import find_duplicate_pairs, read_settings
 from services.playlist_sort import sort_playlists
-from services.playlist_store import PlaylistStore, playlist_still_registered
+from services.playlist_store import PlaylistStore
 from services.playlist_sync import PlaylistSyncService
 from services.song_manager import SongManager
 from utils.icons import IconService
@@ -854,6 +854,16 @@ on_like_button_change=self._apply_like_button_visibility,
 
     def _handle_activity_song(self, record: dict, action: str) -> None:
         """Dispatcher passed to the activity window (runs on UI thread)."""
+        try:
+            self._dispatch_activity_song(record, action)
+        except OSError as e:
+            # extra.json persistence failed (disk full/permissions) - the
+            # action itself (platform add / local delete) already ran, so
+            # degrade to a log instead of a raw Tk traceback.
+            logger.error("Activity action '%s' could not be persisted: %s", action, e)
+            self.refresh_activity_badge()
+
+    def _dispatch_activity_song(self, record: dict, action: str) -> None:
         kind = record.get("kind")
         if kind == "pair":
             pair_key = record["pair_key"]
@@ -876,7 +886,7 @@ on_like_button_change=self._apply_like_button_visibility,
             duplicate_queue.set_song(record["pair_key"], "dismissed")
         elif action == "add":
             duplicate_queue.remove_pending(record["id"])
-            alive = playlist_still_registered(
+            alive = PlaylistStore.playlist_still_registered(
                 record.get("playlist_name", ""),
                 record.get("platform", ""),
                 record.get("playlist_id") or None,
@@ -922,23 +932,31 @@ on_like_button_change=self._apply_like_button_visibility,
         busy = self.kc.flow_busy()
         if not busy.acquire(blocking=False):
             logger.debug("Flow in progress - deferring activity Add for %s", platform)
-            duplicate_queue.add_pending(rec)
-            duplicate_queue.record_error(
-                rec.get("playlist_name", ""),
-                platform,
-                "Another add is in progress - this song stays queued",
-            )
+            try:
+                # extra.json persistence can fail (disk full/permissions) -
+                # keep the daemon thread alive and surface it to the log.
+                duplicate_queue.add_pending(rec)
+                duplicate_queue.record_error(
+                    rec.get("playlist_name", ""),
+                    platform,
+                    "Another add is in progress - this song stays queued",
+                )
+            except Exception as e:
+                logger.error("Could not persist deferred activity Add: %s", e)
             _ui(self.refresh_activity_badge)
             return
 
         try:
             flow = self.kc.get_flow(platform)
             if flow is None:
-                duplicate_queue.record_error(
-                    rec.get("playlist_name", ""),
-                    platform,
-                    f"{platform} unavailable - could not add '{rec.get('title', '')}'",
-                )
+                try:
+                    duplicate_queue.record_error(
+                        rec.get("playlist_name", ""),
+                        platform,
+                        f"{platform} unavailable - could not add '{rec.get('title', '')}'",
+                    )
+                except Exception as e:
+                    logger.error("Could not record flow-unavailable error: %s", e)
                 _ui(self.refresh_activity_badge)
                 return
 
@@ -954,8 +972,12 @@ on_like_button_change=self._apply_like_button_visibility,
                 pass
 
             def on_error(msg: str) -> None:
-                duplicate_queue.add_pending(rec)  # re-enqueue for another try
-                duplicate_queue.record_error(rec.get("playlist_name", ""), platform, msg)
+                try:
+                    # re-enqueue for another try
+                    duplicate_queue.add_pending(rec)
+                    duplicate_queue.record_error(rec.get("playlist_name", ""), platform, msg)
+                except Exception as e:
+                    logger.error("Could not persist add error for %s: %s", platform, e)
                 _ui(self.refresh_activity_badge)
 
             def on_success(result: dict) -> None:
@@ -976,10 +998,13 @@ on_like_button_change=self._apply_like_button_visibility,
                 )
             except Exception as e:
                 logger.error("Activity Add failed: %s", e, exc_info=True)
-                duplicate_queue.add_pending(rec)
-                duplicate_queue.record_error(
-                    rec.get("playlist_name", ""), platform, str(e)
-                )
+                try:
+                    duplicate_queue.add_pending(rec)
+                    duplicate_queue.record_error(
+                        rec.get("playlist_name", ""), platform, str(e)
+                    )
+                except Exception as qe:
+                    logger.error("Could not persist activity Add error: %s", qe)
                 _ui(self.refresh_activity_badge)
         finally:
             busy.release()
@@ -1022,15 +1047,21 @@ on_like_button_change=self._apply_like_button_visibility,
 
             def apply():
                 if not ok:
-                    duplicate_queue.record_error(name, platform, reason)
+                    try:
+                        duplicate_queue.record_error(name, platform, reason)
+                    except Exception as e:
+                        logger.error("Could not persist '%s' error: %s", name, e)
                     self.refresh_activity_badge()
                     return
                 if self._song_manager.delete_song(
                     name, newer.get("id"), platform=platform, playlist_id=pid
                 ):
-                    duplicate_queue.set_song(
-                        pair_record["pair_key"], "added"
-                    )
+                    try:
+                        duplicate_queue.set_song(
+                            pair_record["pair_key"], "added"
+                        )
+                    except Exception as e:
+                        logger.error("Could not persist pair resolution: %s", e)
                     idx = self._find_frame_index_by_name(name)
                     if idx is not None:
                         self.showcase.refresh(idx, name, platform)
@@ -1038,12 +1069,15 @@ on_like_button_change=self._apply_like_button_visibility,
                 else:
                     # Platform side already removed; surface the mirror
                     # drift instead of pretending all went well.
-                    duplicate_queue.record_error(
-                        name,
-                        platform,
-                        "Removed from the platform but the local row "
-                        "could not be deleted",
-                    )
+                    try:
+                        duplicate_queue.record_error(
+                            name,
+                            platform,
+                            "Removed from the platform but the local row "
+                            "could not be deleted",
+                        )
+                    except Exception as e:
+                        logger.error("Could not persist mirror-drift error: %s", e)
                 self.refresh_activity_badge()
 
             try:
