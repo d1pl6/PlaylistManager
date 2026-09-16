@@ -1,9 +1,8 @@
 """
 Authentication credential management.
 
-Extracted from ``app/ui/login_ui.py`` (Issue #2).  Handles the
-credential-file lifecycle for YouTube Music and Spotify so the UI
-layer only needs to call a function and handle the result.
+Handles the credential-file lifecycle for YouTube Music and Spotify so
+the UI layer only needs to call a function and handle the result.
 """
 
 import json
@@ -23,6 +22,47 @@ logger = logging.getLogger(__name__)
 AUTH_DIR = _profile_store.auth_dir()
 SPOTIFY_FILE = AUTH_DIR / "spotify.json"
 BROWSER_FILE = AUTH_DIR / "browser.json"
+
+
+def complete_browser_file(path: Path) -> bool:
+    """True when *path* is a browser.json that ``YTMusic`` can consume.
+
+    Valid JSON is not enough on its own - a headers file without the
+    auth cookie constructs an UNAUTHORIZED client whose every browse
+    fails.  The check mirrors ytmusicapi's own requirement (its setup
+    refuses to write a file without ``cookie``).
+    """
+    try:
+        if not path.exists():
+            return False
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return False
+        keys = {k.lower() for k in data}
+        return bool(keys & {"cookie", "access_token"})
+    except Exception:
+        return False
+
+
+def browser_file_ready() -> bool:
+    """Whether a *complete, usable* browser.json exists.
+
+    The auth manager (``YouTubeAuthManager._find_browser_file``) accepts
+    the primary platformdirs path plus legacy fallback locations; the
+    poll must mirror that, or a fallback copy would never trigger the
+    refresh and the login would silently only apply on restart.
+    """
+    try:
+        from integrations.youtube_music.youtube_music import (
+            BROWSER_FILE as YT_BROWSER_FILE,
+            BROWSER_FILE_FALLBACKS,
+        )
+    except Exception:
+        return complete_browser_file(BROWSER_FILE)
+    return any(
+        complete_browser_file(p)
+        for p in [YT_BROWSER_FILE, *BROWSER_FILE_FALLBACKS]
+    )
 
 # ---------------------------------------------------------------------------
 # YouTube Music

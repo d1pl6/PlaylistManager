@@ -30,7 +30,20 @@ from cli import (
 )
 from utils.logging_config import configure_logging
 from utils.config import get_setting_value
-from utils.i18n import set_language
+from utils.i18n import set_language, tr
+from services.health_check import check_network
+
+
+def _require_network() -> None:
+    """Exit with a clear error when there is no internet.
+
+    The add-song / playlist-register / reload / scrobble flows make
+    network round trips; failing fast here beats confusing per-request
+    errors mid-flow (and a long offline timeout per request).
+    """
+    if not check_network():
+        print(tr("cli.no_network"), file=sys.stderr)
+        sys.exit(2)
 
 
 def parse_args():
@@ -179,17 +192,21 @@ def main():
     if args.uninstall_platform is not None:
         sys.exit(run_uninstall(args.uninstall_platform))
     if args.add_song_targets is not None:
+        _require_network()
         sys.exit(run_add(args.add_song_targets))
     if args.scrobble_only:
+        _require_network()
         sys.exit(run_scrobble())
     if args.playlist_args is not None:
         verb = args.playlist_args[0].lower()
         rest = ",".join(args.playlist_args[1:])
         if verb == "add":
+            _require_network()
             sys.exit(run_add_url(rest))
         if verb in ("del", "delete"):
             sys.exit(run_del(rest))
         if verb in ("ref", "refresh"):
+            _require_network()
             sys.exit(run_refresh(rest))
         print(
             f"error: unknown playlist action '{verb}' "

@@ -9,7 +9,6 @@ Actual credential-file i/o, terminal launching, and API verification are
 delegated to :mod:`services.auth_setup` and :mod:`utils.platform`.
 """
 
-import json
 import logging
 import threading
 import tkinter as tk
@@ -298,56 +297,6 @@ def _on_youtube_music(parent, on_success):
         )
 
 
-def _browser_file_ready() -> bool:
-    """Whether a *complete, usable* browser.json exists.
-
-    The auth manager (``YouTubeAuthManager._find_browser_file``) accepts
-    the primary platformdirs path plus legacy fallback locations; the
-    poll must mirror that, or a fallback copy would never trigger the
-    refresh and the login would silently only apply on restart.
-
-    ``ytmusicapi browser`` writes the file with a plain ``open(path, "w")``
-    + ``json.dump``: the file *exists* from the moment the write truncates
-    it, before a single byte of JSON lands.  Firing the refresh on mere
-    existence builds the client from an empty or partial file - ``YTMusic``
-    raises ``JSONDecodeError``, the scoped refresh fails, and the poll
-    never fires again (``on_success`` is called exactly once), leaving
-    every YouTube feature broken until the app is restarted.  Requiring
-    valid JSON that actually carries the auth cookie/access token closes
-    that window.
-    """
-    try:
-        from integrations.youtube_music.youtube_music import (
-            BROWSER_FILE as YT_BROWSER_FILE,
-            BROWSER_FILE_FALLBACKS,
-        )
-    except Exception:
-        return _complete_browser_file(auth_setup.BROWSER_FILE)
-    return any(
-        _complete_browser_file(p) for p in [YT_BROWSER_FILE, *BROWSER_FILE_FALLBACKS]
-    )
-
-
-def _complete_browser_file(path: Path) -> bool:
-    """True when *path* is a browser.json that ``YTMusic`` can consume.
-
-    Valid JSON is not enough on its own - a headers file without the
-    auth cookie constructs an UNAUTHORIZED client whose every browse
-    fails.  The check mirrors ytmusicapi's own requirement (its setup
-    refuses to write a file without ``cookie``).
-    """
-    try:
-        if not path.exists():
-            return False
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return False
-        keys = {k.lower() for k in data}
-        return bool(keys & {"cookie", "access_token"})
-    except Exception:
-        return False
-
-
 def _poll_for_browser_json(parent, on_success, attempts: int = 0) -> None:
     """Wait for browser.json and fire *on_success* once it appears.
 
@@ -364,7 +313,7 @@ def _poll_for_browser_json(parent, on_success, attempts: int = 0) -> None:
     except tk.TclError:
         return
 
-    if _browser_file_ready():
+    if auth_setup.browser_file_ready():
         on_success()
         return
 
@@ -498,15 +447,15 @@ def _on_spotify(parent, on_success):
                 if on_success:
                     on_success("spotify")
             else:
-                status_label.config(text=tr("login.no_credentials_file"), foreground="red")
+                status_label.config(text=tr("login.no_credentials_file"), foreground=C["status_error_bg"])
         except Exception as e:
-            status_label.config(text=tr("login.delete_failed", error=e), foreground="red")
+            status_label.config(text=tr("login.delete_failed", error=e), foreground=C["status_error_bg"])
 
     # ---- Test ----
     def test_credentials():
         creds = _get_creds()
         if not _all_filled(creds):
-            status_label.config(text=tr("login.all_fields_required"), foreground="red")
+            status_label.config(text=tr("login.all_fields_required"), foreground=C["status_error_bg"])
             return
         status_label.config(text=tr("login.testing"), foreground=label_fg)
         _set_busy(True)
@@ -538,13 +487,13 @@ def _on_spotify(parent, on_success):
                 foreground=C["label_playlist_good_fg"],
             )
         else:
-            status_label.config(text=result.get("error", tr("common.error")), foreground="red")
+            status_label.config(text=result.get("error", tr("common.error")), foreground=C["status_error_bg"])
 
     # ---- Save ----
     def save_credentials():
         creds = _get_creds()
         if not _all_filled(creds):
-            status_label.config(text=tr("login.all_fields_required"), foreground="red")
+            status_label.config(text=tr("login.all_fields_required"), foreground=C["status_error_bg"])
             return
         status_label.config(text=tr("login.verifying"), foreground=label_fg)
         _set_busy(True)
@@ -575,7 +524,7 @@ def _on_spotify(parent, on_success):
             if on_success:
                 on_success("spotify")
         else:
-            status_label.config(text=result.get("error", tr("common.error")), foreground="red")
+            status_label.config(text=result.get("error", tr("common.error")), foreground=C["status_error_bg"])
 
     # ---- layout ----
     btn_delete = tk.Button(
@@ -738,15 +687,15 @@ def _on_lastfm(parent, on_success):
                 if on_success:
                     on_success("lastfm")
             else:
-                status_label.config(text=tr("login.no_credentials_file"), foreground="red")
+                status_label.config(text=tr("login.no_credentials_file"), foreground=C["status_error_bg"])
         except Exception as e:
-            status_label.config(text=tr("login.delete_failed", error=e), foreground="red")
+            status_label.config(text=tr("login.delete_failed", error=e), foreground=C["status_error_bg"])
 
     # ---- Test ----
     def test_credentials():
         creds = _get_creds()
         if not _all_filled(creds):
-            status_label.config(text=tr("login.all_fields_required"), foreground="red")
+            status_label.config(text=tr("login.all_fields_required"), foreground=C["status_error_bg"])
             return
         status_label.config(text=tr("login.testing"), foreground=label_fg)
         _set_busy(True)
@@ -777,13 +726,13 @@ def _on_lastfm(parent, on_success):
                 foreground=C["label_playlist_good_fg"],
             )
         else:
-            status_label.config(text=result.get("error", tr("common.error")), foreground="red")
+            status_label.config(text=result.get("error", tr("common.error")), foreground=C["status_error_bg"])
 
     # ---- Save ----
     def save_credentials():
         creds = _get_creds()
         if not _all_filled(creds):
-            status_label.config(text=tr("login.all_fields_required"), foreground="red")
+            status_label.config(text=tr("login.all_fields_required"), foreground=C["status_error_bg"])
             return
         status_label.config(text=tr("login.verifying"), foreground=label_fg)
         _set_busy(True)
@@ -812,7 +761,7 @@ def _on_lastfm(parent, on_success):
             if on_success:
                 on_success("lastfm")
         else:
-            status_label.config(text=result.get("error", tr("common.error")), foreground="red")
+            status_label.config(text=result.get("error", tr("common.error")), foreground=C["status_error_bg"])
 
     # ---- layout ----
     btn_delete = tk.Button(
@@ -983,15 +932,15 @@ def _on_soundcloud(parent, on_success):
                 if on_success:
                     on_success("soundcloud")
             else:
-                status_label.config(text=tr("login.no_credentials_file"), foreground="red")
+                status_label.config(text=tr("login.no_credentials_file"), foreground=C["status_error_bg"])
         except Exception as e:
-            status_label.config(text=tr("login.delete_failed", error=e), foreground="red")
+            status_label.config(text=tr("login.delete_failed", error=e), foreground=C["status_error_bg"])
 
     # ---- Test ----
     def test_credentials():
         creds = _get_creds()
         if not _all_filled(creds):
-            status_label.config(text=tr("login.all_fields_required"), foreground="red")
+            status_label.config(text=tr("login.all_fields_required"), foreground=C["status_error_bg"])
             return
         status_label.config(text=tr("login.testing"), foreground=label_fg)
         _set_busy(True)
@@ -1018,13 +967,13 @@ def _on_soundcloud(parent, on_success):
                 foreground=C["label_playlist_good_fg"],
             )
         else:
-            status_label.config(text=result.get("error", tr("common.error")), foreground="red")
+            status_label.config(text=result.get("error", tr("common.error")), foreground=C["status_error_bg"])
 
     # ---- Save ----
     def save_credentials():
         creds = _get_creds()
         if not _all_filled(creds):
-            status_label.config(text=tr("login.all_fields_required"), foreground="red")
+            status_label.config(text=tr("login.all_fields_required"), foreground=C["status_error_bg"])
             return
         status_label.config(text=tr("login.verifying"), foreground=label_fg)
         _set_busy(True)
@@ -1053,7 +1002,7 @@ def _on_soundcloud(parent, on_success):
             if on_success:
                 on_success("soundcloud")
         else:
-            status_label.config(text=result.get("error", tr("common.error")), foreground="red")
+            status_label.config(text=result.get("error", tr("common.error")), foreground=C["status_error_bg"])
 
     # ---- layout ----
     btn_delete = tk.Button(

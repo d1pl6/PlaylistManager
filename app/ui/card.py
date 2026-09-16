@@ -38,6 +38,7 @@ class PlaylistCard:
     log_status: tk.Label = field(repr=False)
 
     # -- Identity --------------------------------------------------------
+    playlist_name: str = ""
     platform: str = ""
     playlist_id: str = ""
 

@@ -431,12 +431,21 @@ def delete(name: str) -> None:
             shutil.rmtree(owned_auth, ignore_errors=True)
 
 
-def rename(old: str, new: str) -> None:
-    """Rename a profile (updates metadata and moves owned data)."""
+def validate_rename(old: str, new: str) -> None:
+    """Validate a rename without performing it.
+
+    Raises ``ValueError`` exactly like :func:`rename` when *old* to
+    *new* is not allowed.  The rename dialog uses this so validation can
+    run at Save time while the actual (data-moving) rename itself is
+    deferred to the restart-commit - a declined restart must not move
+    directories out from under the running session.
+    """
     if old == "default":
         raise ValueError("Cannot rename the default profile")
     if not new or not _NAME_RE.match(new):
         raise ValueError(f"Invalid new profile name {new!r}")
+    if old == new:
+        return
     with _lock:
         profiles = _load_profiles()
         progs = profiles.get("profiles", {})
@@ -444,6 +453,14 @@ def rename(old: str, new: str) -> None:
             raise ValueError(f"Profile {old!r} does not exist")
         if new in progs:
             raise ValueError(f"Profile {new!r} already exists")
+
+
+def rename(old: str, new: str) -> None:
+    """Rename a profile (updates metadata and moves owned data)."""
+    validate_rename(old, new)
+    with _lock:
+        profiles = _load_profiles()
+        progs = profiles.get("profiles", {})
         captured_logins = bool(progs[old].get("logins", False))
         progs[new] = progs.pop(old)
         _save_profiles(profiles)

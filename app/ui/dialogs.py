@@ -60,7 +60,7 @@ def confirm_force_quit(root, error: BaseException) -> bool:
             dialog,
             text=str(error),
             background=C["frame_main_bg"],
-            foreground=C["label_playlist_error_fg"],
+            foreground=C["status_error_fg"],
             font=ui_font(9),
             wraplength=px(360),
             justify="left",

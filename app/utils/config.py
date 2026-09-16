@@ -140,7 +140,7 @@ DEFAULT_THEME = {
     "label_playlist_log": {"background": "#2f2f2f", "foreground": "#EDEDED"},
     "label_playlist_good": {"background": "#00c600", "foreground": "#EDEDED"},
     "label_playlist_warning": {"background": "#c68100", "foreground": "#EDEDED"},
-    "label_playlist_error": {"background": "#c60000", "foreground": "#EDEDED"},
+    "status_error": {"background": "#c60000", "foreground": "#EDEDED"},
     "checkbutton": {
         "background": "#303030",
         "foreground": "#DADADA",
@@ -280,7 +280,7 @@ THEME_PRESETS = {
         "label_playlist_log": {"background": "#F2F2F2", "foreground": "#1A1A1A"},
         "label_playlist_good": {"background": "#252525", "foreground": "#FFFFFF"},
         "label_playlist_warning": {"background": "#C68100", "foreground": "#FFFFFF"},
-        "label_playlist_error": {"background": "#C60000", "foreground": "#FFFFFF"},
+        "status_error": {"background": "#C60000", "foreground": "#FFFFFF"},
         "checkbutton": {
             "background": "#F0F0F0",
             "foreground": "#222222",

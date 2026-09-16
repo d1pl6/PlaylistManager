@@ -69,7 +69,7 @@ def show_manage_dialog(
     label_fg = C["label_def_fg"]
     content_bg = C["scrollable_frame_bg"]
     good_fg = C["label_playlist_good_fg"]
-    bad_fg = C["label_playlist_error_fg"]
+    bad_fg = C["status_error_fg"]
 
     if plugin_registry is None:
         plugin_registry = PluginRegistry().discover()
@@ -174,31 +174,64 @@ def show_manage_dialog(
     # op is in flight, and disables the bulk buttons (mutating the set
     # under a running bulk worker would be racy).
     _bulk_busy: list = [False]
-    # Cached latest GitHub release numbers per platform id (populated by
-    # _has_update on first access, invalidated on download/update/refresh).
+    # Cached latest GitHub release verdicts per platform id (populated by
+    # _background_version_check, never by the render path; popped on
+    # download/update completion so the next refresh re-evaluates).
     _update_cache: dict = {}
+    # Platforms with a version check in flight - one per platform so a
+    # storm of row refreshes cannot pile up duplicate GitHub requests.
+    _version_checking: set = set()
 
     def _has_update(pid: str) -> bool:
-        """Return True if the installed plugin is behind the latest release.
+        """Return True when the installed plugin is behind the latest release.
 
-        Caches the remote version per platform so the GitHub API is hit at
-        most once per platform per dialog session.  Caches are cleared on
-        download/update completion and on the initial _refresh_rows call
-        that follows them.
+        Cache-only: never blocks the main thread on GitHub (the old
+        implementation called ``check_latest_version`` here synchronously
+        - a 10 s timeout per installed platform froze the dialog for tens
+        of seconds when offline).  Verdicts are fetched by
+        ``_background_version_check`` in a daemon thread and applied via
+        ``_after_main``; until the first verdict lands the read is False
+        (no Update button, batch Update stays disabled).
         """
-        if pid in _update_cache:
-            return _update_cache[pid]
+        return bool(_update_cache.get(pid))
+
+    def _background_version_check(pid: str) -> None:
+        """Fetch the remote release info for *pid* off the main thread.
+
+        Skips platforms whose verdict is already cached or already being
+        checked, and installed-only entries without a version (custom
+        plugins).  A completed check marks *pid* dirty (popped from
+        ``_update_cache``) so the next refresh re-evaluates.
+        """
+        if pid in _version_checking or pid in _update_cache:
+            return
         plugin = plugin_registry.get(pid)
         if plugin is None or plugin.version is None:
             _update_cache[pid] = False
-            return False
-        remote = integration_manager.check_latest_version(pid)
-        if remote is None:
-            _update_cache[pid] = False
-            return False
-        has = remote > plugin.version
-        _update_cache[pid] = has
-        return has
+            return
+        _version_checking.add(pid)
+
+        def _work() -> None:
+            try:
+                remote = integration_manager.check_latest_version(pid)
+                verdict = remote is not None and remote > plugin.version
+            except Exception as e:
+                logger.debug("Version check failed for %s: %s", pid, e)
+                verdict = False
+            _update_cache[pid] = verdict
+            _version_checking.discard(pid)
+
+            def _apply() -> None:
+                try:
+                    dialog_open = bool(win.winfo_exists())
+                except tk.TclError:
+                    dialog_open = False
+                if dialog_open:
+                    _refresh_rows()
+
+            _after_main(_apply)
+
+        threading.Thread(target=_work, daemon=True).start()
 
     def _update_bulk_buttons() -> None:
         """Refresh bulk-button enabled state from the installed set + busy."""
@@ -259,6 +292,11 @@ def show_manage_dialog(
             is_installed = pid in installed
             busy = pid in _busy
             catalog_repo = integration_manager.INTEGRATION_REPOS.get(pid)
+            if is_installed and catalog_repo is not None:
+                # Fire the async GitHub check for this row (cache-only
+                # verdicts render below); the worker refreshes the row
+                # when the verdict lands.
+                _background_version_check(pid)
             if catalog_repo is not None:
                 display_name = catalog_repo.display_name
             else:
@@ -431,6 +469,7 @@ def show_manage_dialog(
                     dialog_open = False
                 if not dialog_open:
                     return
+                _update_cache.pop(pid, None)  # fresh verdict after the install
                 _refresh_rows()
                 if error is not None:
                     _set_footer(tr("manage.download_failed", error=error), error=True)

@@ -102,7 +102,7 @@ def show_create_profile_dialog(parent, on_created=None):
         content,
         text="",
         background=C["frame_main_bg"],
-        foreground=C["label_playlist_error_fg"],
+        foreground=C["status_error_fg"],
         font=ui_font(9),
         anchor="w",
     )
@@ -184,8 +184,12 @@ def show_rename_profile_dialog(parent, profile_name, on_restart=None):
         return
 
     def _save(new_name):
+        # Validation only - the data-moving rename itself is deferred to
+        # the restart-commit (see on_restart below), so a declined
+        # restart cannot orphan this session's writes into a re-created
+        # old-name directory.
         try:
-            profile_store.rename(profile_name, new_name)
+            profile_store.validate_rename(profile_name, new_name)
         except ValueError as e:
             return str(e)
         return None
@@ -196,7 +200,7 @@ def show_rename_profile_dialog(parent, profile_name, on_restart=None):
         tr("settings.profile_new_name"),
         profile_name,
         _save,
-        on_restart,
+        on_restart,  # invoked with the validated new name
     )
 
 
@@ -269,12 +273,18 @@ def show_edit_buckets_dialog(parent, profile_name, on_restart=None):
     ).pack(fill="x", pady=(6, 0))
 
     def _save():
-        profile_store.set_bucket(profile_name, "logins", bool(var_logins.get()))
-        profile_store.set_bucket(profile_name, "playlists", bool(var_playlists.get()))
-        profile_store.set_bucket(profile_name, "settings", bool(var_settings.get()))
         _on_close(win, parent)
         if callable(on_restart):
-            on_restart()
+            def _commit():
+                # Deferred to the restart-commit: persist the bucket
+                # flags only if the user actually restarts, matching the
+                # set_active flow.  A declined restart must not change
+                # state that only applies on the next launch.
+                profile_store.set_bucket(profile_name, "logins", bool(var_logins.get()))
+                profile_store.set_bucket(profile_name, "playlists", bool(var_playlists.get()))
+                profile_store.set_bucket(profile_name, "settings", bool(var_settings.get()))
+
+            on_restart(_commit)
 
     btn_row = tk.Frame(content, background=C["frame_main_bg"])
     btn_row.pack(fill="x", pady=(14, 0))
@@ -339,7 +349,7 @@ def _show_name_dialog(parent, title, label, initial, save_fn, on_restart):
         content,
         text="",
         background=C["frame_main_bg"],
-        foreground=C["label_playlist_error_fg"],
+        foreground=C["status_error_fg"],
         font=ui_font(9),
         anchor="w",
     )
@@ -353,7 +363,7 @@ def _show_name_dialog(parent, title, label, initial, save_fn, on_restart):
             return
         _on_close(win, parent)
         if callable(on_restart):
-            on_restart()
+            on_restart(new_name)
 
     btn_row = tk.Frame(content, background=C["frame_main_bg"])
     btn_row.pack(fill="x", pady=(12, 0))

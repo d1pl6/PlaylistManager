@@ -6,7 +6,6 @@ controllers and services.
 """
 
 import logging
-import socket
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -21,6 +20,7 @@ PLATFORM_DEEZER = "deezer"
 from controllers.callbacks import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
 from services import duplicate_queue
+from services import health_check
 from services.database import DatabaseManager
 from services.duplicate_check import find_duplicate_pairs, read_settings
 from services.playlist_sort import sort_playlists
@@ -44,6 +44,7 @@ from utils.config import (
     GRID_SORT_DEFAULT_KEY,
     get_setting,
     get_setting_value,
+    set_setting_value,
 )
 from ui.scrollable import ScrollableFrame
 from utils.theme import C, load_theme, btn_colors, hover_bg
@@ -51,14 +52,6 @@ from utils.logging_config import user_log
 from utils.platform import is_wayland_session, x11_root_desktop_state
 
 logger = logging.getLogger(__name__)
-
-# Lightweight TCP targets for service-health probes (host, port).
-_PLATFORM_API_TARGETS: dict[str, tuple[str, int]] = {
-    PLATFORM_YOUTUBE_MUSIC: ("music.youtube.com", 443),
-    PLATFORM_SPOTIFY: ("api.spotify.com", 443),
-    PLATFORM_SOUNDCLOUD: ("api.soundcloud.com", 443),
-    PLATFORM_DEEZER: ("pipe.deezer.com", 443),
-}
 
 assets_dir = Path(__file__).resolve().parents[2] / "assets"
 playlist_cover_img_path = assets_dir / "playlist_image.png"
@@ -608,6 +601,7 @@ on_like_button_change=self._apply_like_button_visibility,
         if self.card_grid.cards:
             card = self.card_grid.cards[-1]
             card.name_label.config(text=playlist_name)
+            card.playlist_name = playlist_name
             card.platform = platform
             card.playlist_id = playlist_id
 
@@ -682,7 +676,7 @@ on_like_button_change=self._apply_like_button_visibility,
             )
         elif status_text == "error":
             card.log_status.config(
-                text=tr_status(status_text), background=C["label_playlist_error_bg"]
+                text=tr_status(status_text), background=C["status_error_bg"]
             )
             # Persist for the activity window's Errors tab.
             try:
@@ -1220,6 +1214,7 @@ on_like_button_change=self._apply_like_button_visibility,
                     name = playlist.get("name", f"Playlist {i + 1}")
                     playlist_id = playlist.get("playlist_id", "")
                     card.name_label.config(text=name)
+                    card.playlist_name = name
                     card.platform = platform
                     card.playlist_id = playlist_id
 
@@ -1601,11 +1596,15 @@ on_like_button_change=self._apply_like_button_visibility,
         """Live-apply the like button visibility setting (called from Settings).
 
         Rebuilds every card's showcase section to show/hide the like button.
+        Uses the card's store identity (playlist_name attr) rather than
+        reading the rendered label text, which is the source of truth for
+        which playlist's showcase to refresh.
         """
         for frame_idx in range(len(self.card_grid.cards)):
             try:
-                playlist_name = self.card_grid.cards[frame_idx].name_label.cget("text")
-                platform = self.card_grid.cards[frame_idx].platform
+                card = self.card_grid.cards[frame_idx]
+                playlist_name = card.playlist_name
+                platform = card.platform
             except (IndexError, tk.TclError):
                 continue
             self.showcase.refresh(frame_idx, playlist_name, platform)
@@ -1631,7 +1630,7 @@ on_like_button_change=self._apply_like_button_visibility,
         callbacks = KeybindCallbacks(
             on_status=_on_scrobble_status,
         )
-        self.kc.registry.register(
+        displaced = self.kc.registry.register(
             "scrobble",
             keybind,
             callbacks,
@@ -1639,6 +1638,12 @@ on_like_button_change=self._apply_like_button_visibility,
             playlist_id="",
             kind="action",  # distinguish from playlist bindings
         )
+        if displaced:
+            # The scrobble action just displaced a playlist's combo: the
+            # playlist card still displays (and the store persists) a
+            # binding that now fires the scrobble - clear it, exactly like
+            # a playlist-vs-playlist displacement.
+            self._clear_displaced_keybind(displaced)
 
     def _auto_resize(self) -> None:
         """Resize the window to fit playlist frames."""
@@ -1669,6 +1674,14 @@ on_like_button_change=self._apply_like_button_visibility,
         displaced_id = displaced.get("playlist_id", "") or ""
         if not name:
             return
+        if name == "scrobble" and not platform:
+            # A playlist recording took over the standalone scrobble
+            # action's combo: clear the persisted setting so neither the
+            # Settings field nor a restart can resurrect a binding that
+            # now fires the playlist (the Settings dialog is modal, so
+            # the field rebuilds from the cleared value on its next open).
+            set_setting_value("scrobble_keybind", "keybind", "")
+            return
         for i, card in enumerate(self.card_grid.cards):
             if (
                 card.name_label.cget("text") == name
@@ -1697,7 +1710,7 @@ on_like_button_change=self._apply_like_button_visibility,
         entry = recording_card.keybind_entry
         entry.config(
             state="normal",
-            readonlybackground=C["label_playlist_error_bg"],
+            readonlybackground=C["status_error_bg"],
             background=C["entry_playlist_bg"],
         )
         entry.delete(0, tk.END)
@@ -1973,11 +1986,11 @@ on_like_button_change=self._apply_like_button_visibility,
             pass
 
     def _run_connectivity_check(self) -> None:
-        """Launch a connectivity probe in a daemon thread."""
+        """Launch the coarse internet probe in a daemon thread."""
         def _probe() -> None:
             try:
-                ok = not not socket.create_connection(("1.1.1.1", 53), timeout=5)
-            except (OSError, socket.timeout):
+                ok = health_check.check_network()
+            except Exception:
                 ok = False
             try:
                 self.root.after(0, self._on_connectivity_result, ok)
@@ -2023,17 +2036,7 @@ on_like_button_change=self._apply_like_button_visibility,
 
     def _service_health_probe(self, platforms: set[str]) -> None:
         """Probe each *platform*'s API endpoint (runs in a daemon thread)."""
-        results: dict[str, bool] = {}
-        for platform in platforms:
-            target = _PLATFORM_API_TARGETS.get(platform)
-            if target is None:
-                continue
-            host, port = target
-            try:
-                socket.create_connection((host, port), timeout=10)
-                results[platform] = True
-            except (OSError, socket.timeout):
-                results[platform] = False
+        results = health_check.probe_platforms(platforms)
         try:
             self.root.after(0, self._on_service_health_result, results)
         except Exception:

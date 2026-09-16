@@ -548,7 +548,7 @@ class KeybindController:
             _schedule_ui(
                 lambda: (
                     callbacks.on_reset("readonly"),
-                    callbacks.on_status("error", C["label_playlist_error_bg"]),
+                    callbacks.on_status("error", C["status_error_bg"]),
                 )
             )
 
@@ -567,7 +567,7 @@ class KeybindController:
                     # later in the activity window's Duplicates tab.
                     callbacks.on_status("duplicate", C["label_playlist_warn_bg"])
                 else:
-                    callbacks.on_status("error", C["label_playlist_error_bg"])
+                    callbacks.on_status("error", C["status_error_bg"])
 
                 song_data = result.get("song", {})
                 if song_data:
@@ -754,7 +754,7 @@ class KeybindController:
                 self.song_manager = SongManager()
             except Exception as e:
                 logger.error("Failed to create SongManager: %s", e)
-                callbacks.on_status("error", C["label_playlist_error_bg"])
+                callbacks.on_status("error", C["status_error_bg"])
                 callbacks.on_entry_state("readonly")
                 return False
 
@@ -774,14 +774,14 @@ class KeybindController:
         """Build (or fetch) the flow for one platform.  Caller holds _init_lock."""
         integration = self.integrations.get(platform_id)
         if integration is None or not integration.is_authenticated():
-            callbacks.on_status("error", C["label_playlist_error_bg"])
+            callbacks.on_status("error", C["status_error_bg"])
             callbacks.on_entry_state("readonly")
             logger.error("%s not authenticated.", platform_id)
             return False
 
         plugin = self.plugin_registry.get(platform_id)
         if plugin is None or not plugin.flow_class:
-            callbacks.on_status("error", C["label_playlist_error_bg"])
+            callbacks.on_status("error", C["status_error_bg"])
             callbacks.on_entry_state("readonly")
             logger.error(
                 "No keybind flow declared for platform '%s'", platform_id
@@ -845,7 +845,7 @@ class KeybindController:
             return True
         except Exception as e:
             logger.error("Failed to initialize %s flow: %s", platform_id, e)
-            callbacks.on_status("error", C["label_playlist_error_bg"])
+            callbacks.on_status("error", C["status_error_bg"])
             callbacks.on_entry_state("readonly")
             return False
 

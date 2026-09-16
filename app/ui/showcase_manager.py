@@ -542,7 +542,7 @@ class ShowcaseManager:
             return
         if not track_id or not song_id:
             status_label.config(
-                text=tr_status("error"), background=C["label_playlist_error_bg"]
+                text=tr_status("error"), background=C["status_error_bg"]
             )
             return
         # Decide BEFORE any state changes: confirmation asks through an
@@ -597,7 +597,7 @@ class ShowcaseManager:
                     self._refresh_stats(cur_idx, pname, card.platform)
             else:
                 status_label.config(
-                    text=tr_status("error"), background=C["label_playlist_error_bg"]
+                    text=tr_status("error"), background=C["status_error_bg"]
                 )
 
         def work() -> None:
@@ -617,12 +617,24 @@ class ShowcaseManager:
                 else:
                     ok = integration.remove_track(playlist_id, track_id)
                     if ok:
-                        self._song_manager.delete_song(
+                        # Local mirror removal.  The platform remove
+                        # already succeeded, so a failed local delete
+                        # must NOT be reported as success - the song
+                        # would reappear at the next showcase refresh
+                        # while the UI just told the user it was gone.
+                        if not self._song_manager.delete_song(
                             playlist_name,
                             song_id,
                             platform=platform,
                             playlist_id=playlist_id,
-                        )
+                        ):
+                            logger.error(
+                                "Local mirror delete failed for %s in '%s' (%s) "
+                                "after platform removal; the row will reappear "
+                                "on refresh",
+                                song_id, playlist_name, platform,
+                            )
+                            ok = False
                         # Delete the EXACT scrobble this row's add-flow created.  The
                         # timestamp was recorded in the scrobble ledger when
                         # the auto-scrobble was accepted at add time; without

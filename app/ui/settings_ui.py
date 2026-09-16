@@ -357,9 +357,10 @@ def show_settings_dialog(
     if on_wayland:
         # Global keybinds are impossible on native Wayland (the compositor
         # owns input; pynput's X11 listener never sees keys).  Disable the
-        # toggle and force the local-listener mode.
+        # toggle and force the local-listener mode for this RUN only -
+        # the saved setting must not be rewritten, or a user returning
+        # to an X11 session would silently lose global hotkeys.
         global_var.set(0)
-        _toggle_setting("global_listener", global_var)
         if keybind_controller is not None:
             keybind_controller.set_global_listener(False)
 
@@ -1546,7 +1547,13 @@ def show_settings_dialog(
         sel = profile_combo.get()
         if not sel:
             return
-        show_rename_profile_dialog(win, sel, on_restart=_restart_prompt)
+        show_rename_profile_dialog(
+            win,
+            sel,
+            on_restart=lambda new_name: _restart_prompt(
+                lambda: profile_store.rename(sel, new_name)
+            ),
+        )
         _refresh_profiles()
 
     def _edit_profile() -> None:

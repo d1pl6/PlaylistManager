@@ -183,6 +183,7 @@ DEFAULT_STRINGS: dict[str, str] = {
     "settings.removal_mode_keep_db": "Keep database",
     # --- CLI (app/cli.py) -----------------------------------------------------
     "cli.no_playlists": "No playlists configured. Add one with 'playlistmanager -p add <URL>' or from the GUI.",
+    "cli.no_network": "error: no network connection - cannot reach the platform API. Check your connection and try again.",
     "cli.list_item": "{i}. \"{name}\" ({platform})",
     "cli.result_line": "#{number} \"{name}\" ({platform}): {message}",
     "cli.fetch_details_failed": "error: failed to fetch playlist details: {error}",
@@ -445,8 +446,8 @@ DEFAULT_STRINGS: dict[str, str] = {
     "theme.swatch_playlist_good_fg": "Playlist good foreground",
     "theme.swatch_playlist_warning_bg": "Playlist warning background",
     "theme.swatch_playlist_warning_fg": "Playlist warning foreground",
-    "theme.swatch_playlist_error_bg": "Playlist error background",
-    "theme.swatch_playlist_error_fg": "Playlist error foreground",
+    "theme.swatch_status_error_bg": "Status error background",
+    "theme.swatch_status_error_fg": "Status error foreground",
     "theme.swatch_checkbutton_bg": "Checkbutton background",
     "theme.swatch_checkbutton_fg": "Checkbutton foreground",
     "theme.swatch_checkbutton_selectcolor": "Checkbutton selectcolor",

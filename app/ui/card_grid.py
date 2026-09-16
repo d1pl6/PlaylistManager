@@ -519,49 +519,73 @@ class CardGridManager:
             playlist_name = card.name_label.cget("text")
             platform = card.platform
             playlist_id = card.playlist_id
-
-            self.kc.unregister_keybind(
-                playlist_name, platform=platform, playlist_id=playlist_id
-            )
-
-            self._before_card_close_cb(index)
-
-            self.cards.pop(index)
-
-            self._prune_frame_imgs_cb(card.frame)
-
-            self._after_card_close_cb(index)
-
-            PlaylistStore.delete_playlist(
-                playlist_name, platform=platform, playlist_id=playlist_id
-            )
-            if delete_db:
-                DatabaseManager.delete_playlist_db(
-                    playlist_name, platform, playlist_id
-                )
-
-            # Scrobble-ledger records are pinned to this playlist's rows -
-            # worthless once the playlist + DB are gone.
-            scrobble_log.remove_playlist_entries(platform, playlist_id)
-
-            # Pending duplicate decisions, pair-memory and error-log lines
-            # reference this playlist - purge them too, or they linger in
-            # db/extra.json and resurface if the playlist is re-added.
-            try:
-                duplicate_queue.purge_playlist(
-                    platform, playlist_id, playlist_name
-                )
-            except OSError as e:
-                logger.error("Could not purge duplicate queue for '%s': %s", playlist_name, e)
-
-            card.frame.grid_forget()
-            card.frame.destroy()
-            self._reorder_frames()
-            self._sync_empty_state()
-            logger.debug("Closed frame at index %d", index)
-            self._auto_resize_cb()
         except (ValueError, IndexError) as e:
             logger.error("Error closing frame: %s", e)
+            return
+
+        # Every teardown step is fenced: one failing sub-step (store
+        # write, DB unlink, purge, keybind hook) must not orphan the
+        # card - the frame is always destroyed and the grid renumbered,
+        # and the remaining steps still run.  This is the canonical
+        # close path used by uninstall teardown, so a partial failure
+        # here would break the uninstall ordering contract.
+        failures: list[str] = []
+
+        def _step(label: str, fn) -> None:
+            try:
+                fn()
+            except Exception as e:  # noqa: BLE001 - teardown continues on any failure
+                failures.append(f"{label}: {e}")
+                logger.error("close_main_frame: step '%s' failed: %s", label, e)
+
+        _step("keybind unregister", lambda: self.kc.unregister_keybind(
+            playlist_name, platform=platform, playlist_id=playlist_id
+        ))
+        _step("before-close callback", lambda: self._before_card_close_cb(index))
+
+        self.cards.pop(index)
+
+        _step("prune frame images", lambda: self._prune_frame_imgs_cb(card.frame))
+        _step("after-close callback", lambda: self._after_card_close_cb(index))
+        _step("store delete", lambda: PlaylistStore.delete_playlist(
+            playlist_name, platform=platform, playlist_id=playlist_id
+        ))
+        if delete_db:
+            _step("db delete", lambda: DatabaseManager.delete_playlist_db(
+                playlist_name, platform, playlist_id
+            ))
+
+        # Scrobble-ledger records are pinned to this playlist's rows -
+        # worthless once the playlist + DB are gone.
+        _step("scrobble purge", lambda: scrobble_log.remove_playlist_entries(
+            platform, playlist_id
+        ))
+
+        # Pending duplicate decisions, pair-memory and error-log lines
+        # reference this playlist - purge them too, or they linger in
+        # db/extra.json and resurface if the playlist is re-added.
+        _step("duplicate purge", lambda: duplicate_queue.purge_playlist(
+            platform, playlist_id, playlist_name
+        ))
+
+        # Widget teardown always runs: never leave a zombie card packed
+        # on screen but missing from the card list.
+        try:
+            card.frame.grid_forget()
+            card.frame.destroy()
+        except tk.TclError as e:
+            failures.append(f"frame destroy: {e}")
+            logger.error("close_main_frame: frame destroy failed: %s", e)
+
+        self._reorder_frames()
+        self._sync_empty_state()
+        if failures:
+            logger.error(
+                "close_main_frame completed with %d failed step(s): %s",
+                len(failures), "; ".join(failures),
+            )
+        logger.debug("Closed frame at index %d", index)
+        self._auto_resize_cb()
 
     # ------------------------------------------------------------------
     # Layout
@@ -643,7 +667,14 @@ class CardGridManager:
             except Exception:
                 logger.debug("update_idletasks failed (teardown?)", exc_info=True)
         showcase = card.showcase_frame
-        showcase_h = showcase.winfo_reqheight() if showcase is not None else 0
+        # Only grid-managed frames count: a frame built while search
+        # results occupy row 3 (or a stale reference after dismissal) is
+        # not mapped and must not inflate the card.
+        showcase_h = (
+            showcase.winfo_reqheight()
+            if showcase is not None and showcase.winfo_ismapped()
+            else 0
+        )
         height = px(CARD_H_BASE) + showcase_h
         if not self._show_log:
             height -= px(LOG_ROW_H_BASE)

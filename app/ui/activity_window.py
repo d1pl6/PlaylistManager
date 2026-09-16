@@ -311,7 +311,7 @@ class ActivityWindow(tk.Toplevel):
         for err in errors:
             card = tk.Frame(
                 content,
-                background=C["label_playlist_error_bg"],
+                background=C["status_error_bg"],
                 padx=0,
                 pady=4,
             )
@@ -319,8 +319,8 @@ class ActivityWindow(tk.Toplevel):
             tk.Label(
                 card,
                 text=str(err.get("message", "")),
-                background=C["label_playlist_error_bg"],
-                foreground=C["label_playlist_error_fg"],
+                background=C["status_error_bg"],
+                foreground=C["status_error_fg"],
                 font=ui_font(11),
                 anchor="w",
                 wraplength=px(520),
@@ -339,8 +339,8 @@ class ActivityWindow(tk.Toplevel):
                 tk.Label(
                     card,
                     text=where,
-                    background=C["label_playlist_error_bg"],
-                    foreground=C["label_playlist_error_fg"],
+                    background=C["status_error_bg"],
+                    foreground=C["status_error_fg"],
                     font=ui_font(9),
                     anchor="w",
                 ).pack(fill="x", padx=10)

@@ -56,12 +56,17 @@ class ScrollableFrame(tk.Frame):
         self,
         parent,
         *,
-        bg: str = C["scrollable_frame_bg"],
+        bg: str | None = None,
         show_scrollbar: bool = True,
         bind_all_mousewheel: bool = False,
         scrollbar_width: int = 10,
         max_viewport_height: int | None = None,
     ) -> None:
+        # Resolve at creation time, not at import: a runtime theme reload
+        # must be picked up by newly built frames (see the theme docs -
+        # never freeze a C[...] color at module scope).
+        if bg is None:
+            bg = C["scrollable_frame_bg"]
         super().__init__(parent, background=bg)
         self.max_viewport_height = max_viewport_height
 

@@ -314,6 +314,17 @@ class SearchManager:
                     pass
             results_frame = self._build_search_results_frame(card.frame, matches)
             self._search_results[i] = results_frame
+            # Search results and the showcase share row 3: fold the
+            # showcase away while results are shown so the two frames
+            # never stack on top of each other, and let dismissal restore
+            # it (see _restore_showcase).
+            showcase = self._card_grid.cards[i].showcase_frame
+            if showcase is not None:
+                try:
+                    if showcase.winfo_ismapped():
+                        showcase.grid_forget()
+                except tk.TclError:
+                    pass
             results_frame.grid(row=3, column=0, sticky="nsew", padx=2)
             self._update_card_height(i)
         self._update_scrollregion()
@@ -373,11 +384,32 @@ class SearchManager:
                 rf.destroy()
             except tk.TclError:
                 pass
+            self._restore_showcase(idx)
             try:
                 self._update_card_height(idx)
             except (IndexError, tk.TclError):
                 pass
         self._search_results.clear()
+
+    def _restore_showcase(self, frame_idx: int) -> None:
+        """Re-grid a showcase frame that search results had folded away.
+
+        While search results are shown the showcase refresh deliberately
+        skips gridding (see ShowcaseManager), so after dismissal the
+        frame has to come back explicitly - otherwise the card silently
+        loses its showcase until the next refresh triggers.
+        """
+        try:
+            card = self._card_grid.cards[frame_idx]
+        except IndexError:
+            return
+        showcase = card.showcase_frame
+        if showcase is not None:
+            try:
+                if not showcase.winfo_ismapped():
+                    showcase.grid(row=3, column=0, sticky="nsew")
+            except tk.TclError:
+                pass
 
     # ------------------------------------------------------------------
     # Height query (called by CardGridManager during layout)

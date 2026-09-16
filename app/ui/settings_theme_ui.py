@@ -8,6 +8,8 @@ combo-plus-buttons pattern.  Selecting a theme applies it live.
 
 import tkinter as tk
 from tkinter import colorchooser, messagebox, ttk
+import configparser
+import logging
 from configparser import ConfigParser
 
 from utils.config import (
@@ -43,6 +45,52 @@ def _ok_button(parent, text, command):
         relief="raised",
         bd=0,
     )
+
+
+def _read_theme_file(cfg, path) -> bool:
+    """Read *path* into *cfg*, tolerating a malformed theme file.
+
+    Returns False when the file could not be parsed; the caller then
+    keeps working with the in-memory/current palette.  A hand-edited
+    theme.ini with a typo'd header must degrade gracefully - it must
+    never take the whole Theme dialog down.
+    """
+    try:
+        cfg.read(str(path))
+        return True
+    except (OSError, configparser.Error):
+        return False
+
+
+_preset_flat_cache: dict | None = None
+
+
+def _flatten_presets() -> dict:
+    """Flatten every theme preset file once, keyed by preset name.
+
+    Preset files are static while the app runs - they are only written
+    or deleted through this dialog's own save/delete handlers, which
+    call ``_invalidate_preset_cache``.  Reading + flattening every preset
+    per dialog open (done before L5) was pure repeated file I/O on the
+    main thread.
+    """
+    global _preset_flat_cache
+    if _preset_flat_cache is not None:
+        return _preset_flat_cache
+    flat: dict = {}
+    for name in list_themes():
+        p = ConfigParser()
+        path = THEMES_DIR / f"{name}.ini"
+        if _read_theme_file(p, path):
+            flat[name] = {(s, o): p[s][o] for s in p.sections() for o in p[s]}
+    _preset_flat_cache = flat
+    return flat
+
+
+def _invalidate_preset_cache() -> None:
+    """Drop the flattened-preset cache after a save/delete of a preset."""
+    global _preset_flat_cache
+    _preset_flat_cache = None
 
 
 def show_theme_dialog(parent, on_theme_change=None):
@@ -123,13 +171,16 @@ def show_theme_dialog(parent, on_theme_change=None):
 
     ensure_theme_file()
     theme_cfg = ConfigParser()
-    theme_cfg.read(str(THEME_PATH))
+    if not _read_theme_file(theme_cfg, THEME_PATH):
+        # Hand-edited corruption: work from the in-memory default palette
+        # instead of letting the dialog die on a parse error.
+        logging.warning("theme.ini unreadable - falling back to defaults")
 
     def _reload_theme_cfg() -> None:
         """Re-read theme.ini into a fresh ConfigParser (replaces, not merges)."""
         nonlocal theme_cfg
         theme_cfg = ConfigParser()
-        theme_cfg.read(str(THEME_PATH))
+        _read_theme_file(theme_cfg, THEME_PATH)
 
     def _flatten_config(cfg) -> dict:
         return {(s, o): cfg[s][o] for s in cfg.sections() for o in cfg[s]}
@@ -137,14 +188,8 @@ def show_theme_dialog(parent, on_theme_change=None):
     def _preselected_theme() -> str:
         """Name of the combo entry matching the current palette, else the default."""
         current = _flatten_config(theme_cfg)
-        for name in list_themes():
-            p = ConfigParser()
-            path = THEMES_DIR / f"{name}.ini"
-            try:
-                p.read(str(path))
-            except OSError:
-                continue
-            if _flatten_config(p) == current:
+        for name, flat in _flatten_presets().items():
+            if flat == current:
                 return name
         white_sections = THEME_PRESETS.get("white", {})
         if all(
@@ -279,6 +324,8 @@ def show_theme_dialog(parent, on_theme_change=None):
             save_theme(sel)
         except ValueError as e:
             messagebox.showerror(tr("theme.save_title"), str(e), parent=win)
+        else:
+            _invalidate_preset_cache()
 
     def _on_create_theme() -> None:
         def _do_create(name):
@@ -286,6 +333,7 @@ def show_theme_dialog(parent, on_theme_change=None):
                 save_theme(name)
             except ValueError as e:
                 return str(e)
+            _invalidate_preset_cache()
             _refresh_themes_combo(select=name)
             return None
 
@@ -309,6 +357,7 @@ def show_theme_dialog(parent, on_theme_change=None):
         except ValueError as e:
             messagebox.showerror(tr("theme.delete_title"), str(e), parent=win)
             return
+        _invalidate_preset_cache()
         _refresh_themes_combo(select=BUILTIN_DEFAULT)
 
     btn_save = tk.Button(
@@ -407,7 +456,7 @@ def show_theme_dialog(parent, on_theme_change=None):
             content,
             text="",
             background=C["frame_main_bg"],
-            foreground=C["label_playlist_error_fg"],
+            foreground=C["status_error_fg"],
             font=ui_font(9),
             anchor="w",
         )
@@ -489,8 +538,8 @@ def show_theme_dialog(parent, on_theme_change=None):
     _create_theme_button(tr("theme.swatch_playlist_warning_bg"), "label_playlist_warning", "background")
     _create_theme_button(tr("theme.swatch_playlist_warning_fg"), "label_playlist_warning", "foreground")
 
-    _create_theme_button(tr("theme.swatch_playlist_error_bg"), "label_playlist_error", "background")
-    _create_theme_button(tr("theme.swatch_playlist_error_fg"), "label_playlist_error", "foreground")
+    _create_theme_button(tr("theme.swatch_status_error_bg"), "status_error", "background")
+    _create_theme_button(tr("theme.swatch_status_error_fg"), "status_error", "foreground")
 
     _create_theme_button(tr("theme.swatch_checkbutton_bg"), "checkbutton", "background")
     _create_theme_button(tr("theme.swatch_checkbutton_fg"), "checkbutton", "foreground")
