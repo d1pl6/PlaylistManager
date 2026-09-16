@@ -78,6 +78,20 @@ def check(callback=None, *, force: bool = False):
                     return
 
             resp = requests.get(API_URL, timeout=10)
+
+            # GitHub answers 403 when the anonymous API rate limit is
+            # exhausted - that is NOT a network failure and the UI should
+            # not claim the server is unreachable.
+            if resp.status_code == 403:
+                err = (
+                    "GitHub API rate limit reached - update check "
+                    "skipped. Try again later."
+                )
+                logger.warning("Update check skipped: %s", err)
+                if callback:
+                    callback(False, None, None, None, err)
+                return
+
             resp.raise_for_status()
             data = resp.json()
 

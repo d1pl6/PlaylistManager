@@ -20,7 +20,7 @@ created.  Headless (CLI) paths never call it and get scale 1.0.
 import logging
 import os
 import subprocess
-from typing import Optional, Tuple
+import tkinter.font
 
 from utils.config import get_setting_value
 
@@ -44,7 +44,7 @@ def _clamp(v: float) -> float:
     return min(MAX_SCALE, max(MIN_SCALE, v))
 
 
-def _parse_dpi(raw: str) -> Optional[float]:
+def _parse_dpi(raw: str) -> float | None:
     """Parse an ``Xft.dpi`` value ('168', '150', ...) or return None."""
     try:
         v = float(raw.strip())
@@ -55,19 +55,21 @@ def _parse_dpi(raw: str) -> Optional[float]:
     return v
 
 
-def _xrdb_xft_dpi() -> Optional[float]:
+def _xrdb_xft_dpi() -> float | None:
     """Read ``Xft.dpi`` from the X resource database via ``xrdb -query``.
 
     KDE/GNOME set this from the display scale (e.g. 150 at 156.25%, 168 at
     175%) and remove it entirely at 100%.  One subprocess at startup is
-    cheap; failures degrade to the fallbacks in :func:`xft_dpi`.
+    cheap; a wedged X server is covered by the short timeout so a stuck
+    probe can never stall the window for long (it degrades to
+    ``winfo_fpixels`` / ``XFT_DPI`` in :func:`xft_dpi`).
     """
     try:
         proc = subprocess.run(
             ["xrdb", "-query"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=2,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -77,7 +79,7 @@ def _xrdb_xft_dpi() -> Optional[float]:
     return None
 
 
-def xft_dpi(root=None) -> Optional[float]:
+def xft_dpi(root=None) -> float | None:
     """Effective display DPI used for font rendering.
 
     Priority: the ``Xft.dpi`` X resource, then ``winfo_fpixels('1i')``
@@ -134,7 +136,6 @@ def init(root=None) -> None:
     _font_family = get_setting_value("font", "family", "").strip()
     if _font_family:
         try:
-            import tkinter.font
             available = tkinter.font.families()
         except Exception:
             available = ()
@@ -166,7 +167,7 @@ def px(n: float) -> int:
     return max(1, round(n * _scale))
 
 
-def ui_font(size: int, weight: str = "", family: str = "") -> Tuple[str, ...]:
+def ui_font(size: int, weight: str = "", family: str = "") -> tuple[str, ...]:
     """Tk ``font=`` spec for one point size, applying the profile multiplier.
 
     ``family`` defaults to ``""``, which makes Tk use its default font

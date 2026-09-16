@@ -42,7 +42,6 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import platformdirs
 import requests
@@ -76,7 +75,7 @@ SONG_THUMB_SIZE = (40, 40)
 _session = requests.Session()
 
 
-def _normalize_url(thumb_url: str) -> Optional[str]:
+def _normalize_url(thumb_url: str) -> str | None:
     """Upgrade http->https and reject anything that isn't https."""
     url = thumb_url.strip()
     if url.lower().startswith("http://"):
@@ -101,7 +100,7 @@ class ThumbnailService:
     _fetch_semaphore = threading.BoundedSemaphore(4)
 
     _cache_lock = threading.Lock()
-    _cache: Dict[Tuple[str, Optional[Tuple[int, int]]], Tuple[float, Image.Image]] = {}
+    _cache: dict[tuple[str, tuple[int, int] | None], tuple[float, Image.Image]] = {}
     _CACHE_TTL_SECONDS = 600
     _CACHE_MAX_ENTRIES = 256
 
@@ -133,7 +132,7 @@ class ThumbnailService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _cache_get(key) -> Optional[Image.Image]:
+    def _cache_get(key) -> Image.Image | None:
         with ThumbnailService._cache_lock:
             hit = ThumbnailService._cache.get(key)
             if hit is None:
@@ -171,7 +170,7 @@ class ThumbnailService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _disk_key(url: str, size: Optional[Tuple[int, int]]) -> str:
+    def _disk_key(url: str, size: tuple[int, int] | None) -> str:
         """Deterministic filename component for a (url, size) entry."""
         if size is None:
             return hashlib.md5(url.encode("utf-8")).hexdigest()
@@ -180,7 +179,7 @@ class ThumbnailService:
         ).hexdigest()
 
     @staticmethod
-    def _disk_load(path: Path) -> Optional[Image.Image]:
+    def _disk_load(path: Path) -> Image.Image | None:
         """Load a cached image; a corrupt file is treated as a miss."""
         try:
             with Image.open(path) as img:
@@ -245,7 +244,7 @@ class ThumbnailService:
             logger.debug("Failed to write dedupe index: %s", e)
 
     @staticmethod
-    def _find_dedupe_match(song: dict) -> Optional[dict]:
+    def _find_dedupe_match(song: dict) -> dict | None:
         """Return the index row matching *song*, or None.
 
         Matching reuses the add-path policy from ``services.duplicate_check``
@@ -278,8 +277,8 @@ class ThumbnailService:
 
     @staticmethod
     def _fetch(
-        thumb_url: str, size: Optional[Tuple[int, int]]
-    ) -> Optional[Image.Image]:
+        thumb_url: str, size: tuple[int, int] | None
+    ) -> Image.Image | None:
         """Semaphore-bounded GET; cover-fits to *size* (None = full image)."""
         with ThumbnailService._fetch_semaphore:
             try:
@@ -309,7 +308,7 @@ class ThumbnailService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _cover_fit(img: Image.Image, size: Tuple[int, int]) -> Image.Image:
+    def _cover_fit(img: Image.Image, size: tuple[int, int]) -> Image.Image:
         """Scale *img* to cover *size* preserving aspect, then center-crop.
 
         A plain ``resize(size)`` stretches non-square sources - e.g. 16:9
@@ -331,7 +330,7 @@ class ThumbnailService:
         return img.crop((left, top, left + target_w, top + target_h))
 
     @staticmethod
-    def get_smallest_thumbnail(thumbnails: Optional[List[Dict]]) -> Optional[str]:
+    def get_smallest_thumbnail(thumbnails: list[dict] | None) -> str | None:
         """Return the URL of the smallest thumbnail by area (w × h).
 
         Returns None when *thumbnails* is empty or None.
@@ -348,7 +347,7 @@ class ThumbnailService:
             return None
 
     @staticmethod
-    def from_data(data: dict) -> Optional[str]:
+    def from_data(data: dict) -> str | None:
         """Extract a thumbnail URL from a playlist/song response dict.
 
         Accepts either a ``thumbnails`` list of ``{"url": ...}`` dicts
@@ -365,9 +364,9 @@ class ThumbnailService:
 
     @staticmethod
     def fetch_image(
-        thumb_url: Optional[str],
-        size: Tuple[int, int] = (64, 64),
-    ) -> Optional[Image.Image]:
+        thumb_url: str | None,
+        size: tuple[int, int] = (64, 64),
+    ) -> Image.Image | None:
         """Download and cover-fit a playlist/generic thumbnail.
 
         Thread-safe - no Tk objects are created here.  Returns *None*
@@ -412,8 +411,8 @@ class ThumbnailService:
     @staticmethod
     def fetch_song_image(
         song: dict,
-        size: Tuple[int, int] = SONG_THUMB_SIZE,
-    ) -> Optional[Image.Image]:
+        size: tuple[int, int] = SONG_THUMB_SIZE,
+    ) -> Image.Image | None:
         """Download a song thumbnail honouring the thumbnail mode.
 
         ``song`` uses the SongManager row shape (``title``, ``artists``,
@@ -490,7 +489,7 @@ class ThumbnailService:
             ThumbnailService._save_dedupe_index(rows)
 
     @staticmethod
-    def fetch_full_image(thumb_url: Optional[str]) -> Optional[Image.Image]:
+    def fetch_full_image(thumb_url: str | None) -> Image.Image | None:
         """Download the original image without resizing.
 
         Returns a PIL Image or None on failure. Thread-safe; do not call
@@ -525,7 +524,7 @@ class ThumbnailService:
 
     @staticmethod
     def clear_cache_for(
-        thumb_url: Optional[str], size: Optional[Tuple[int, int]] = None
+        thumb_url: str | None, size: tuple[int, int] | None = None
     ) -> None:
         """Remove a specific cached entry (url, size) - memory and disk.
 
@@ -585,7 +584,7 @@ class ThumbnailService:
         threading.Thread(target=work, daemon=True).start()
 
     @staticmethod
-    def prefetch_song_thumbs(songs: List[dict]) -> None:
+    def prefetch_song_thumbs(songs: list[dict]) -> None:
         """Download every song thumb to disk (``download`` mode only)."""
         if ThumbnailService._mode() != "download":
             return
@@ -599,7 +598,7 @@ class ThumbnailService:
 
     @staticmethod
     def prune_song_cache(
-        active_urls, size: Tuple[int, int] = SONG_THUMB_SIZE
+        active_urls, size: tuple[int, int] = SONG_THUMB_SIZE
     ) -> None:
         """Delete cached song thumbs not among *active_urls*.
 

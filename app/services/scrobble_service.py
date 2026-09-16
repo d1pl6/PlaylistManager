@@ -22,22 +22,36 @@ def scrobble_current_song(
     flow_provider: Callable[[str], object | None],
     scrobble_integ,
     timeout: int = 30,
+    integration_provider: Callable[[str], object | None] | None = None,
 ) -> tuple | None:
     """Capture the currently-playing song and scrobble it.
 
-    Iterates registered integrations in order, skipping platforms that
-    are not authenticated or declare no keybind flow.  *flow_provider*
+    Iterates registered plugins in order, skipping platforms that are
+    not authenticated or declare no keybind flow.  *flow_provider*
     supplies the flow object for a platform id (or ``None`` when it
     cannot be built — that platform is skipped).  The first platform
     that captures a song scrobbles it and the loop stops.
+
+    *integration_provider* supplies the (already authenticated)
+    integration for a platform id and replaces the default registry
+    lookup + ``is_authenticated()`` gate — the CLI uses it to
+    authenticate one platform at a time right before its capture
+    attempt, so a scrobble never pays ``authenticate()`` for a
+    platform that is not the current song source.
 
     Returns ``(song_data, ts)`` — the captured song and the accepted
     scrobble timestamp (``None`` when the backend refused the scrobble)
     — or ``None`` when no platform produced a song.
     """
-    for platform_id, integration in integrations.get_all().items():
-        if not integration.is_authenticated():
-            continue
+    for platform_id in plugin_registry.get_platform_ids():
+        if integration_provider is not None:
+            integration = integration_provider(platform_id)
+            if integration is None:
+                continue
+        else:
+            integration = integrations.get(platform_id)
+            if integration is None or not integration.is_authenticated():
+                continue
 
         plugin = plugin_registry.get(platform_id)
         if plugin is None or not plugin.flow_class:

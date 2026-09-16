@@ -10,7 +10,6 @@ to 1.75x text.  :class:`IconService` resizes the base PNG to
 """
 
 import logging
-from typing import Dict, Tuple
 
 from PIL import Image, ImageTk
 
@@ -30,7 +29,7 @@ class IconService:
     garbage-collected and the icon silently vanishes.
     """
 
-    _cache: Dict[Tuple[str, int], ImageTk.PhotoImage] = {}
+    _cache: dict[tuple[str, int], ImageTk.PhotoImage] = {}
 
     @classmethod
     def get(cls, path, base_px: int) -> ImageTk.PhotoImage:

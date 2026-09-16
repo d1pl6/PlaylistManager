@@ -1,9 +1,8 @@
 """
 OS / platform utility functions.
 
-Extracted from ``app/ui/login_ui.py`` (Issue #2).  Provides helpers for
-opening directories in the file manager and launching terminal emulators
-for the YouTube Music auth flow.
+Provides helpers for opening directories in the file manager and
+launching terminal emulators for the YouTube Music auth flow.
 """
 
 import logging
@@ -14,7 +13,6 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +33,7 @@ def is_wayland_session() -> bool:
     ).lower() == "wayland"
 
 
-def x11_root_desktop_state() -> Tuple[Optional[int], Optional[bool]]:
+def x11_root_desktop_state() -> tuple[int | None, bool | None]:
     """Read two EWMH root-window properties from the X server.
 
     Returns ``(current_desktop, showing_desktop)``:
@@ -63,8 +61,8 @@ def x11_root_desktop_state() -> Tuple[Optional[int], Optional[bool]]:
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return None, None
-    current_desktop: Optional[int] = None
-    showing_desktop: Optional[bool] = None
+    current_desktop: int | None = None
+    showing_desktop: bool | None = None
     for line in out.splitlines():
         m = re.match(r"_NET_CURRENT_DESKTOP[^=]*=\s*(\d+)", line)
         if m:
@@ -102,7 +100,7 @@ def open_directory(path: Path) -> None:
         logger.error("Failed to open directory %s: %s", path, e)
 
 
-def find_linux_terminal() -> Optional[str]:
+def find_linux_terminal() -> str | None:
     """Return the path of the first supported terminal emulator found."""
     for term in [
         "kgx",
@@ -135,7 +133,7 @@ def find_shell() -> str:
     return "sh"
 
 
-def get_terminal_command(work_dir: Path) -> List[str]:
+def get_terminal_command(work_dir: Path) -> list[str]:
     """Build a command list that opens a terminal running ``ytmusicapi browser``.
 
     Raises ``FileNotFoundError`` on Linux when no supported terminal

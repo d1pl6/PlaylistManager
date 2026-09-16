@@ -279,12 +279,14 @@ def _create_platform_button(parent, name, icon_path, command):
 def _on_youtube_music(parent, on_success):
     result = auth_setup.setup_ytmusic_auth()
     if result.get("manual"):
+        error_line = f"\n\nError: {result['error']}" if result.get("error") else ""
         messagebox.showinfo(
             tr("login.manual_step_title"),
             f"Open a terminal and run:\n\n"
             f"cd {result['auth_dir']}\n"
             f"ytmusicapi browser\n\n"
-            f"Then place the generated browser.json in:\n{result['auth_dir']}",
+            f"Then place the generated browser.json in:\n{result['auth_dir']}"
+            f"{error_line}",
             parent=parent,
         )
     if on_success:

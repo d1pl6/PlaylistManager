@@ -483,9 +483,8 @@ def ensure_settings_file() -> None:
 def get_setting(section: str, fallback: bool = True) -> bool:
     """Read one boolean settings section (default *fallback* on any error)."""
     ensure_settings_file()
-    cfg = ConfigParser()
+    cfg = _safe_read_config(ConfigParser(), SETTINGS_PATH)
     try:
-        cfg.read(str(SETTINGS_PATH))
         return cfg.getboolean(section, "is_true", fallback=fallback)
     except Exception:
         return fallback
@@ -513,9 +512,8 @@ def get_setting_value(section: str, option: str, fallback: str = "") -> str:
     which have no ``is_true`` key.  Returns *fallback* on any error.
     """
     ensure_settings_file()
-    cfg = ConfigParser()
+    cfg = _safe_read_config(ConfigParser(), SETTINGS_PATH)
     try:
-        cfg.read(str(SETTINGS_PATH))
         return cfg.get(section, option, fallback=fallback)
     except Exception:
         return fallback

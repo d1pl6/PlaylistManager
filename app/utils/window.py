@@ -1,8 +1,8 @@
 """
 Window geometry utilities.
 
-Extracted from ``utils/__init__.py`` (Issue #9) so the package init
-file does not contain executable logic.
+Kept out of the package init file so the init module contains no
+executable logic.
 """
 
 import re
@@ -265,7 +265,7 @@ def _should_save_geometry(win) -> bool:
             and win.winfo_ismapped()
             and not bool(win.attributes("-fullscreen"))
         )
-    except (tk.TclError, AttributeError, Exception):
+    except Exception:
         return False
 
 

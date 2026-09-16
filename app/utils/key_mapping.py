@@ -5,8 +5,6 @@ Separated from the keybind controller so the mapping functions can be
 tested and reused independently of the pynput listener loop.
 """
 
-from typing import Optional, Set
-
 from pynput import keyboard
 
 # -- pynput key → normalised name -------------------------------------------------
@@ -26,7 +24,7 @@ _KEY_MAP = {
 }
 
 # -- tkinter keysym → normalised name ---------------------------------------------
-_TK_KEY_MAP = {
+_TK_KEY_MAP: dict[str, str] = {
     "Control_L": "ctrl",
     "Control_R": "ctrl",
     "Control": "ctrl",
@@ -43,11 +41,50 @@ _TK_KEY_MAP = {
     "Escape": "escape",
 }
 
+#: Punctuation keysyms: Tk reports named keysyms ("," is "comma", "/" is
+#: "slash"), while pynput reports the literal character.  Normalising both
+#: sides to the literal char keeps local (Tk) and global (pynput) keybinds
+#: interchangeable, e.g. "ctrl+," matches in both modes.
+_PUNCT_KEYSYM: dict[str, str] = {
+    "comma": ",",
+    "period": ".",
+    "slash": "/",
+    "backslash": "\\",
+    "semicolon": ";",
+    "colon": ":",
+    "apostrophe": "'",
+    "quotedbl": '"',
+    "minus": "-",
+    "equal": "=",
+    "plus": "+",
+    "asterisk": "*",
+    "numbersign": "#",
+    "percent": "%",
+    "question": "?",
+    "exclam": "!",
+    "at": "@",
+    "dollar": "$",
+    "asciicircum": "^",
+    "ampersand": "&",
+    "parenleft": "(",
+    "parenright": ")",
+    "underscore": "_",
+    "bracketleft": "[",
+    "bracketright": "]",
+    "braceleft": "{",
+    "braceright": "}",
+    "less": "<",
+    "greater": ">",
+    "bar": "|",
+    "grave": "`",
+    "asciitilde": "~",
+}
+
 # Names treated as modifiers (no keybind can consist only of these).
-MODIFIER_NAMES: Set[str] = {"ctrl", "alt", "shift", "cmd"}
+MODIFIER_NAMES: set[str] = {"ctrl", "alt", "shift", "cmd"}
 
 
-def normalize_key(key) -> Optional[str]:
+def normalize_key(key) -> str | None:
     if key in _KEY_MAP:
         return _KEY_MAP[key]
     if isinstance(key, keyboard.KeyCode) and key.char:
@@ -57,7 +94,7 @@ def normalize_key(key) -> Optional[str]:
     return None
 
 
-def normalize_tk_key(keysym: str) -> Optional[str]:
+def normalize_tk_key(keysym: str) -> str | None:
     if keysym in _TK_KEY_MAP:
         return _TK_KEY_MAP[keysym]
     if len(keysym) == 1:
@@ -80,48 +117,19 @@ def normalize_tk_key(keysym: str) -> Optional[str]:
         "Next",
     ):
         return keysym.lower()
-    # Punctuation/typography keysyms: Tk reports named keysyms ("," is
-    # "comma", "/" is "slash"), while pynput reports the literal character.
-    # Normalising both sides to the literal char keeps local (Tk) and
-    # global (pynput) keybinds interchangeable, e.g. "ctrl+," matches in
-    # both modes.
-    _PUNCT_KEYSYM = {
-        "comma": ",",
-        "period": ".",
-        "slash": "/",
-        "backslash": "\\",
-        "semicolon": ";",
-        "colon": ":",
-        "apostrophe": "'",
-        "quotedbl": '"',
-        "minus": "-",
-        "equal": "=",
-        "plus": "+",
-        "asterisk": "*",
-        "numbersign": "#",
-        "percent": "%",
-        "question": "?",
-        "exclam": "!",
-        "at": "@",
-        "dollar": "$",
-        "asciicircum": "^",
-        "ampersand": "&",
-        "parenleft": "(",
-        "parenright": ")",
-        "underscore": "_",
-        "bracketleft": "[",
-        "bracketright": "]",
-        "braceleft": "{",
-        "braceright": "}",
-        "less": "<",
-        "greater": ">",
-        "bar": "|",
-        "grave": "`",
-        "asciitilde": "~",
-    }
     return _PUNCT_KEYSYM.get(keysym)
 
 
-def parse_keybind(keybind_str: str) -> Set[str]:
-    """Split ``"ctrl+shift+a"`` into ``{'ctrl', 'shift', 'a'}``."""
-    return {k.strip().lower() for k in keybind_str.split("+") if k.strip()}
+def parse_keybind(keybind_str: str) -> set[str]:
+    """Split ``"ctrl+shift+a"`` into ``{'ctrl', 'shift', 'a'}``.
+
+    The literal ``+`` key is spelled ``plus`` (both in recordings and when
+    typed by hand): the separator would otherwise swallow it - ``"ctrl++"``
+    reads back as ``{'ctrl'}``.  ``"ctrl+plus"`` round-trips to the same
+    live key set as the physical plus key (``'+'``).
+    """
+    tokens = {k.strip().lower() for k in keybind_str.split("+") if k.strip()}
+    if "plus" in tokens:
+        tokens.remove("plus")
+        tokens.add("+")
+    return tokens

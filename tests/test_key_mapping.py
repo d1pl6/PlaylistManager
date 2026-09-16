@@ -86,6 +86,19 @@ class TestParseKeybind:
     def test_empty_string(self):
         assert key_mapping.parse_keybind("") == set()
 
+    def test_literal_plus_spelled_plus(self):
+        # "ctrl+plus" must resolve to the LIVE key set for the plus key,
+        # which both pynput and the Tk keysym map normalise to "+".
+        assert key_mapping.parse_keybind("ctrl+plus") == {"ctrl", "+"}
+
+    def test_plus_alone(self):
+        assert key_mapping.parse_keybind("plus") == {"+"}
+
+    def test_plus_does_not_collide_with_separator(self):
+        # A raw "ctrl++" (the separator swallowing the key) is a corrupt
+        # spelling - it reads back as if only ctrl was pressed.
+        assert key_mapping.parse_keybind("ctrl++") == {"ctrl"}
+
 
 class TestModifierSet:
     def test_exact_set(self):

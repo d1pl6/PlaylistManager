@@ -1,7 +1,7 @@
 import logging
 import threading
 import tkinter as tk
-from typing import Callable, Optional
+from collections.abc import Callable
 from tkinter import messagebox
 
 from controllers.app_controller import AppController
@@ -299,8 +299,8 @@ class App:
 
     def refresh_auth(
         self,
-        platform: Optional[str] = None,
-        on_done: Optional[Callable[[], None]] = None,
+        platform: str | None = None,
+        on_done: Callable[[], None] | None = None,
     ) -> None:
         """Re-authenticate integrations and invalidate the affected flows.
 
@@ -408,7 +408,7 @@ class App:
                 try:
                     self.root.after(0, on_done, available, error)
                 except Exception:
-                    pass
+                    logger.debug("Update-check on_done dropped (root destroyed or mainloop not running)")
 
         updater.check(on_result, force=force)
 
@@ -538,8 +538,12 @@ class App:
         if hasattr(self, "main_window") and self.main_window:
             # cleanup() stops the listener (wait=False - never join it at
             # quit) and receiver, clears flows/recording state, and nulls
-            # the SongManager, then delegates to MainWindow.cleanup().
+            # the SongManager, then MainWindow.cleanup() dismisses the
+            # search overlay, drops card/showcase image refs, cancels the
+            # pending connectivity/service/activity timers, and releases
+            # the UI thread's cached SQLite connections.
             self.main_window.kc.cleanup()
+            self.main_window.cleanup()
 
     def quit_app(self):
         logger.info("Stopping app")
@@ -564,7 +568,7 @@ class App:
             try:
                 self.root.after_cancel(self._geometry_save_after_id)
             except Exception:
-                pass
+                logger.debug("Geometry save timer already fired (race at quit)")
         try:
             self._geometry_save_after_id = self.root.after(
                 400, self._save_geometry_now

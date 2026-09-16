@@ -355,6 +355,10 @@ class KeybindController:
             snapshot = set(self._pressed_keys)
         modifiers = sorted(k for k in snapshot if k in MODIFIER_NAMES)
         non_modifiers = sorted(k for k in snapshot if k not in MODIFIER_NAMES)
+        # A literal "+" primary key must not be joined as the separator
+        # character ("ctrl++" loses the key on re-parse) - spell it
+        # "plus" instead; parse_keybind() maps it back to "+".
+        non_modifiers = ["plus" if k == "+" else k for k in non_modifiers]
         return "+".join(modifiers + non_modifiers)
 
     def start_recording(

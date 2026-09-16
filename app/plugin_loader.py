@@ -47,8 +47,7 @@ import logging
 import re
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, List, Optional
+from pathlib import Path, PurePosixPath
 
 logger = logging.getLogger(__name__)
 
@@ -100,9 +99,9 @@ class PluginInfo:
     # the repo root (legacy fallbacks outside the platformdirs auth dir).
     # Deleted on logout/uninstall alongside auth_file so a stale fallback
     # copy cannot resurrect auth after the platform is removed.
-    auth_file_fallbacks: List[str] = field(default_factory=list)
+    auth_file_fallbacks: list[str] = field(default_factory=list)
     # Hostnames this plugin handles for playlist URL parsing.
-    url_hosts: List[str] = field(default_factory=list)
+    url_hosts: list[str] = field(default_factory=list)
     # "extension" = add-flow needs a browser-extension URL receiver,
     # "api" = the flow reads the platform API directly, "" = declared
     # but not wired into flows yet.
@@ -127,7 +126,7 @@ class PluginInfo:
     login_logo: str = ""
     # TCP port the extension-type receiver binds (plugin.json
     # "receiver_port"). None = receiver module's own default applies.
-    receiver_port: Optional[int] = None
+    receiver_port: int | None = None
     # Optional URL templates for building browseable URLs from IDs.
     # Uses {host} and {id} placeholders, e.g.
     #   "https://{host}/playlist?list={id}"
@@ -138,7 +137,7 @@ class PluginInfo:
     # Plugin version (integer) from plugin.json.  Compared against GitHub
     # releases to decide whether an update is available.  None when the
     # manifest omits the field (no update checking for that plugin).
-    version: Optional[int] = None
+    version: int | None = None
 
     def _import(self, module_name: str):
         """Import ``integrations.<dir>.<module_name>`` and cache the module.
@@ -206,7 +205,7 @@ class PluginInfo:
         return self._class("login_module", "login_class")
 
     @property
-    def login_logo_path(self) -> Optional[Path]:
+    def login_logo_path(self) -> Path | None:
         """Login-tile logo resolved against the plugin directory (if set).
 
         None when no ``login_logo`` is declared or the declared path
@@ -224,7 +223,7 @@ class PluginInfo:
         return candidate
 
     @property
-    def logo_path(self) -> Optional[Path]:
+    def logo_path(self) -> Path | None:
         """Canonical plugin logo.
 
         Resolves the manifest-declared ``login_logo`` when set, otherwise
@@ -252,12 +251,10 @@ class PluginInfo:
         return cls(**kwargs)
 
     @property
-    def auth_path(self) -> Optional[Path]:
+    def auth_path(self) -> Path | None:
         """Full path of *auth_file* inside the profile-aware auth dir, if declared."""
         if not self.auth_file:
             return None
-        from pathlib import PurePosixPath  # local import: only needed here
-
         name = PurePosixPath(self.auth_file).name  # reject path traversal
         if name != self.auth_file:
             logger.warning(
@@ -265,11 +262,13 @@ class PluginInfo:
                 self.id, self.auth_file,
             )
             return None
+        # Deferred import: profile_store pulls in config/theme machinery;
+        # plugin_loader must stay importable before the app layer is up.
         from services import profile_store
         return profile_store.auth_dir() / name
 
     @property
-    def auth_paths(self) -> List[Path]:
+    def auth_paths(self) -> list[Path]:
         """Every path that may hold this plugin's credentials.
 
         ``auth_path`` (the platformdirs auth dir) plus each
@@ -278,7 +277,7 @@ class PluginInfo:
         ``auth_path`` came back None (badly declared auth_file), so a
         credential cleanup cannot silently miss declared paths.
         """
-        paths: List[Path] = []
+        paths: list[Path] = []
         if self.auth_path is not None:
             paths.append(self.auth_path)
         root = _repo_root()
@@ -302,9 +301,9 @@ class PluginRegistry:
     """Discovers plugins and hands out :class:`PluginInfo` by id."""
 
     def __init__(self):
-        self._plugins: Dict[str, PluginInfo] = {}
+        self._plugins: dict[str, PluginInfo] = {}
 
-    def discover(self, base_dir: Optional[Path] = None) -> "PluginRegistry":
+    def discover(self, base_dir: Path | None = None) -> "PluginRegistry":
         """Scan ``<base>/*/plugin.json``; never raises.
 
         A broken manifest skips exactly its own plugin (logged warning);
@@ -322,7 +321,7 @@ class PluginRegistry:
             self._plugins = {}
             return self
 
-        new_plugins: Dict[str, PluginInfo] = {}
+        new_plugins: dict[str, PluginInfo] = {}
         for manifest_path in sorted(base.glob("*/plugin.json")):
             info = self._load_manifest(manifest_path)
             if info is None:
@@ -344,7 +343,7 @@ class PluginRegistry:
         )
         return self
 
-    def _load_manifest(self, manifest_path: Path) -> Optional[PluginInfo]:
+    def _load_manifest(self, manifest_path: Path) -> PluginInfo | None:
         """Parse one plugin.json into PluginInfo (None = skip with warning)."""
         try:
             raw = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -458,7 +457,7 @@ class PluginRegistry:
             version=version,
         )
 
-    def _validate_fallback_paths(self, plugin_id: str, raw: object) -> List[str]:
+    def _validate_fallback_paths(self, plugin_id: str, raw: object) -> list[str]:
         """Sanitize the auth_file_fallbacks manifest value.
 
         Entries are repo-root-relative paths: must be plain strings, not
@@ -473,9 +472,7 @@ class PluginRegistry:
                     "repo-root-relative paths - ignoring", plugin_id,
                 )
             return []
-        from pathlib import PurePosixPath  # local import: only needed here
-
-        out: List[str] = []
+        out: list[str] = []
         for entry in raw:
             if not isinstance(entry, str) or not entry:
                 logger.warning(
@@ -499,13 +496,13 @@ class PluginRegistry:
         """Top-level ``integrations/`` directory scanned for plugins."""
         return _repo_root() / "integrations"
 
-    def get(self, plugin_id: str) -> Optional[PluginInfo]:
+    def get(self, plugin_id: str) -> PluginInfo | None:
         return self._plugins.get(plugin_id)
 
-    def get_all(self) -> Dict[str, PluginInfo]:
+    def get_all(self) -> dict[str, PluginInfo]:
         return dict(self._plugins)
 
-    def get_platform_ids(self) -> List[str]:
+    def get_platform_ids(self) -> list[str]:
         return list(self._plugins.keys())
 
     def unregister(self, plugin_id: str) -> None:
@@ -545,7 +542,7 @@ class PluginRegistry:
         return plugin_id in self._plugins
 
 
-_default_registry: Optional[PluginRegistry] = None
+_default_registry: PluginRegistry | None = None
 
 
 def get_default_registry() -> PluginRegistry:

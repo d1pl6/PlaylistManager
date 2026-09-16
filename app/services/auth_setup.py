@@ -72,9 +72,14 @@ def browser_file_ready() -> bool:
 def setup_ytmusic_auth() -> Dict[str, Any]:
     """Prepare the environment for ``ytmusicapi browser`` auth.
 
+    Tries to launch a terminal first.  On success the auth folder is
+    *not* opened (the terminal already sits in it).  When no terminal
+    can be started, the auth folder is opened in the file manager as a
+    manual fallback.
+
     Returns a dict with keys ``ok`` (bool) and ``manual`` (bool).
     When ``ok`` is ``False`` and ``manual`` is ``True`` the caller
-    should show a manual-step message.
+    should show a manual-step message and the error detail.
     """
     AUTH_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     # mkdir's mode only applies to a NEW directory - enforce it also on
@@ -84,8 +89,9 @@ def setup_ytmusic_auth() -> Dict[str, Any]:
         AUTH_DIR.chmod(0o700)
     except OSError:
         logger.debug("Could not enforce 0o700 on %s", AUTH_DIR)
-    open_directory(AUTH_DIR)
 
+    # Try the terminal first - the terminal's cwd is already AUTH_DIR so
+    # the user can drop browser.json straight in.
     try:
         terminal_cmd = get_terminal_command(AUTH_DIR)
         subprocess.Popen(
@@ -98,6 +104,9 @@ def setup_ytmusic_auth() -> Dict[str, Any]:
         return {"ok": True, "manual": False}
     except (FileNotFoundError, OSError) as e:
         logger.error("Failed to open terminal: %s", e)
+        # Fall back to the file manager so the user can place
+        # browser.json in place manually.
+        open_directory(AUTH_DIR)
         return {
             "ok": False,
             "manual": True,

@@ -37,7 +37,6 @@ import json
 import logging
 import re
 import sys
-from typing import Dict, List, Optional, Tuple
 
 from plugin_loader import PluginRegistry, get_default_registry
 from services import auth_setup, duplicate_queue, integration_manager
@@ -69,7 +68,7 @@ class UsageError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def _parse_token(token: str, allow_urls: bool = False) -> Tuple[str, object]:
+def _parse_token(token: str, allow_urls: bool = False) -> tuple[str, object]:
     """
     Classify one comma-separated token.
 
@@ -98,8 +97,8 @@ def _parse_token(token: str, allow_urls: bool = False) -> Tuple[str, object]:
 
 
 def resolve_targets(
-    spec: str, playlists: List[dict], allow_urls: bool = False
-) -> List[Tuple[int, dict]]:
+    spec: str, playlists: list[dict], allow_urls: bool = False
+) -> list[tuple[int, dict]]:
     """
     Resolve a playlist spec ("1,2,3", "1-3", names, or a mix) to entries.
 
@@ -120,7 +119,7 @@ def resolve_targets(
             "No playlists given - e.g. '1,2,3', '1-3', or '\"Chill Mix\"'"
         )
     total = len(playlists)
-    resolved: List[Tuple[int, dict]] = []
+    resolved: list[tuple[int, dict]] = []
     seen = set()
 
     def add(entry: dict, number: int) -> None:
@@ -201,8 +200,8 @@ def resolve_targets(
 
 
 def resolve_targets_for(
-    spec: str, playlists: List[dict]
-) -> List[Tuple[int, dict]]:
+    spec: str, playlists: list[dict]
+) -> list[tuple[int, dict]]:
     """Resolve a del/ref spec: the ``all`` keyword, URLs, or a normal spec."""
     if spec.strip().lower() == "all":
         return [(i + 1, p) for i, p in enumerate(playlists)]
@@ -337,7 +336,7 @@ def run_list() -> int:
         print(tr("cli.no_playlists"), file=sys.stderr)
         return 2
     for i, playlist in enumerate(playlists, 1):
-        print(tr("cli.list_item", i=i, name=playlist.get("name"), platform=playlist.get("platform")))
+        print(tr("cli.list_item", i=i, name=playlist.get("name"), platform=playlist.get("platform") or "youtube_music"))
     return 0
 
 
@@ -397,7 +396,7 @@ def run_add(spec: str) -> int:
 
     # Legacy registry entries predate the "platform" field - default them
     # to YouTube Music, matching PlaylistStore.
-    targets_by_platform: Dict[str, list] = {}
+    targets_by_platform: dict[str, list] = {}
     for number, entry in targets:
         platform = entry.get("platform") or "youtube_music"
         targets_by_platform.setdefault(platform, []).append((number, entry))
@@ -405,7 +404,7 @@ def run_add(spec: str) -> int:
     # Per platform: authenticate once, build its flow via the plugin
     # manifest, capture the current song ONCE and share it across all of
     # that platform's target playlists.
-    contexts: Dict[str, dict] = {}
+    contexts: dict[str, dict] = {}
     for platform, group in targets_by_platform.items():
         ctx = {"flow": None, "url": None, "song_data": None, "error": ""}
         contexts[platform] = ctx
@@ -658,20 +657,26 @@ def run_scrobble() -> int:
     """
     plugin_registry = get_default_registry()
     song_manager = SongManager()
-    integrations = _build_integrations()
 
-    # Find the ScrobbleCapable backend (Last.fm).
-    scrobble_integ = next(
-        (
-            integ
-            for integ in integrations.get_all().values()
-            if getattr(integ, "scrobble", None) is not None
-        ),
-        None,
+    # Register every integration WITHOUT authenticating.  The capture
+    # loop below authenticates one platform at a time right before its
+    # attempt, so a scrobble never pays authenticate() (a /v1/me-style
+    # network round trip) for platforms that are not the current song
+    # source — the GUI equivalent runs against the app's already
+    # authenticated live registry and pays nothing per action.
+    integrations = _build_integrations(auth_platforms=set())
+
+    # Authenticate the scrobble backend (Last.fm) up front - it is
+    # always needed regardless of which platform produces the song.
+    scrobble_integ = _scrobble_backend(integrations)
+    if scrobble_integ is None:
+        print(tr("cli.no_scrobble_backend"), file=sys.stderr)
+        return 1
+    scrobble_integ = _init_platform(
+        plugin_registry, scrobble_integ.id, integration=scrobble_integ
     )
     if scrobble_integ is None:
-        print(tr("cli.no_scrobble_backend"),
-              file=sys.stderr)
+        print(tr("cli.no_scrobble_backend"), file=sys.stderr)
         return 1
 
     def flow_provider(platform_id: str):
@@ -682,9 +687,21 @@ def run_scrobble() -> int:
             return flow_cls(integ, song_manager, plugin.build_receiver())
         return flow_cls(integ, song_manager)
 
+    def integration_provider(platform_id: str):
+        # Lazy per-platform authentication: one platform at a time, and
+        # only when it is about to attempt a capture.  The prebuilt
+        # registry instance is passed along so a platform that was
+        # already authenticated (or whose authenticate() needs no
+        # network, e.g. YouTube's local browser.json) is never
+        # re-verified.
+        return _init_platform(
+            plugin_registry, platform_id,
+            integration=integrations.get(platform_id),
+        )
+
     captured = scrobble_current_song(
         integrations, plugin_registry, flow_provider, scrobble_integ,
-        URL_WAIT_TIMEOUT,
+        URL_WAIT_TIMEOUT, integration_provider=integration_provider,
     )
     if captured is None:
         print(tr("cli.no_song_found"), file=sys.stderr)
@@ -699,7 +716,7 @@ def run_scrobble() -> int:
     return 1
 
 
-def _stored_refresh_token() -> Optional[str]:
+def _stored_refresh_token() -> str | None:
     """Read the refresh token from the saved spotify.json, if any.
 
     Used by the interactive login as the "default" for the refresh-token
@@ -709,7 +726,7 @@ def _stored_refresh_token() -> Optional[str]:
     return _stored_refresh_token_for(get_default_registry().get("spotify"))
 
 
-def _stored_refresh_token_for(plugin) -> Optional[str]:
+def _stored_refresh_token_for(plugin) -> str | None:
     """Read the refresh token from a plugin's saved auth file, if any."""
     if plugin is None or not plugin.auth_path:
         return None
@@ -720,7 +737,7 @@ def _stored_refresh_token_for(plugin) -> Optional[str]:
         return None
 
 
-def _prompt(label: str, hidden: bool = False) -> Optional[str]:
+def _prompt(label: str, hidden: bool = False) -> str | None:
     """Interactive credential prompt (getpass = hidden, like sudo).
 
     Returns None when the input stream is closed (EOFError) so non-
@@ -735,9 +752,9 @@ def _prompt(label: str, hidden: bool = False) -> Optional[str]:
 
 
 def _run_soundcloud_login(
-    client_id: Optional[str] = None,
-    client_secret: Optional[str] = None,
-    refresh_token: Optional[str] = None,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    refresh_token: str | None = None,
 ) -> int:
     """CLI SoundCloud login: prompts for credentials, verifies FIRST.
 
@@ -834,9 +851,9 @@ def _run_deezer_login() -> int:
 
 def run_login(
     platform: str,
-    client_id: Optional[str] = None,
-    client_secret: Optional[str] = None,
-    refresh_token: Optional[str] = None,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    refresh_token: str | None = None,
 ) -> int:
     """Log in to a platform. Returns the CLI exit code.
 
@@ -867,12 +884,15 @@ def run_login(
     if platform == "youtube_music":
         result = auth_setup.setup_ytmusic_auth()
         if not result.get("ok"):
-            # Terminal could not be launched - fall back to manual steps.
+            # Terminal could not be launched - the auth folder was opened
+            # in the file manager as a manual fallback.
             print(
                 tr("cli.ym_no_terminal", auth_dir=result.get("auth_dir", auth_setup.AUTH_DIR)),
                 file=sys.stderr,
             )
-            return 0
+            if result.get("error"):
+                print(f"  {result['error']}", file=sys.stderr)
+            return 1
         print(
             tr("cli.ym_opened_terminal", auth_dir=auth_setup.AUTH_DIR),
             flush=True,
@@ -988,7 +1008,7 @@ def run_logout(platform: str) -> int:
     return 0
 
 
-def _resolve_platform_arg(platform: str) -> List[str]:
+def _resolve_platform_arg(platform: str) -> list[str]:
     """Expand a --install/--uninstall argument into platform ids.
 
     ``all`` expands to every catalog platform (downloadable); otherwise the
@@ -1019,7 +1039,7 @@ def run_install(platform: str) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    failures: List[str] = []
+    failures: list[str] = []
     for pid in targets:
         display = integration_manager.INTEGRATION_REPOS[pid].display_name
         target_dir = PluginRegistry().base_dir / pid
@@ -1078,7 +1098,7 @@ def run_uninstall(platform: str) -> int:
             return 2
         targets = [platform]
 
-    failures: List[str] = []
+    failures: list[str] = []
     for pid in targets:
         registry = get_default_registry()
         plugin = registry.get(pid)
@@ -1112,7 +1132,7 @@ def run_uninstall(platform: str) -> int:
 def _run_flow(
     flow, playlist_name: str, url=None, song_data=None, playlist_id=None,
     scrobble_integ=None, platform: str = "",
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """Run one add-flow; returns (ok, message) - message is the line tail.
 
     *scrobble_integ* is the pre-resolved ScrobbleCapable backend (or
