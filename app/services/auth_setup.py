@@ -357,22 +357,19 @@ def validate_lastfm_credentials(api_key: str, api_secret: str) -> Dict[str, Any]
 
 
 def delete_lastfm_credentials() -> bool:
-    """Remove the Last.fm credential file.
+    """Remove the Last.fm credential file(s).
 
-    Returns ``True`` when the file was deleted, ``False`` when it
-    did not exist.  Raises ``OSError`` on a failed unlink (same
-    contract as :func:`delete_spotify_credentials`).
+    Delegates to :func:`delete_platform_credentials` so the delete path
+    stays a single source of truth (the ``PLATFORM_CREDENTIAL_FILES`` map
+    plus any manifest-declared fallback files) instead of a second
+    hardcoded copy of the path.
+
+    Returns ``True`` when at least one file was deleted, ``False`` when
+    none existed.  Raises ``OSError`` on a failed unlink (same contract
+    as :func:`delete_spotify_credentials`).
     """
-    lastfm_file = AUTH_DIR / "lastfm.json"
-    if lastfm_file.exists():
-        try:
-            lastfm_file.unlink()
-            user_log(logger, tr("auth.deleted_lastfm"))
-            return True
-        except OSError as e:
-            logger.error("Failed to delete Last.fm credentials: %s", e)
-            raise
-    return False
+    deleted, _ = delete_platform_credentials("lastfm")
+    return bool(deleted)
 
 
 def verify_lastfm_credentials(api_key: str, api_secret: str) -> Dict[str, Any]:
