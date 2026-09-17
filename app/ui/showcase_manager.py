@@ -950,7 +950,7 @@ class ShowcaseManager:
     ) -> None:
         self._card_grid._update_log_labels_from_db(frame_idx, playlist_name, platform)
 
-    # -- Aliases for callers that use the un-prefixed public name -------
+    # -- Aliases for callers that use the un-preed public name -------
 
     refresh = _refresh_showcase
     refresh_stats = _refresh_stats

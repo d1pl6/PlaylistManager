@@ -36,9 +36,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Base design sizes of the playlist card, in unscaled pixels; every value
-# is multiplied by the UI scale (utils/scaling).  Card *width* is no
-# longer fixed — each card fills its grid column (column width is driven
-# by the window width and the column count).
+# is multiplied by the UI scale (utils/scaling).
 CARD_H_BASE = 96
 LOG_ROW_H_BASE = 23
 STATS_ROW_H_BASE = 20

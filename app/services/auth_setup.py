@@ -52,22 +52,18 @@ def browser_file_ready() -> bool:
     the primary yt_music.json plus browser.json and the legacy fallback
     locations; the poll must mirror that, or a fallback copy would never
     trigger the refresh and the login would silently only apply on
-    restart.
+    restart.  ``browser_file_candidates`` is the plugin's single source
+    of truth for the lookup order.
     """
     try:
         from integrations.youtube_music.youtube_music import (
-            YT_MUSIC_FILE as YT_FILE,
-            BROWSER_FILE as YT_BROWSER_FILE,
-            BROWSER_FILE_FALLBACKS,
+            browser_file_candidates,
         )
     except Exception:
         return complete_browser_file(YT_MUSIC_FILE) or complete_browser_file(
             BROWSER_FILE
         )
-    return any(
-        complete_browser_file(p)
-        for p in [YT_FILE, YT_BROWSER_FILE, *BROWSER_FILE_FALLBACKS]
-    )
+    return any(complete_browser_file(p) for p in browser_file_candidates())
 
 # ---------------------------------------------------------------------------
 # YouTube Music

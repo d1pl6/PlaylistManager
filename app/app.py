@@ -189,8 +189,8 @@ class App:
     def _bootstrap_auth(self) -> None:
         """Initial authentication for every registered integration.
 
-        Auth logic stays platform-specific in Step 1 (see 0.3.0/step1.md) -
-        each integration owns its auth manager; this only wires them up.
+        Auth logic stays platform-specific - each integration owns its
+        auth manager; this only wires them up.
         YouTube Music's setup_auth() reads local files (fast -> sync);
         Spotify's verifies credentials against /v1/me - a network round
         trip with a 15 s timeout.  Running that synchronously would delay

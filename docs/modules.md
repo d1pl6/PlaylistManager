@@ -78,8 +78,8 @@ app/
 integrations/              # platform plugins — each dir is a separate repo (gitignored), declared by plugin.json; the working tree ships deezer/, lastfm/, soundcloud/, spotify/, youtube_music/ (the two below show the full layout)
   youtube_music/
     plugin.json                 # id/display_name/auth_file/auth_file_fallbacks/url_hosts/flow_type/receiver_port/login_module/login_class/login_logo/url templates/class refs; logo.png in the dir root is the standard logo (PluginInfo.logo_path); imports use the DIR name
-    youtube_music.py            # YouTubeAuthManager, ytmusicapi monkey-patch
-    youtube_music_receiver.py   # Flask HTTP receiver (localhost:5000) — pull-based URL protocol
+    youtube_music.py            # YouTubeAuthManager, ytmusicapi monkey-patch; profile-aware auth-dir resolver (`_resolve_auth_dir`/`_yt_music_file`/`_browser_file`) + one-time legacy-shared migration + `browser_file_candidates()` (the app's auth-ready poll mirrors it)
+    youtube_music_receiver.py   # Flask HTTP receiver (localhost:5000) — pull-based URL protocol; port pinned in 4 sites (plugin.json, manifest host_permissions, DEFAULT_RECEIVER_PORT, content.js fallback)
     integration.py              # YouTubeMusicIntegration (BaseIntegration subclass)
     flow.py                     # YouTubeMusicFlow (BaseFlowController) + capture() for CLI batch mode
     youtube-music-extension/    # Firefox browser extension (Manifest V3, gecko-only) — lives inside its plugin
@@ -184,8 +184,10 @@ Core touchpoints, for orientation when reading a plugin repo:
 |---|---|
 | `<plat>/integration.py` | subclass of `BaseIntegration`; instantiated in `App.__init__` with `auth_manager=` |
 | `<plat>/flow.py` | subclass of `BaseFlowController`; ctor takes the integration plus `SongManager` (a plugin declaring `receiver_class` also gets the receiver - not just extension-type; SoundCloud receives it so its hybrid mode can prefer the browser extension); implements `execute_flow` and `capture(timeout)` for CLI batch mode |
-| `youtube_music/youtube_music_receiver.py` | Flask receiver on localhost, token-authenticated; port pinned jointly with the extension manifest (see plugins.md "URL receiver protocol") |
-| `spotify/spotify.py` | owns credential writes via `save_spotify_credentials_file()`; `auth_setup` delegates to it |
+| `youtube_music/youtube_music_receiver.py` | Flask receiver on localhost, token-authenticated; port pinned in FOUR sites that must stay in sync (plugin.json `receiver_port`, extension manifest `host_permissions`, `DEFAULT_RECEIVER_PORT`, the `localServerUrls()` fallback literal in content.js) |
+| `youtube_music/youtube_music.py` | `YouTubeAuthManager` (lazy `ytmusicapi`), `ytmusicapi` monkey-patch `_patched_get_library_playlists`; credentials resolve profile-aware via `profile_store.auth_dir()` (`_resolve_auth_dir`, shared-dir fallback for standalone use) with a one-time migration of legacy shared `yt_music.json`/`browser.json` into the profile slot on load; `save_ytmusic_headers_file` (0600, atomic, tmp cleanup on write failure), `load_ytmusic_headers_file` (chmod-enforces 0600), `browser_file_candidates()` - the full lookup order the app's auth-ready poll mirrors |
+| `youtube_music/flow.py` | `YouTubeMusicFlow` - add-first-then-local-DB invariant, mid-flow playlist-removal path, `_get_playlist_id` playlist-id cache stores `None` negatives (presses on a missing/renamed playlist never re-scan the library) |
+| `spotify/spotify.py` | `SpotifyAuthManager`, `SpotifyAPI` (OAuth refresh flow, 401-refresh+retry, bounded 429 backoff with a non-numeric-`Retry-After` guard, single-writer atomic 0600 credential writes); credentials resolve profile-aware via `profile_store.auth_dir()` (`_resolve_auth_dir`, shared-dir fallback for standalone use) with a one-time migration of a legacy shared `spotify.json` into the profile slot on load (`load_spotify_credentials`, consumed by `setup_auth`); `like_track` chunks at 50 ids (Spotify's PUT `/me/tracks` cap, unlike the 100-track playlist-add POST); `_request` maps transport/JSON failures to `None` but lets auth expiry (`RuntimeError` from `_get_headers`) propagate so callers distinguish "transient" from "credentials are dead"; `auth_setup` delegates saves to it and owns load/delete |
 | `soundcloud/soundcloud.py` | owns credential writes via `save_soundcloud_credentials_file()` (verify-first, like Spotify); credentials resolve profile-aware via `profile_store.auth_dir()` (`_resolve_auth_dir`, shared-dir fallback for standalone use) with a one-time migration of a legacy shared `soundcloud.json` into the profile slot on load; `delete_soundcloud_credentials` returns False only when absent and RAISES on unlink failure (the login dialog distinguishes the two); `SoundCloudAPI` wrapper (OAuth `Authorization: OAuth <token>`, 401-refresh-401 + bounded 429 backoff with a non-numeric-`Retry-After` guard, fetch-modify-write `/playlists/{urn}` PUT because there is no add-track endpoint — `get_playlist_tracks` follows every `next_href` page so a large playlist's tail is never dropped by the PUT), `SoundCloudAuthManager`; the app's login tile is `login_ui._on_soundcloud`, NOT a plugin tile |
 | `soundcloud/integration.py` | `SoundCloudIntegration` - `BaseIntegration`; `get_library_playlists` filters non-`playlist` `set_type`s (albums/station can't take adds); `add_tracks_to_playlist`/`remove_track` delegate to the wrapper's whole-array PUT; `_normalize_playlist_id` accepts URN / numeric / `user/slug` (the last via `/resolve`, cached) |
 | `soundcloud/flow.py` | `SoundCloudFlow` - capture-mode aware (`[soundcloud] capture_mode` in `cfg/settings.ini`: `api` reads `/me/recently-played`[0], `hybrid` prefers the extension receiver then falls back, `extension` receiver-only); enforces the add-first-then-local-DB invariant and the paused-skip policy (paused POST -> no-op, never falls back to recently-played) |
@@ -202,9 +204,9 @@ do not, and each is deliberate:
    lazy import to `integrations.spotify.spotify.save_spotify_credentials_file`.
    Keeps exactly one credential writer, inside the plugin repo.
 2. `ui.login_ui._browser_file_ready` reads
-   `integrations.youtube_music.youtube_music.BROWSER_FILE[_FALLBACKS]`
-   lazily and falls back to `auth_setup.BROWSER_FILE` if the plugin repo
-   is missing.
+   `integrations.youtube_music.youtube_music.browser_file_candidates()`
+   lazily and falls back to the `auth_setup.BROWSER_FILE`/`YT_MUSIC_FILE`
+   constants if the plugin repo is missing.
 3. The `KeybindCallbacks` protocol lives in
    `controllers/callbacks.py`, not in services: the UI side implements
    it, the controller consumes it, and `keybind_registry` stays pure data.

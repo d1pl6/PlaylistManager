@@ -1,12 +1,15 @@
-"""YT Music manual-headers auth tests.
+"""YT Music manual-headers auth + profile-aware resolution + cache tests.
 
-Covers the plugin's ``yt_music.json`` save/load/fallback handling plus the
-app-side ``auth_setup.save_and_verify_ytmusic_auth`` VERIFY-FIRST contract.
-The ytmusicapi round trip is stubbed (never touches the network); the
-plugin's credential paths are monkeypatched to a temp tree (the plugin
-hardcodes the real platformdirs auth dir, which the test conftest does not
-redirect).  The whole module skips when the youtube_music plugin repo is
-not present (gitignored plugin dirs are absent on fresh clones).
+Covers the plugin's ``yt_music.json`` save/load/fallback handling, the
+profile-aware auth-dir resolver with legacy-shared migration, the app-side
+``auth_setup.save_and_verify_ytmusic_auth`` VERIFY-FIRST contract, and the
+flow's playlist-id negative cache.  The ytmusicapi round trip is stubbed
+(never touches the network); the plugin's credential paths are
+monkeypatched to a per-test temp tree (the plugin resolves through the
+app's profile_store, which the test conftest redirects, but a per-test
+patch keeps tests isolated from each other).  The whole module skips when
+the youtube_music plugin repo is not present (gitignored plugin dirs are
+absent on fresh clones).
 """
 
 import json
@@ -40,11 +43,15 @@ def plugin(tmp_path, monkeypatch):
     mod = _plugin_mod()
     auth = tmp_path / "auth"
     auth.mkdir()
-    monkeypatch.setattr(mod, "AUTH_FOLDER", auth)
-    monkeypatch.setattr(mod, "YT_MUSIC_FILE", auth / "yt_music.json")
-    monkeypatch.setattr(mod, "BROWSER_FILE", auth / "browser.json")
+    legacy_auth = tmp_path / "legacy_shared" / "auth"
+    monkeypatch.setattr(mod, "_resolve_auth_dir", lambda: auth)
     monkeypatch.setattr(
-        mod, "BROWSER_FILE_FALLBACKS", [auth / "repo/browser.json"]
+        mod,
+        "_legacy_shared_auth_file",
+        lambda name: legacy_auth / name,
+    )
+    monkeypatch.setattr(
+        mod, "BROWSER_FILE_FALLBACKS", [tmp_path / "repo/browser.json"]
     )
     return mod
 
@@ -75,7 +82,7 @@ def fake_ytmusic(monkeypatch):
 
 class TestPluginFiles:
     def test_save_and_load_round_trip(self, plugin):
-        path = plugin.YT_MUSIC_FILE
+        path = plugin._yt_music_file()
         assert plugin.save_ytmusic_headers_file(HEADERS) == path
         assert path.exists()
         assert path.stat().st_mode & 0o777 == 0o600
@@ -85,14 +92,14 @@ class TestPluginFiles:
         assert plugin.load_ytmusic_headers_file() is None
 
     def test_yt_music_file_has_priority_over_browser(self, plugin):
-        plugin.BROWSER_FILE.write_text(
+        plugin._browser_file().write_text(
             json.dumps({"Cookie": "old"}), encoding="utf-8"
         )
         plugin.save_ytmusic_headers_file(HEADERS)
         assert plugin.load_ytmusic_headers_file() == HEADERS
 
     def test_browser_file_fallback_when_yt_file_absent(self, plugin):
-        plugin.BROWSER_FILE.write_text(json.dumps(HEADERS), encoding="utf-8")
+        plugin._browser_file().write_text(json.dumps(HEADERS), encoding="utf-8")
         assert plugin.load_ytmusic_headers_file() == HEADERS
 
     def test_legacy_fallback_copy(self, plugin):
@@ -102,22 +109,63 @@ class TestPluginFiles:
         assert plugin.load_ytmusic_headers_file() == HEADERS
 
     def test_load_chmods_loose_file_to_0600(self, plugin):
-        plugin.BROWSER_FILE.write_text(json.dumps(HEADERS), encoding="utf-8")
-        plugin.BROWSER_FILE.chmod(0o644)
+        plugin._browser_file().write_text(json.dumps(HEADERS), encoding="utf-8")
+        plugin._browser_file().chmod(0o644)
         plugin.load_ytmusic_headers_file()
-        assert plugin.BROWSER_FILE.stat().st_mode & 0o777 == 0o600
+        assert plugin._browser_file().stat().st_mode & 0o777 == 0o600
 
     def test_find_browser_file_priority(self, plugin):
         from integrations.youtube_music.youtube_music import YouTubeAuthManager
 
-        plugin.YT_MUSIC_FILE.write_text(json.dumps(HEADERS), encoding="utf-8")
-        plugin.BROWSER_FILE.write_text("{}", encoding="utf-8")
+        plugin._yt_music_file().write_text(json.dumps(HEADERS), encoding="utf-8")
+        plugin._browser_file().write_text("{}", encoding="utf-8")
         mgr = YouTubeAuthManager()
-        assert mgr._find_browser_file() == plugin.YT_MUSIC_FILE
-        plugin.YT_MUSIC_FILE.unlink()
-        assert mgr._find_browser_file() == plugin.BROWSER_FILE
-        plugin.BROWSER_FILE.unlink()
+        assert mgr._find_browser_file() == plugin._yt_music_file()
+        plugin._yt_music_file().unlink()
+        assert mgr._find_browser_file() == plugin._browser_file()
+        plugin._browser_file().unlink()
         assert mgr._find_browser_file() is None
+
+
+class TestProfileAwareResolution:
+    def test_save_lands_in_profile_dir(self, plugin):
+        plugin.save_ytmusic_headers_file(HEADERS)
+        assert plugin._yt_music_file().exists()
+        assert not plugin._legacy_shared_auth_file("yt_music.json").exists()
+
+    def test_legacy_yt_file_migrated_on_load(self, plugin):
+        legacy_yt = plugin._legacy_shared_auth_file("yt_music.json")
+        legacy_yt.parent.mkdir(parents=True)
+        legacy_yt.write_text(json.dumps(HEADERS), encoding="utf-8")
+        assert plugin.load_ytmusic_headers_file() == HEADERS
+        assert plugin._yt_music_file().exists()
+        assert not legacy_yt.exists()
+
+    def test_legacy_browser_file_migrated_on_load(self, plugin):
+        legacy = plugin._legacy_shared_auth_file("browser.json")
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text(json.dumps(HEADERS), encoding="utf-8")
+        assert plugin.load_ytmusic_headers_file() == HEADERS
+        assert plugin._browser_file().exists()
+        assert not legacy.exists()
+
+    def test_migration_never_overwrites_profile_copy(self, plugin):
+        plugin._yt_music_file().write_text(
+            json.dumps({"A": 1}), encoding="utf-8"
+        )
+        legacy = plugin._legacy_shared_auth_file("yt_music.json")
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text(json.dumps(HEADERS), encoding="utf-8")
+        assert plugin.load_ytmusic_headers_file() == {"A": 1}
+        assert legacy.exists()
+
+    def test_browser_file_ready_mirrors_plugin_candidates(self, plugin):
+        assert auth_setup.browser_file_ready() is False
+        plugin._yt_music_file().write_text(json.dumps(HEADERS), encoding="utf-8")
+        assert auth_setup.browser_file_ready() is True
+        plugin._yt_music_file().unlink()
+        plugin._browser_file().write_text(json.dumps(HEADERS), encoding="utf-8")
+        assert auth_setup.browser_file_ready() is True
 
 
 class TestSaveAndVerify:
@@ -125,9 +173,9 @@ class TestSaveAndVerify:
         result = auth_setup.save_and_verify_ytmusic_auth("AUTHZ", "COOKIE")
         assert result.get("ok") is True
         assert "error" not in result
-        assert plugin.YT_MUSIC_FILE.exists()
-        assert plugin.YT_MUSIC_FILE.stat().st_mode & 0o777 == 0o600
-        saved = json.loads(plugin.YT_MUSIC_FILE.read_text(encoding="utf-8"))
+        assert plugin._yt_music_file().exists()
+        assert plugin._yt_music_file().stat().st_mode & 0o777 == 0o600
+        saved = json.loads(plugin._yt_music_file().read_text(encoding="utf-8"))
         assert saved["Authorization"] == "AUTHZ"
         assert saved["Cookie"] == "COOKIE"
         assert saved["x-origin"] == "https://music.youtube.com"
@@ -138,9 +186,48 @@ class TestSaveAndVerify:
         result = auth_setup.save_and_verify_ytmusic_auth("BAD", "BAD")
         assert result.get("ok") is False
         assert "error" in result
-        assert not plugin.YT_MUSIC_FILE.exists()
+        assert not plugin._yt_music_file().exists()
 
     def test_empty_fields_rejected(self, plugin):
         result = auth_setup.save_and_verify_ytmusic_auth("  ", "x")
         assert result.get("ok") is False
-        assert not plugin.YT_MUSIC_FILE.exists()
+        assert not plugin._yt_music_file().exists()
+
+
+class _ScanClient:
+    """Stands in for a ytmusicapi client; counts full-library scans."""
+
+    def __init__(self):
+        self.scans = 0
+
+    def get_library_playlists(self, limit=None):
+        self.scans += 1
+        return []
+
+
+class TestFlowPlaylistIdCache:
+    def test_negative_result_cached_no_rescan(self):
+        import integrations.youtube_music.flow as flow_mod
+
+        client = _ScanClient()
+        flow = flow_mod.YouTubeMusicFlow(
+            SimpleNamespace(yt_client=client),
+            song_manager=object(),
+            url_receiver=None,
+        )
+        assert flow._get_playlist_id("Missing Playlist") is None
+        assert flow._get_playlist_id("Missing Playlist") is None
+        assert client.scans == 1
+
+    def test_known_id_cached_without_scan(self):
+        import integrations.youtube_music.flow as flow_mod
+
+        client = _ScanClient()
+        flow = flow_mod.YouTubeMusicFlow(
+            SimpleNamespace(yt_client=client),
+            song_manager=object(),
+            url_receiver=None,
+        )
+        assert flow._get_playlist_id("Some Playlist", "PL123") == "PL123"
+        assert flow._get_playlist_id("Some Playlist", "PL123") == "PL123"
+        assert client.scans == 0
