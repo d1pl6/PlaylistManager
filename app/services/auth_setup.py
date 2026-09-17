@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 AUTH_DIR = _profile_store.auth_dir()
 SPOTIFY_FILE = AUTH_DIR / "spotify.json"
 BROWSER_FILE = AUTH_DIR / "browser.json"
+YT_MUSIC_FILE = AUTH_DIR / "yt_music.json"
 
 
 def complete_browser_file(path: Path) -> bool:
@@ -48,20 +49,24 @@ def browser_file_ready() -> bool:
     """Whether a *complete, usable* browser.json exists.
 
     The auth manager (``YouTubeAuthManager._find_browser_file``) accepts
-    the primary platformdirs path plus legacy fallback locations; the
-    poll must mirror that, or a fallback copy would never trigger the
-    refresh and the login would silently only apply on restart.
+    the primary yt_music.json plus browser.json and the legacy fallback
+    locations; the poll must mirror that, or a fallback copy would never
+    trigger the refresh and the login would silently only apply on
+    restart.
     """
     try:
         from integrations.youtube_music.youtube_music import (
+            YT_MUSIC_FILE as YT_FILE,
             BROWSER_FILE as YT_BROWSER_FILE,
             BROWSER_FILE_FALLBACKS,
         )
     except Exception:
-        return complete_browser_file(BROWSER_FILE)
+        return complete_browser_file(YT_MUSIC_FILE) or complete_browser_file(
+            BROWSER_FILE
+        )
     return any(
         complete_browser_file(p)
-        for p in [YT_BROWSER_FILE, *BROWSER_FILE_FALLBACKS]
+        for p in [YT_FILE, YT_BROWSER_FILE, *BROWSER_FILE_FALLBACKS]
     )
 
 # ---------------------------------------------------------------------------
@@ -113,6 +118,70 @@ def setup_ytmusic_auth() -> Dict[str, Any]:
             "auth_dir": str(AUTH_DIR),
             "error": str(e),
         }
+
+
+def save_and_verify_ytmusic_auth(
+    authorization: str, cookie: str
+) -> Dict[str, Any]:
+    """Verify manually pasted YT Music headers and persist them.
+
+    The values are assembled into the six-key headers dict ytmusicapi
+    consumes directly (no ``headers`` wrapper) and verified against the
+    live API FIRST - a real authenticated browse round trip - so a typo
+    in the pasted values can never destroy previously working auth
+    (VERIFY-FIRST, same contract as the Spotify/Last.fm/Deezer
+    ``save_and_verify_*`` helpers).  Only a successful check writes
+    ``yt_music.json`` via the plugin's atomic 0o600 writer.
+
+    Runs a blocking network round trip (15s timeout): call from a worker
+    thread, never the UI thread (PROJECT_RULES #198).
+
+    Returns ``{"ok": True}`` or ``{"ok": False, "error": str}``.
+    """
+    authorization = (authorization or "").strip()
+    cookie = (cookie or "").strip()
+    if not authorization or not cookie:
+        return {"ok": False, "error": tr("login.all_fields_required")}
+    headers = {
+        "Accept": "*/*",
+        "Authorization": authorization,
+        "Content-Type": "application/json",
+        "X-Goog-AuthUser": "0",
+        "x-origin": "https://music.youtube.com",
+        "Cookie": cookie,
+    }
+    try:
+        from integrations.youtube_music.youtube_music import (
+            save_ytmusic_headers_file,
+        )
+        from ytmusicapi import YTMusic
+    except ImportError:
+        return {"ok": False, "error": tr("login.ytmusic_api_missing")}
+
+    import requests
+
+    session = requests.Session()
+    # ytmusicapi has no per-call timeout knob; defaulting the timeout
+    # at the session level keeps a dead network from hanging the verify.
+    original_request = session.request
+    session.request = lambda *args, **kw: original_request(
+        *args, **{**kw, "timeout": kw.get("timeout", 15)}
+    )
+    try:
+        YTMusic(headers, requests_session=session).get_library_playlists(
+            limit=1
+        )
+    except Exception as e:
+        logger.warning("YT Music credential verification failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+    try:
+        save_ytmusic_headers_file(headers)
+    except OSError as e:
+        logger.error("Failed to save YT Music credentials: %s", e)
+        return {"ok": False, "error": str(e)}
+    logger.info("YT Music credentials verified and saved")
+    return {"ok": True}
 
 # ---------------------------------------------------------------------------
 # Spotify
@@ -468,22 +537,6 @@ def save_and_verify_soundcloud_credentials(
 DEEZER_FILE = AUTH_DIR / "deezer.json"
 
 
-def load_deezer_credentials() -> dict | None:
-    """Read the Deezer ARL from the auth file.  Returns None if absent."""
-    if not DEEZER_FILE.exists():
-        return None
-    try:
-        with open(DEEZER_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        arl = str(data.get("arl", "")).strip()
-        if not arl:
-            return None
-        return {"arl": arl}
-    except Exception as e:
-        logger.error("Failed to load Deezer credentials: %s", e)
-        return None
-
-
 def verify_deezer_credentials(arl: str) -> tuple:
     """Verify a Deezer ARL with a live Pipe API round trip.
 
@@ -531,7 +584,7 @@ def save_and_verify_deezer_credentials(arl: str) -> dict:
 # auth-dir file declared via ``auth_file`` plus any ``auth_file_fallbacks``
 # (legacy repo-root copies), resolved by PluginInfo.auth_paths.
 PLATFORM_CREDENTIAL_FILES = {
-    "youtube_music": [BROWSER_FILE],
+    "youtube_music": [YT_MUSIC_FILE, BROWSER_FILE],
     "spotify": [SPOTIFY_FILE],
     "lastfm": [AUTH_DIR / "lastfm.json"],
     "soundcloud": [AUTH_DIR / "soundcloud.json"],

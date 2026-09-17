@@ -100,22 +100,57 @@ def open_directory(path: Path) -> None:
         logger.error("Failed to open directory %s: %s", path, e)
 
 
+# Known terminal emulators, tried in order when no explicit default is
+# configured.  The list order is a last-resort heuristic only: konsole is
+# common on KDE systems while foot/kitty are the typical Wayland defaults,
+# so a user on e.g. Hyprland gets konsole here unless they export
+# ``$TERMINAL`` (or ``xdg-terminal-exec`` resolves the right default).
+KNOWN_TERMINALS = [
+    "kgx",
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "xterm",
+    "alacritty",
+    "kitty",
+    "ghostty",
+    "wezterm",
+    "tilix",
+    "foot",
+]
+
+
 def find_linux_terminal() -> str | None:
-    """Return the path of the first supported terminal emulator found."""
-    for term in [
-        "kgx",
-        "gnome-terminal",
-        "konsole",
-        "xfce4-terminal",
-        "xterm",
-        "alacritty",
-        "kitty",
-        "ghostty",
-        "wezterm",
-        "tilix",
-        "foot",
-        "x-terminal-emulator",
-    ]:
+    """Resolve the terminal emulator to launch, honoring the user's default.
+
+    Priority:
+    1. ``$TERMINAL`` - explicit user intent (compositor configs commonly
+       export this, e.g. ``env = TERMINAL,foot`` in hyprland.conf).
+    2. ``xdg-terminal-exec`` - freedesktop default-terminal resolution
+       that consults the desktop's configured default application.  Only
+       returned when installed; ``get_terminal_command()`` launches it
+       *without* ``-e`` because the wrapper forwards the command itself.
+    3. ``x-terminal-emulator`` - the update-alternatives default (how a
+       distro-declared default is supposed to win over this module).
+    4. The well-known emulators in :data:`KNOWN_TERMINALS` order.
+    """
+    env_terminal = os.environ.get("TERMINAL", "").strip()
+    if env_terminal:
+        # $TERMINAL may be a bare name or a full path; ignore bogus values.
+        resolved = shutil.which(env_terminal)
+        if resolved:
+            return resolved
+        if (
+            env_terminal.startswith("/")
+            and os.path.isfile(env_terminal)
+            and os.access(env_terminal, os.X_OK)
+        ):
+            return env_terminal
+    if shutil.which("xdg-terminal-exec"):
+        return "xdg-terminal-exec"
+    if shutil.which("x-terminal-emulator"):
+        return "x-terminal-emulator"
+    for term in KNOWN_TERMINALS:
         if shutil.which(term):
             return term
     return None
@@ -165,4 +200,9 @@ def get_terminal_command(work_dir: Path) -> list[str]:
             f"cd {shlex.quote(str(work_dir))} && ytmusicapi browser; "
             f"exec {shlex.quote(shell)}"
         )
+        if term == "xdg-terminal-exec":
+            # The freedesktop wrapper launches the configured default
+            # terminal itself and forwards the command as positional
+            # args - no "-e" flag.
+            return [term, shell, "-c", cmd]
         return [term, "-e", shell, "-c", cmd]

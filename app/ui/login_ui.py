@@ -277,26 +277,286 @@ def _create_platform_button(parent, name, icon_path, command):
 
 
 def _on_youtube_music(parent, on_success):
-    result = auth_setup.setup_ytmusic_auth()
-    if result.get("manual"):
-        error_line = f"\n\nError: {result['error']}" if result.get("error") else ""
-        messagebox.showinfo(
-            tr("login.manual_step_title"),
-            f"Open a terminal and run:\n\n"
-            f"cd {result['auth_dir']}\n"
-            f"ytmusicapi browser\n\n"
-            f"Then place the generated browser.json in:\n{result['auth_dir']}"
-            f"{error_line}",
-            parent=parent,
+    """In-app YT Music login dialog (paste Authorization + Cookie).
+
+    The two values come from the browser's Developer Tools
+    (Network -> music.youtube.com -> request headers).  Save is
+    VERIFY-FIRST: the pasted headers are validated against the live API
+    before ``yt_music.json`` is written (a typo can never destroy working
+    auth).  The terminal ``ytmusicapi browser`` flow stays available via
+    the "Browser flow" button for users who prefer it.
+    """
+    win = tk.Toplevel(parent)
+    win.title(tr("login.ytmusic_login"))
+    win.configure(background=C["frame_main_bg"])
+    win.transient(parent)
+    win.update_idletasks()
+    win.grab_set()
+    win.minsize(480, 340)
+
+    # ---------- theme colours ----------
+    header_bg = C["frame_head_bg"]
+    label_fg = C["label_def_fg"]
+    frame_bg = C["frame_main_bg"]
+    entry_bg = C["entry_default_bg"]
+    entry_fg = C["entry_default_fg"]
+    button_close_bg = C["button_close_bg"]
+    button_close_fg = C["button_close_fg"]
+    button_close_btn = btn_colors(button_close_bg, button_close_fg)
+    button_save_bg = C["button_save_bg"]
+    button_save_fg = C["button_save_fg"]
+    button_save_btn = btn_colors(button_save_bg, button_save_fg)
+    button_main_bg = C["button_main_bg"]
+    button_main_fg = C["button_main_fg"]
+    button_main_btn = btn_colors(button_main_bg, button_main_fg)
+
+    try:
+        from integrations.youtube_music.youtube_music import (
+            load_ytmusic_headers_file,
         )
-    if on_success:
-        # The YT handoff is asynchronous - poll until browser.json lands,
-        # then tell the app which platform's credentials changed so a
-        # scoped refresh doesn't re-verify (and possibly deauthenticate)
-        # Spotify.
-        _poll_for_browser_json(
-            parent, lambda: on_success("youtube_music")
+
+        existing = load_ytmusic_headers_file() or {}
+    except Exception:
+        logger.debug("Could not prefill YT Music credentials", exc_info=True)
+        existing = {}
+
+    header = tk.Frame(win, background=header_bg)
+    header.pack(fill="x", padx=10, pady=10)
+
+    tk.Label(
+        header,
+        text=tr("login.ytmusic_credentials"),
+        background=header_bg,
+        foreground=label_fg,
+        font=ui_font(14),
+    ).pack(fill="both", pady=5, padx=5)
+
+    # ---------- hint ----------
+    hint = tk.Label(
+        win,
+        text=tr("login.ytmusic_hint"),
+        background=frame_bg,
+        foreground=label_fg,
+        font=ui_font(8),
+        justify="left",
+        wraplength=440,
+        anchor="w",
+    )
+    hint.pack(fill="x", padx=20, pady=(0, 6))
+
+    # ---------- fields ----------
+    fields_frame = tk.Frame(win, background=frame_bg)
+    fields_frame.pack(fill="x", padx=20, pady=6)
+
+    authorization_var = tk.StringVar(value=existing.get("Authorization", ""))
+    cookie_var = tk.StringVar(value=existing.get("Cookie", ""))
+
+    fields = [
+        ("login.authorization", authorization_var),
+        ("login.cookie", cookie_var),
+    ]
+
+    for i, (label_text, var) in enumerate(fields):
+        tk.Label(
+            fields_frame,
+            text=tr(label_text),
+            background=frame_bg,
+            foreground=label_fg,
+            font=ui_font(10),
+        ).grid(row=i, column=0, sticky="w", pady=5)
+
+        entry = tk.Entry(
+            fields_frame,
+            textvariable=var,
+            background=entry_bg,
+            foreground=entry_fg,
+            insertbackground=entry_fg,
+            font=ui_font(10),
+            width=46,
+            show="*",
         )
+        entry.grid(row=i, column=1, sticky="ew", pady=5, padx=(10, 0))
+        if i == 0:
+            authorization_entry = entry
+        else:
+            cookie_entry = entry
+
+    fields_frame.columnconfigure(1, weight=1)
+
+    reveal_var = tk.BooleanVar(value=False)
+
+    def _toggle_reveal():
+        show = "" if reveal_var.get() else "*"
+        authorization_entry.config(show=show)
+        cookie_entry.config(show=show)
+
+    tk.Checkbutton(
+        fields_frame,
+        text=tr("login.reveal_values"),
+        variable=reveal_var,
+        command=_toggle_reveal,
+        selectcolor=frame_bg,
+        font=ui_font(9),
+        highlightthickness=0,
+        **btn_colors(frame_bg, label_fg),
+    ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+    # ---------- status ----------
+    status_label = tk.Label(
+        win,
+        text="",
+        background=frame_bg,
+        foreground=label_fg,
+        font=ui_font(10),
+        justify="left",
+        wraplength=440,
+        anchor="w",
+    )
+    status_label.pack(fill="x", padx=20, pady=5)
+
+    # ---------- buttons ----------
+    btn_frame = tk.Frame(win, background=frame_bg)
+    btn_frame.pack(fill="x", padx=20, pady=10)
+
+    def _browser_flow():
+        """Run the classic terminal handoff and hand control to the poller."""
+        result = auth_setup.setup_ytmusic_auth()
+        win.destroy()
+        if result.get("manual"):
+            error_line = (
+                f"\n\nError: {result['error']}" if result.get("error") else ""
+            )
+            messagebox.showinfo(
+                tr("login.manual_step_title"),
+                f"Open a terminal and run:\n\n"
+                f"cd {result['auth_dir']}\n"
+                f"ytmusicapi browser\n\n"
+                f"Then place the generated browser.json in:\n{result['auth_dir']}"
+                f"{error_line}",
+                parent=parent,
+            )
+        if on_success:
+            _poll_for_browser_json(parent, lambda: on_success("youtube_music"))
+
+    def _verify_and_save():
+        authorization = authorization_var.get().strip()
+        cookie = cookie_var.get().strip()
+        if not authorization or not cookie:
+            status_label.config(
+                text=tr("login.all_fields_required"),
+                foreground=C["status_error_bg"],
+            )
+            return
+        status_label.config(text=tr("login.verifying"), foreground=label_fg)
+        _set_busy(True)
+
+        def run():
+            result = auth_setup.save_and_verify_ytmusic_auth(
+                authorization, cookie
+            )
+            try:
+                win.after(0, _save_done, result)
+            except Exception:
+                # App quit (or dialog destroyed) while the verify round
+                # trip was in flight - nothing to schedule against.
+                logger.debug(
+                    "Login dialog closed during YT verification", exc_info=True
+                )
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _save_done(result):
+        try:
+            if not win.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        _set_busy(False)
+        if result.get("ok"):
+            status_label.config(
+                text=tr("login.ok_with_name", name="YouTube Music"),
+                foreground=C["label_playlist_good_fg"],
+            )
+            if on_success:
+                on_success("youtube_music")
+        else:
+            status_label.config(
+                text=result.get("error", tr("common.error")),
+                foreground=C["status_error_bg"],
+            )
+
+    def _delete():
+        try:
+            deleted, _missing = auth_setup.delete_platform_credentials(
+                "youtube_music"
+            )
+            if deleted:
+                authorization_var.set("")
+                cookie_var.set("")
+                status_label.config(
+                    text=tr("login.credentials_deleted"),
+                    foreground=C["label_playlist_good_fg"],
+                )
+                if on_success:
+                    on_success("youtube_music")
+            else:
+                status_label.config(
+                    text=tr("login.no_credentials_file"),
+                    foreground=C["status_error_bg"],
+                )
+        except OSError as e:
+            status_label.config(
+                text=tr("login.delete_failed", error=e),
+                foreground=C["status_error_bg"],
+            )
+
+    btn_delete = tk.Button(
+        btn_frame,
+        text=tr("common.delete"),
+        cursor="hand2",
+        **button_close_btn,
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        command=_delete,
+    )
+    btn_delete.pack(side="left")
+
+    btn_browser = tk.Button(
+        btn_frame,
+        text=tr("login.browser_flow"),
+        cursor="hand2",
+        **button_main_btn,
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        command=_browser_flow,
+    )
+    btn_browser.pack(side="left", padx=5)
+
+    btn_save = tk.Button(
+        btn_frame,
+        text=tr("login.verify_save"),
+        cursor="hand2",
+        **button_save_btn,
+        font=ui_font(10),
+        highlightthickness=0,
+        relief="raised",
+        command=_verify_and_save,
+    )
+    btn_save.pack(side="right")
+
+    def _set_busy(busy: bool) -> None:
+        """Disable every action while the verify round trip is in flight -
+        Verify&Save must never run concurrently with Delete or the launch
+        of a second browser flow on the same dialog."""
+        state = "disabled" if busy else "normal"
+        cursor = "arrow" if busy else "hand2"
+        btn_save.config(state=state, cursor=cursor)
+        btn_delete.config(state=state, cursor=cursor)
+        btn_browser.config(state=state, cursor=cursor)
+
+    center_window(win)
 
 
 def _poll_for_browser_json(parent, on_success, attempts: int = 0) -> None:
