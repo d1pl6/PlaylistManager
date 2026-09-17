@@ -1,19 +1,11 @@
 requirements.txt
 *.pyc
 opencode.jsonc
-0.3.0.md
 
-auth/
 __pycache__/
-log/
-db/
-auth/
-cfg/
 .vscode/
-.history/*
 .cortexkit/
 .agents
-0.3.0/
 integrations/*
 !integrations/__init__.py
 .pytest_cache/
