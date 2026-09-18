@@ -32,6 +32,17 @@ class IconService:
     _cache: dict[tuple[str, int], ImageTk.PhotoImage] = {}
 
     @classmethod
+    def clear(cls) -> None:
+        """Drop every cached icon (e.g. when the UI scale is re-applied).
+
+        The cache holds strong Tk references, so stale size variants from
+        a previous scale would otherwise linger for the process lifetime.
+        Called once at startup from scaling.init (no-op there: nothing
+        has requested an icon yet) and by any future live re-scale.
+        """
+        cls._cache.clear()
+
+    @classmethod
     def get(cls, path, base_px: int) -> ImageTk.PhotoImage:
         """Return the icon at ``base_px`` scaled by the current UI scale."""
         size = max(1, round(base_px * get_ui_scale()))

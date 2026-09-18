@@ -38,9 +38,11 @@ import io
 import json
 import logging
 import os
+import queue
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import platformdirs
@@ -74,6 +76,49 @@ SONG_THUMB_SIZE = (40, 40)
 # thread-safe for concurrent get() calls (bounded by _fetch_semaphore).
 _session = requests.Session()
 
+# Bounded daemon pool for EVERY background thumbnail/cover job.  A raw
+# ``threading.Thread`` per thumbnail lets a large library pile up hundreds
+# of blocked threads behind the 4-slot fetch semaphore - each with its own
+# stack and TLS - so showcases, warm-up, pruning and the image viewer all
+# queue onto this single fixed pool instead.  The pool is deliberately
+# created lazily on the first submit: headless/``max``-mode runs never
+# spawn its threads.
+THUMB_POOL_SIZE = 8
+
+
+class _ThumbPool:
+    """Fixed-size daemon worker pool for thumbnail jobs.
+
+    Jobs are plain zero-argument callables; worker threads are daemon so a
+    quit never waits on queued or in-flight fetches.  Concurrency of actual
+    network work is still bounded separately by the service's fetch
+    semaphore (4), so the pool size only bounds thread count, not
+    connections.
+    """
+
+    def __init__(self, max_workers: int) -> None:
+        self._jobs: "queue.Queue[Callable[[], None]]" = queue.Queue()
+        self._workers = [
+            threading.Thread(target=self._run, daemon=True, name=f"thumb-pool-{i}")
+            for i in range(max_workers)
+        ]
+        for w in self._workers:
+            w.start()
+
+    def _run(self) -> None:
+        while True:
+            fn = self._jobs.get()
+            try:
+                fn()
+            except Exception:
+                logger.debug("thumbnail pool job failed", exc_info=True)
+            finally:
+                self._jobs.task_done()
+
+    def submit(self, fn: Callable[[], None]) -> None:
+        """Queue *fn* for execution on the pool."""
+        self._jobs.put(fn)
+
 
 def _normalize_url(thumb_url: str) -> str | None:
     """Upgrade http->https and reject anything that isn't https."""
@@ -99,13 +144,43 @@ class ThumbnailService:
     # parallel connections on every dialog open.
     _fetch_semaphore = threading.BoundedSemaphore(4)
 
+    # Lazily-created shared worker pool (see _ThumbPool).  Created on the
+    # first submit so thumbnails-less runs never spawn its threads.
+    _pool: _ThumbPool | None = None
+    _pool_lock = threading.Lock()
+
+    @staticmethod
+    def submit(fn: Callable[[], None]) -> None:
+        """Run *fn* on the shared bounded thumbnail pool.
+
+        Replaces the per-job ``threading.Thread(target=fn, daemon=True)``
+        pattern - a large library would otherwise hold hundreds of blocked
+        threads (stack + TLS each) behind the fetch semaphore.
+        """
+        with ThumbnailService._pool_lock:
+            if ThumbnailService._pool is None:
+                ThumbnailService._pool = _ThumbPool(THUMB_POOL_SIZE)
+        ThumbnailService._pool.submit(fn)
+
     _cache_lock = threading.Lock()
     _cache: dict[tuple[str, tuple[int, int] | None], tuple[float, Image.Image]] = {}
     _CACHE_TTL_SECONDS = 600
+    # Sized entries (covers / song thumbs, 40-64 px) share one budget;
+    # full-res (url, None) images are multi-MB and get their own small
+    # budget so a few image-viewer opens cannot crowd out every cover.
     _CACHE_MAX_ENTRIES = 256
+    _CACHE_MAX_FULL = 8
 
     # Serializes dedupe index read-modify-write (concurrent song renders).
     _dedupe_lock = threading.Lock()
+
+    # In-memory dedupe index + the file signature it was parsed from.
+    # _save_dedupe_index refreshes both; any external change to the file
+    # changes the signature and forces a re-read.  Only ever touched
+    # while holding _dedupe_lock - the cached list object is shared with
+    # callers, so it must not be mutated outside the lock.
+    _dedupe_index_cache: list | None = None
+    _dedupe_index_sig: tuple[int, int] | None = None
 
     # ------------------------------------------------------------------
     # Mode
@@ -133,13 +208,18 @@ class ThumbnailService:
 
     @staticmethod
     def _cache_get(key) -> Image.Image | None:
+        # The cached object is handed out directly (no defensive copy):
+        # no caller mutates a fetch_* result - they all convert straight
+        # to a Tk PhotoImage, and _open_image_window resizes only its own
+        # img.copy().  The store-side copy in _cache_put keeps the cache
+        # entry safe from whatever the caller does with its own object.
         with ThumbnailService._cache_lock:
             hit = ThumbnailService._cache.get(key)
             if hit is None:
                 return None
             ts, cached = hit
             if time.monotonic() - ts < ThumbnailService._CACHE_TTL_SECONDS:
-                return cached.copy()
+                return cached
             del ThumbnailService._cache[key]
             return None
 
@@ -157,10 +237,20 @@ class ThumbnailService:
             ]
             for k in expired:
                 del ThumbnailService._cache[k]
-            if len(ThumbnailService._cache) >= ThumbnailService._CACHE_MAX_ENTRIES:
+            # Evict per kind: full-res entries compete only with each
+            # other (_CACHE_MAX_FULL), never with the smaller covers.
+            full = key[1] is None
+            cap = (
+                ThumbnailService._CACHE_MAX_FULL
+                if full
+                else ThumbnailService._CACHE_MAX_ENTRIES
+            )
+            same_kind = [
+                k for k in ThumbnailService._cache if (k[1] is None) == full
+            ]
+            if len(same_kind) >= cap:
                 oldest = min(
-                    ThumbnailService._cache,
-                    key=lambda k: ThumbnailService._cache[k][0],
+                    same_kind, key=lambda k: ThumbnailService._cache[k][0]
                 )
                 del ThumbnailService._cache[oldest]
             ThumbnailService._cache[key] = (now, img.copy())
@@ -225,15 +315,43 @@ class ThumbnailService:
 
     @staticmethod
     def _load_dedupe_index() -> list:
+        """Dedupe index rows, cached until songs/index.json changes.
+
+        Caller holds ``_dedupe_lock`` (the cached list object is shared
+        with mutators such as ``_dedupe_store``).  The signature check
+        keeps the cache correct across external file edits and tests
+        that rewrite the file.
+        """
+        sig = None
         try:
-            with open(_DEDUPE_INDEX, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, list) else []
-        except (OSError, ValueError):
-            return []
+            st = _DEDUPE_INDEX.stat()
+            sig = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            pass
+        if (
+            ThumbnailService._dedupe_index_cache is not None
+            and sig == ThumbnailService._dedupe_index_sig
+        ):
+            return ThumbnailService._dedupe_index_cache
+        rows: list = []
+        if sig is not None:
+            try:
+                with open(_DEDUPE_INDEX, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    rows = data
+            except (OSError, ValueError):
+                rows = []
+        ThumbnailService._dedupe_index_cache = rows
+        ThumbnailService._dedupe_index_sig = sig
+        return rows
 
     @staticmethod
     def _save_dedupe_index(rows: list) -> None:
+        """Persist the dedupe index and refresh the in-memory copy.
+
+        Caller holds ``_dedupe_lock``.
+        """
         try:
             _SONG_DIR.mkdir(parents=True, exist_ok=True)
             tmp = _DEDUPE_INDEX.with_suffix(".json.tmp")
@@ -242,6 +360,12 @@ class ThumbnailService:
             os.replace(tmp, _DEDUPE_INDEX)
         except OSError as e:
             logger.debug("Failed to write dedupe index: %s", e)
+        ThumbnailService._dedupe_index_cache = rows
+        try:
+            st = _DEDUPE_INDEX.stat()
+            ThumbnailService._dedupe_index_sig = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            ThumbnailService._dedupe_index_sig = None
 
     @staticmethod
     def _find_dedupe_match(song: dict) -> dict | None:
@@ -255,20 +379,21 @@ class ThumbnailService:
         """
         from services.duplicate_check import find_similar, read_settings
 
-        rows = ThumbnailService._load_dedupe_index()
-        if not rows:
-            return None
         enabled, threshold, tolerance = read_settings()
         if not enabled:
             threshold = 1.0  # exact normalized title + artist gate
-        match = find_similar(
-            rows,
-            song.get("title"),
-            song.get("artists"),
-            song.get("duration"),
-            threshold=threshold,
-            duration_tolerance=tolerance,
-        )
+        with ThumbnailService._dedupe_lock:
+            rows = ThumbnailService._load_dedupe_index()
+            if not rows:
+                return None
+            match = find_similar(
+                rows,
+                song.get("title"),
+                song.get("artists"),
+                song.get("duration"),
+                threshold=threshold,
+                duration_tolerance=tolerance,
+            )
         return match
 
     # ------------------------------------------------------------------
@@ -563,7 +688,8 @@ class ThumbnailService:
         """Prefetch every song thumb of a playlist to disk.
 
         Only acts in ``download`` mode (the complete-offline-library
-        option).  Runs in a daemon thread; failures are logged per song.
+        option).  Runs on the bounded thumbnail pool; failures are
+        logged per song.
         """
         if ThumbnailService._mode() != "download":
             return
@@ -581,7 +707,7 @@ class ThumbnailService:
                     "Song thumbnail warm-up failed for '%s': %s", playlist_name, e
                 )
 
-        threading.Thread(target=work, daemon=True).start()
+        ThumbnailService.submit(work)
 
     @staticmethod
     def prefetch_song_thumbs(songs: list[dict]) -> None:
@@ -633,6 +759,8 @@ class ThumbnailService:
     def clear_disk_cache() -> None:
         """Wipe the on-disk thumbnail cache entirely."""
         with ThumbnailService._dedupe_lock:
+            ThumbnailService._dedupe_index_cache = None
+            ThumbnailService._dedupe_index_sig = None
             for d in (_PLAYLIST_DIR, _SONG_DIR, _FULL_DIR):
                 try:
                     if d.exists():

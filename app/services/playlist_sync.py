@@ -7,6 +7,7 @@ provide thin callbacks for status updates.
 
 import logging
 import threading
+import time
 from typing import Callable
 
 from services.database import DatabaseManager
@@ -20,6 +21,15 @@ logger = logging.getLogger(__name__)
 # giving up and reporting an error (the add path can sit in a URL-receiver
 # capture for up to URL_WAIT_TIMEOUT, plus the platform API round trip).
 GATE_ACQUIRE_TIMEOUT = 60.0
+
+# TTL cache for the YouTube Music library listing used by
+# prefer_library_thumbnail: every reload did a full
+# get_library_playlists() network round trip just to re-pick a cover.
+# The listing changes rarely; any platform mutation flows a fresh
+# reload anyway.
+_library_listing_cache: dict[str, tuple[float, list]] = {}
+_LIBRARY_LISTING_TTL = 300.0
+_library_listing_lock = threading.Lock()
 
 # Type alias for import / reload result callbacks.
 # (playlist_name, inserted_count, status_text[, thumbnail_url])
@@ -276,7 +286,15 @@ class PlaylistSyncService:
         if platform != "youtube_music":
             return details_thumb
         try:
-            for p in integration.get_library_playlists():
+            now = time.monotonic()
+            with _library_listing_lock:
+                cached = _library_listing_cache.get(platform)
+                if cached is not None and now - cached[0] < _LIBRARY_LISTING_TTL:
+                    playlists = cached[1]
+                else:
+                    playlists = integration.get_library_playlists()
+                    _library_listing_cache[platform] = (now, playlists)
+            for p in playlists:
                 if p.get("playlistId") != playlist_id:
                     continue
                 lib_url = ThumbnailService.from_data(p)

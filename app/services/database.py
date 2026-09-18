@@ -54,6 +54,10 @@ class DatabaseManager:
     _connections_lock = threading.Lock()
     # key: (thread_id, playlist_name, platform, playlist_id) -> (thread_weakref, conn)
     _connections: dict = {}
+    # Full-registry prune at most once every N acquires (each prune is
+    # O(registry size); long-lived UI threads make most acquires hits).
+    _PRUNE_INTERVAL = 64
+    _prune_counter = 0
 
     @staticmethod
     def _get_db_directory(platform: str) -> Path:
@@ -294,7 +298,13 @@ class DatabaseManager:
         cache_key = (threading.get_ident(), playlist_name, platform, playlist_id)
         current_thread = threading.current_thread()
         with DatabaseManager._connections_lock:
-            DatabaseManager._prune_dead_connections()
+            # Throttled: a full-registry prune is O(registry size) and
+            # long-lived threads do far more hits than registry churn.
+            DatabaseManager._prune_counter = (
+                DatabaseManager._prune_counter + 1
+            ) % DatabaseManager._PRUNE_INTERVAL
+            if DatabaseManager._prune_counter == 0:
+                DatabaseManager._prune_dead_connections()
             entry = DatabaseManager._connections.get(cache_key)
             if entry is not None and entry[0]() is current_thread:
                 conn = entry[1]
@@ -341,6 +351,17 @@ class DatabaseManager:
             # index; an explicit one is redundant disk + write cost.  Drop
             # it if a pre-fix database created one.
             cursor.execute("DROP INDEX IF EXISTS idx_track_id")
+            # Expression index matching the info lookups' predicate
+            # ``LOWER(TRIM(title)) = ?`` exactly (song_manager's
+            # _normalize_title_key is constructed to equal that expression
+            # for ASCII and non-ASCII alike), so a hotkey add / duplicate
+            # check probes the index instead of scanning the whole songs
+            # table.  Single-column expression indexes need SQLite >= 3.9
+            # (2020) - fine for the Python 3.10+ requirement here.
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_songs_title_norm "
+                "ON songs (LOWER(TRIM(title)))"
+            )
             conn.commit()
             logger.debug("Initialized playlist database schema")
         except sqlite3.Error as e:

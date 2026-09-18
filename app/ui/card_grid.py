@@ -475,10 +475,9 @@ class CardGridManager:
                 main_stats_frame.grid_remove()
             if not self._show_log:
                 main_log_frame.grid_remove()
-            self._update_card_height(i, layout=True)
+            self._update_card_height(i, layout=False, defer=True)
 
-        self._sf.update_scrollregion()
-        self._auto_resize_cb()
+        self.finalize_layout()
         self._sync_empty_state()
 
     # ------------------------------------------------------------------
@@ -654,7 +653,18 @@ class CardGridManager:
     # Card height
     # ------------------------------------------------------------------
 
-    def _update_card_height(self, frame_idx: int, *, layout: bool = False) -> None:
+    def _update_card_height(
+        self, frame_idx: int, *, layout: bool = False, defer: bool = False
+    ) -> None:
+        """Recalculate and apply one card's fixed height.
+
+        ``layout=True`` also flushes pending geometry (``update_idletasks``)
+        first so ``winfo_reqheight`` of freshly gridded children is current
+        - needed after a showcase/stats/log row was (re)built on a single
+        card.  ``defer=True`` skips the per-card scrollregion/auto-resize
+        bookkeeping for callers that batch many cards and flush once via
+        :meth:`finalize_layout`.
+        """
         try:
             card = self.cards[frame_idx]
         except IndexError:
@@ -682,10 +692,33 @@ class CardGridManager:
         if search_results_h is not None:
             height += search_results_h
         card.frame.config(height=max(px(CARD_H_BASE) - px(LOG_ROW_H_BASE), height))
+        if defer:
+            return
+
         self._sf.update_scrollregion()
 
         if self._showcase_count > 0:
             self._auto_resize_cb()
+
+    def finalize_layout(self) -> None:
+        """Flush pending card geometry once after a batch of card updates.
+
+        Populate/rebuild paths build the cards and their showcase sections
+        with per-card flushes deferred (``_update_card_height(..., defer=True)``).
+        One ``update_idletasks()`` here maps every freshly gridded showcase
+        frame so ``winfo_reqheight``/``winfo_ismapped`` are authoritative,
+        THEN all card heights are recomputed and the scrollregion + window
+        re-fit run once - instead of one full-tree flush + scrollregion +
+        re-fit PER CARD.
+        """
+        try:
+            self.root.update_idletasks()
+        except Exception:
+            logger.debug("update_idletasks failed (teardown?)", exc_info=True)
+        for frame_idx in range(len(self.cards)):
+            self._update_card_height(frame_idx, defer=True)
+        self._sf.update_scrollregion()
+        self._auto_resize_cb()
 
     # ------------------------------------------------------------------
     # Log / stats visibility

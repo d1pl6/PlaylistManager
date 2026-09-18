@@ -151,6 +151,17 @@ def init(root=None) -> None:
         _scale, _font_mult, _font_family, detected,
     )
 
+    # Icons are cached per (path, rounded px) - if this ever runs again
+    # (future live re-scale), the old size variants must not survive.
+    # Lazy import: utils.icons imports scaling, so a module-level import
+    # here would be circular.
+    try:
+        from utils.icons import IconService
+
+        IconService.clear()
+    except Exception:
+        logger.debug("IconService cache flush skipped", exc_info=True)
+
 
 def get_ui_scale() -> float:
     """The effective scale factor (1.0 before :func:`init` / headless)."""

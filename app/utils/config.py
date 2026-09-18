@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import tempfile
+import threading
 from configparser import ConfigParser, Error as ConfigParseError
 from pathlib import Path
 
@@ -462,6 +463,80 @@ def rename_theme(old: str, new: str) -> None:
     os.replace(str(old_path), str(new_path))
 
 
+# ---------------------------------------------------------------------------
+# Settings read cache
+# ---------------------------------------------------------------------------
+#
+# ``get_setting`` / ``get_setting_value`` are hot-path reads (per thumbnail
+# fetch, per showcase row, per add-flow).  Every call used to re-read and
+# re-parse settings.ini twice (~0.8 ms); the parsed config is now cached and
+# only re-read when the file changes on disk (mtime + size signature).  The
+# ``set_*`` writers invalidate the cache explicitly, so a Settings-dialog
+# change is visible on the next read even if the file mtime were to collide.
+
+_settings_lock = threading.Lock()
+_settings_cache: ConfigParser | None = None
+_settings_cache_sig: tuple | None = None  # (path, mtime_ns, size)
+
+
+def _invalidate_settings_cache() -> None:
+    global _settings_cache, _settings_cache_sig
+    _settings_cache = None
+    _settings_cache_sig = None
+
+
+def _cached_config() -> ConfigParser:
+    """Parsed settings.ini, cached until the file changes on disk.
+
+    Replicates ``ensure_settings_file``'s create + backfill-defaults logic,
+    but runs it once per file signature instead of on every getter call.
+    Safe to call from any thread (the lock only serializes cache fills).
+    """
+    global _settings_cache, _settings_cache_sig
+    try:
+        st = SETTINGS_PATH.stat()
+        sig = (str(SETTINGS_PATH), st.st_mtime_ns, st.st_size)
+    except OSError:
+        sig = None
+    if _settings_cache is not None and sig == _settings_cache_sig:
+        return _settings_cache
+
+    with _settings_lock:
+        # Re-check under the lock: another thread may have filled the cache
+        # while we waited.
+        try:
+            st = SETTINGS_PATH.stat()
+            sig = (str(SETTINGS_PATH), st.st_mtime_ns, st.st_size)
+        except OSError:
+            sig = None
+        if _settings_cache is not None and sig == _settings_cache_sig:
+            return _settings_cache
+
+        cfg = ConfigParser()
+        if sig is not None:
+            cfg = _safe_read_config(cfg, SETTINGS_PATH)
+        changed = False
+        for section, values in DEFAULT_SETTINGS.items():
+            if section not in cfg:
+                cfg[section] = values
+                changed = True
+            else:
+                for key, value in values.items():
+                    if key not in cfg[section]:
+                        cfg[section][key] = value
+                        changed = True
+        if sig is None or changed:
+            _write_ini_file(SETTINGS_PATH, cfg)
+            try:
+                st = SETTINGS_PATH.stat()
+                sig = (str(SETTINGS_PATH), st.st_mtime_ns, st.st_size)
+            except OSError:
+                sig = None
+        _settings_cache = cfg
+        _settings_cache_sig = sig
+        return cfg
+
+
 def ensure_settings_file() -> None:
     cfg = ConfigParser()
     if SETTINGS_PATH.exists():
@@ -478,12 +553,14 @@ def ensure_settings_file() -> None:
                     changed = True
     if not SETTINGS_PATH.exists() or changed:
         _write_ini_file(SETTINGS_PATH, cfg)
+        # A write here changes the on-disk state; drop any cached parse so
+        # the next getter re-reads (mtime would catch it, but be explicit).
+        _invalidate_settings_cache()
 
 
 def get_setting(section: str, fallback: bool = True) -> bool:
     """Read one boolean settings section (default *fallback* on any error)."""
-    ensure_settings_file()
-    cfg = _safe_read_config(ConfigParser(), SETTINGS_PATH)
+    cfg = _cached_config()
     try:
         return cfg.getboolean(section, "is_true", fallback=fallback)
     except Exception:
@@ -503,6 +580,7 @@ def set_setting(section: str, enabled: bool) -> None:
         cfg[section] = {}
     cfg[section]["is_true"] = "yes" if enabled else "no"
     _write_ini_file(SETTINGS_PATH, cfg)
+    _invalidate_settings_cache()
 
 
 def get_setting_value(section: str, option: str, fallback: str = "") -> str:
@@ -511,8 +589,7 @@ def get_setting_value(section: str, option: str, fallback: str = "") -> str:
     Like :func:`get_setting` but for value options (e.g. ``ui_scale``),
     which have no ``is_true`` key.  Returns *fallback* on any error.
     """
-    ensure_settings_file()
-    cfg = _safe_read_config(ConfigParser(), SETTINGS_PATH)
+    cfg = _cached_config()
     try:
         return cfg.get(section, option, fallback=fallback)
     except Exception:
@@ -531,3 +608,4 @@ def set_setting_value(section: str, option: str, value: str) -> None:
         cfg[section] = {}
     cfg[section][option] = value
     _write_ini_file(SETTINGS_PATH, cfg)
+    _invalidate_settings_cache()

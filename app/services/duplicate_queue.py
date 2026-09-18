@@ -24,10 +24,14 @@ Two kinds of state live here:
 
 The file sits under the gitignored ``db/`` and is created on demand,
 mirroring :mod:`services.playlist_store`'s write discipline (module-level
-lock, atomic temp-file + rename, defensive parent mkdir).  Unlike
-playlist_store there is no in-memory cache - the file is tiny (<50 pending
-records), so every operation re-reads it under the lock, which removes
-cache-invalidation bugs by construction.
+lock, atomic temp-file + rename, defensive parent mkdir).
+
+Reads are served from an in-memory copy of the store keyed by the file's
+``(mtime_ns, size)`` signature: a write through this module refreshes the
+copy directly, and an *external* change (the CLI shares this file, and
+tests may rewrite it) changes the signature so the next read re-parses.
+The lock still serialises every read/write, and ``_write`` failures still
+RAISE (see below).
 
 Write failures RAISE (via :mod:`utils.atomic_json`): mutating callers
 keep a process-wide guarantee that a failed persist is never mistaken
@@ -56,6 +60,12 @@ extra_json = _profile_store.db_dir() / "extra.json"
 # Serialise all read/write access across flow threads and the UI thread.
 _lock = threading.RLock()
 
+# In-memory store + the file signature it was parsed from.  Kept in sync
+# by _write(); any external edit changes the signature and forces a
+# re-read on the next access (see _load).
+_store_cache: dict | None = None
+_store_cache_sig: tuple[int, int] | None = None
+
 # Oldest-evicted once exceeded - a backlog must not grow unbounded when a
 # user ignores the activity window for weeks.
 MAX_PENDING = 50
@@ -73,17 +83,29 @@ def _now_iso() -> str:
 def _load() -> dict:
     """Read the store file (caller holds *_lock*).
 
-    A missing or corrupt file self-heals to an empty store - this is
+    The parsed store is cached until the file's ``(mtime_ns, size)``
+    signature changes, so the duplicate scan's per-pair ``get_song``
+    calls (and every other read) cost a stat, not a JSON parse.  A
+    missing or corrupt file self-heals to an empty store - this is
     song memory, never worth crashing the app over.
     """
+    global _store_cache, _store_cache_sig
+    sig = None
+    try:
+        st = extra_json.stat()
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        pass
+    if _store_cache is not None and sig == _store_cache_sig:
+        return _store_cache
     data = {
         "version": _SCHEMA_VERSION,
         "pending": [],
         "songs": {},
         "errors": [],
     }
-    try:
-        if extra_json.exists() and extra_json.stat().st_size > 0:
+    if sig is not None:
+        try:
             with open(extra_json, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
             if isinstance(loaded, dict):
@@ -94,8 +116,10 @@ def _load() -> dict:
                     data["songs"] = loaded["songs"]
                 if isinstance(loaded.get("errors"), list):
                     data["errors"] = loaded["errors"]
-    except Exception as e:
-        logger.error("Failed to read %s (%s) - starting from an empty store", extra_json, e)
+        except Exception as e:
+            logger.error("Failed to read %s (%s) - starting from an empty store", extra_json, e)
+    _store_cache = data
+    _store_cache_sig = sig
     return data
 
 
@@ -104,8 +128,25 @@ def _write(data: dict) -> None:
 
     Delegates to :func:`utils.atomic_json.atomic_json_write`; failures
     raise - a persist that fails must never look like it succeeded.
+    The in-memory copy is refreshed in place so a following ``_load``
+    does not re-read the file it just wrote.
     """
-    atomic_json_write(extra_json, data)
+    global _store_cache, _store_cache_sig
+    try:
+        atomic_json_write(extra_json, data)
+    except Exception:
+        # Callers mutate the dict *before* persisting; a failed write
+        # must not leave that mutation visible through the cache (the
+        # "failed persist is never mistaken for success" guarantee).
+        _store_cache = None
+        _store_cache_sig = None
+        raise
+    _store_cache = data
+    try:
+        st = extra_json.stat()
+        _store_cache_sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        _store_cache_sig = None
 
 
 def make_pair_key(platform: str, playlist_id: str, track_a: str, track_b: str) -> str:

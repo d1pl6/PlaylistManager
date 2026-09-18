@@ -97,7 +97,7 @@ class ShowcaseManager:
                 except Exception:
                     logger.debug("Window closed during cover download", exc_info=True)
 
-        threading.Thread(target=fetch, daemon=True).start()
+        ThumbnailService.submit(fetch)
         # Attach metadata for double-click-to-open-image.
         try:
             cover_label._orig_thumb_url = thumb_url
@@ -122,6 +122,11 @@ class ShowcaseManager:
         self.frame_img_refs[cover_label] = [tk_img]
 
     def _prune_frame_imgs(self, container) -> None:
+        # Drop this container's song-URL bookkeeping alongside its image
+        # references (a card close or rebuild).  The cache-mode prune's
+        # _active_song_urls() also cleans dead frames lazily; this makes
+        # room eagerly.
+        self._card_song_urls.pop(container, None)
         for child in container.winfo_children():
             if isinstance(child, tk.Label):
                 refs = self.frame_img_refs.pop(child, None)
@@ -153,7 +158,7 @@ class ShowcaseManager:
                         "Window closed during song thumb download", exc_info=True
                     )
 
-        threading.Thread(target=fetch, daemon=True).start()
+        ThumbnailService.submit(fetch)
         # Attach metadata for double-click-to-open-image.
         try:
             thumb_label._orig_thumb_url = thumb_url
@@ -164,8 +169,21 @@ class ShowcaseManager:
             pass
 
     def _refresh_showcase(
-        self, frame_idx: int, playlist_name: str, platform: str
+        self,
+        frame_idx: int,
+        playlist_name: str,
+        platform: str,
+        *,
+        layout: bool = True,
     ) -> None:
+        """Rebuild one card's showcase section.
+
+        ``layout=True`` (single-card paths: song added, settings change)
+        finalises the card's height immediately.  Callers that refresh
+        every card in a loop pass ``layout=False`` and flush once via
+        ``CardGridManager.finalize_layout()`` to avoid one full-tree
+        ``update_idletasks()`` per card.
+        """
         try:
             card = self._card_grid.cards[frame_idx]
         except IndexError:
@@ -204,7 +222,11 @@ class ShowcaseManager:
         }
         self._maybe_prune_song_cache()
 
-        self._card_grid._update_card_height(frame_idx, layout=True)
+        # defer keeps the batch path (layout=False from a populate loop)
+        # from re-running scrollregion/auto-resize per card.
+        self._card_grid._update_card_height(
+            frame_idx, layout=layout, defer=not layout
+        )
 
     def _active_song_urls(self) -> set:
         """Union of song thumb URLs currently rendered across all cards."""
@@ -239,10 +261,15 @@ class ShowcaseManager:
             except Exception as e:
                 logger.debug("Thumbnail cache prune failed: %s", e)
 
-        threading.Thread(target=work, daemon=True).start()
+        ThumbnailService.submit(work)
 
     def _refresh_stats(
-        self, frame_idx: int, playlist_name: str, platform: str
+        self,
+        frame_idx: int,
+        playlist_name: str,
+        platform: str,
+        *,
+        store_lookup: dict[tuple[str, str, str], dict] | None = None,
     ) -> None:
         try:
             card = self._card_grid.cards[frame_idx]
@@ -251,17 +278,20 @@ class ShowcaseManager:
 
         playlist_id = card.playlist_id
 
-        sm = self._song_manager
-        song_count = sm.get_song_count(
-            playlist_name, platform=platform, playlist_id=playlist_id
-        )
-        total_seconds = sm.get_total_duration(
+        song_count, total_seconds = self._song_manager.get_song_stats(
             playlist_name, platform=platform, playlist_id=playlist_id
         )
 
-        store_entry = PlaylistStore.find_playlist(
-            playlist_name, platform=platform, playlist_id=playlist_id
-        )
+        if store_lookup is not None:
+            store_entry = store_lookup.get((playlist_name, platform, playlist_id))
+            if store_entry is None and playlist_id:
+                # find_playlist parity: fall back to the name-keyed entry
+                # when the id-keyed one is gone.
+                store_entry = store_lookup.get((playlist_name, platform, ""))
+        else:
+            store_entry = PlaylistStore.find_playlist(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            )
         follower_count = (store_entry or {}).get("followerCount", 0) if store_entry else 0
 
         if card.stats_songs is not None:
@@ -275,6 +305,37 @@ class ShowcaseManager:
                 )
             else:
                 card.stats_followers.config(text="")
+
+    def refresh_stats_batch(
+        self, entries: list[tuple[int, str, str]]
+    ) -> None:
+        """Refresh several cards' stats rows in one pass.
+
+        Resolves the store registry once (its TTL-cached load) into an
+        O(1) lookup instead of scanning it per card, and each card's
+        aggregates are a single query (``get_song_stats``) instead of two.
+        Pure label-text updates - no geometry pass - so it is safe to run
+        between batched layout updates.
+        """
+        if not entries:
+            return
+        try:
+            store_list = PlaylistStore.load_playlists()
+        except Exception:
+            store_list = []
+        lookup: dict[tuple[str, str, str], dict] = {}
+        for entry in store_list:
+            key = (
+                entry.get("name", ""),
+                entry.get("platform", ""),
+                entry.get("playlist_id") or "",
+            )
+            if key not in lookup:
+                lookup[key] = entry  # first registry entry wins
+        for frame_idx, name, platform in entries:
+            self._refresh_stats(
+                frame_idx, name, platform, store_lookup=lookup
+            )
 
     @staticmethod
     def _format_duration(seconds: int) -> str:
@@ -524,7 +585,7 @@ class ShowcaseManager:
             except Exception:
                 pass
 
-        threading.Thread(target=worker, daemon=True).start()
+        ThumbnailService.submit(worker)
 
     def _on_remove_song(
         self, main_frame: tk.Frame, song_id: int, track_id: str, title: str = "", artists: list = None

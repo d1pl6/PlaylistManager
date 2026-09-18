@@ -1208,6 +1208,7 @@ on_like_button_change=self._apply_like_button_visibility,
         )
         if visible:
             self.card_grid.create_main_frame(len(visible))
+            stats_entries: list[tuple[int, str, str]] = []
             for i, (playlist, platform) in enumerate(visible):
                 if i < len(self.card_grid.cards):
                     card = self.card_grid.cards[i]
@@ -1235,8 +1236,8 @@ on_like_button_change=self._apply_like_button_visibility,
                             self._clear_displaced_keybind(displaced)
 
                     self.showcase.update_log_labels_from_db(i, name, platform)
-                    self.showcase.refresh(i, name, platform)
-                    self.showcase.refresh_stats(i, name, platform)
+                    self.showcase.refresh(i, name, platform, layout=False)
+                    stats_entries.append((i, name, platform))
 
                     thumb_url = playlist.get("thumbnail_url", "")
                     if thumb_url:
@@ -1245,6 +1246,13 @@ on_like_button_change=self._apply_like_button_visibility,
                     self.card_grid.set_card_pin_state(
                         i, bool(playlist.get("pinned", False))
                     )
+
+            # One geometry flush after the whole batch of card height
+            # updates (the per-card layout=True flushes used to run a
+            # full-tree update_idletasks per card during populate), then
+            # the stats rows in a single pass (registry resolved once).
+            self.showcase.refresh_stats_batch(stats_entries)
+            self.card_grid.finalize_layout()
 
         self.card_grid._sync_empty_state()
 
@@ -1529,14 +1537,20 @@ on_like_button_change=self._apply_like_button_visibility,
         except (ValueError, TypeError):
             return
         self.card_grid._showcase_count = self._showcase_count
+        stats_entries: list[tuple[int, str, str]] = []
         for frame_idx in range(len(self.card_grid.cards)):
             try:
                 playlist_name = self.card_grid.cards[frame_idx].name_label.cget("text")
                 platform = self.card_grid.cards[frame_idx].platform
             except (IndexError, tk.TclError):
                 continue
-            self.showcase.refresh(frame_idx, playlist_name, platform)
-            self.showcase.refresh_stats(frame_idx, playlist_name, platform)
+            self.showcase.refresh(frame_idx, playlist_name, platform, layout=False)
+            stats_entries.append((frame_idx, playlist_name, platform))
+        # One geometry flush for the whole batch instead of one
+        # update_idletasks + window re-fit per card, and the stats rows
+        # in a single pass (registry resolved once).
+        self.showcase.refresh_stats_batch(stats_entries)
+        self.card_grid.finalize_layout()
         # The window re-fits only when auto-resize is on (see _fit_window);
         # otherwise the scrollable cards area handles the overflow.
         self._fit_window()
@@ -2069,6 +2083,7 @@ on_like_button_change=self._apply_like_button_visibility,
     def cleanup(self) -> None:
         self.search.dismiss()
         self.showcase.frame_img_refs.clear()
+        self.showcase._card_song_urls.clear()
         self.card_grid.cleanup()
         # Cancel pending connectivity / service-health / activity-poll timers.
         for aid in (

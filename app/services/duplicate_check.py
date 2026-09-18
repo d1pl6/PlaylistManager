@@ -143,12 +143,28 @@ def _pair_ratio_precomputed(
     if not _artists_known((set_a, set_b)):
         return None
 
-    ratio = difflib.SequenceMatcher(None, nt_a, nt_b).ratio()
-
     try:
         int_a, int_b = int(dur_a or 0), int(dur_b or 0)
     except (TypeError, ValueError):
         int_a = int_b = 0
+
+    # Hard duration rejection BEFORE the expensive title comparison: a gap
+    # beyond tolerance + drift band can never match, whatever the titles
+    # say - the O(1) check skips the SequenceMatcher entirely for these
+    # pairs (the bulk of any scanned playlist).
+    if int_a and int_b and abs(int_a - int_b) > duration_tolerance + DRIFT_MAX_GAP:
+        return None
+
+    # SequenceMatcher.ratio() is O(len^2); real_quick_ratio() (assumes the
+    # shorter string fully matches) and quick_ratio() (character-bag upper
+    # bound) are O(len) upper bounds on it, so pairs that cannot reach the
+    # threshold are rejected without the matching pass.  These are the
+    # documented filters difflib.get_close_matches itself applies.
+    sm = difflib.SequenceMatcher(None, nt_a, nt_b)
+    if sm.real_quick_ratio() < threshold or sm.quick_ratio() < threshold:
+        return None
+    ratio = sm.ratio()
+
     if not int_a or not int_b:
         # Unknown length on either side: the title bar alone decides -
         # a missing duration should weaken the evidence, not disable

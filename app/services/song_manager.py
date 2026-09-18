@@ -3,8 +3,10 @@ from __future__ import annotations
 import sqlite3
 import json
 import logging
+import os
 import re
 import threading
+from collections import OrderedDict
 from typing import Callable
 # Platform ids are declared by the plugin manifests (integrations/*/
 # plugin.json); these local constants mirror the built-in ids so this
@@ -16,6 +18,51 @@ PLATFORM_DEEZER = "deezer"
 from services.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
+
+# ------------------------------------------------------------------
+# Non-ASCII search row cache
+# ------------------------------------------------------------------
+# The non-ASCII search path (search_songs) cannot use SQL LIKE (it only
+# folds ASCII), so it loads the full songs table and folds in Python.
+# Per keystroke that re-read + re-folded every row of every card; the
+# cache below keeps per-playlist pre-folded rows until the database file
+# changes.  The signature covers the main file AND its -wal sidecar
+# (WAL writes land there and can leave the main file untouched), and the
+# entry/row caps keep the cache bounded for libraries with many cards.
+_SEARCH_CACHE_MAX_ROWS = 10_000
+_SEARCH_CACHE_MAX_ENTRIES = 12
+
+# (playlist_name, platform, playlist_id) -> (sig, [(folded_title, folded_artists, row)])
+# OrderedDict: move_to_end on access gives least-recently-used eviction.
+_search_rows_cache: OrderedDict[
+    tuple[str, str, str], tuple[tuple[int, int, int, int], list[tuple[str, str, object]]]
+] = OrderedDict()
+_search_rows_lock = threading.Lock()
+
+
+def _db_file_signature(db_path) -> tuple[int, int, int, int]:
+    """(mtime_ns, size) of the main db and its -wal sidecar (0s when missing).
+
+    The sidecar matters because WAL-mode writes land in the -wal file and
+    can leave the main database file untouched - a signature over only
+    the main file would miss those writes and keep the search rows stale.
+    """
+    sig: list[int] = []
+    for path in (db_path, str(db_path) + "-wal"):
+        try:
+            st = os.stat(path)
+            sig.extend((st.st_mtime_ns, st.st_size))
+        except OSError:
+            sig.extend((0, 0))
+    return (sig[0], sig[1], sig[2], sig[3])
+
+
+def _casefold_artists(artists_json: str) -> str:
+    """Casefolded join of a stored artists JSON array - the search matcher."""
+    try:
+        return " ".join(json.loads(artists_json)).casefold()
+    except (ValueError, TypeError):
+        return ""
 
 # ------------------------------------------------------------------
 # Duration parsing
@@ -882,16 +929,40 @@ class SongManager:
             Number of songs
         """
         try:
-            with self.db_manager.get_connection(
+            count, _ = self.get_song_stats(
                 playlist_name, platform=platform, playlist_id=playlist_id
-            ) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM songs")
-                return cursor.fetchone()[0]
+            )
+            return count
 
         except sqlite3.Error as e:
             logger.error("Error getting song count from %s: %s", playlist_name, e)
             return 0
+
+    def get_song_stats(
+        self,
+        playlist_name: str,
+        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        playlist_id: str = "",
+    ) -> tuple[int, int]:
+        """
+        Get ``(song_count, total_seconds)`` in a single query - the stats
+        row refreshes both numbers together, and one statement instead of
+        two halves the per-card SQLite work at grid populate time.
+        """
+        try:
+            with self.db_manager.get_connection(
+                playlist_name, platform=platform, playlist_id=playlist_id
+            ) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(duration), 0) FROM songs"
+                )
+                row = cursor.fetchone()
+                return (int(row[0]), int(row[1])) if row else (0, 0)
+
+        except sqlite3.Error as e:
+            logger.error("Error getting song stats from %s: %s", playlist_name, e)
+            return (0, 0)
 
     def get_total_duration(
         self,
@@ -963,26 +1034,67 @@ class SongManager:
                     # SQLite's LIKE cannot fold non-ASCII case ("É" vs "é"),
                     # so an SQL pre-filter would silently miss accented
                     # results.  Fold in Python (str.casefold() is
-                    # Unicode-aware) over the full table; per-playlist song
-                    # tables are small enough that this stays fast.
-                    cursor.execute(
-                        "SELECT id, title, artists, thumbnail_url, duration, track_id "
-                        "FROM songs ORDER BY added_at DESC, id DESC",
-                    )
+                    # Unicode-aware) over the full table.  The pre-folded
+                    # rows below are cached per playlist (invalidated by
+                    # the database file signature, bounded by the
+                    # _SEARCH_CACHE_* caps), so typing an accented query
+                    # does not re-read and re-fold every card's table on
+                    # each keystroke.
                     folded = query.strip().casefold()
+                    key = (playlist_name, platform, playlist_id)
+                    sig = _db_file_signature(
+                        self.db_manager.get_playlist_db_path(
+                            playlist_name,
+                            platform=platform,
+                            playlist_id=playlist_id,
+                        )
+                    )
+                    cached_rows: list[tuple[str, str, object]] | None = None
+                    with _search_rows_lock:
+                        cached = _search_rows_cache.get(key)
+                        if cached is not None and cached[0] == sig:
+                            _search_rows_cache.move_to_end(key)
+                            cached_rows = cached[1]
+                    if cached_rows is None:
+                        cursor.execute(
+                            "SELECT id, title, artists, thumbnail_url, duration, track_id "
+                            "FROM songs ORDER BY added_at DESC, id DESC",
+                        )
+                        all_rows = cursor.fetchall()
+                        if len(all_rows) <= _SEARCH_CACHE_MAX_ROWS:
+                            folded_rows = [
+                                (row[1].casefold(), _casefold_artists(row[2]), row)
+                                for row in all_rows
+                            ]
+                            with _search_rows_lock:
+                                _search_rows_cache[key] = (sig, folded_rows)
+                                _search_rows_cache.move_to_end(key)
+                                while (
+                                    len(_search_rows_cache) > _SEARCH_CACHE_MAX_ENTRIES
+                                ):
+                                    _search_rows_cache.popitem(last=False)
+                            cached_rows = folded_rows
+
                     rows = []
-                    for row in cursor.fetchall():
-                        if folded in row[1].casefold():
-                            rows.append(row)
-                            continue
-                        try:
-                            joined = " ".join(json.loads(row[2])).casefold()
-                        except (ValueError, TypeError):
-                            joined = ""
-                        if folded in joined:
-                            rows.append(row)
-                        if len(rows) >= limit:
-                            break
+                    if cached_rows is not None:
+                        for folded_title, folded_artists_j, row in cached_rows:
+                            if folded in folded_title:
+                                rows.append(row)
+                                continue
+                            if folded in folded_artists_j:
+                                rows.append(row)
+                            if len(rows) >= limit:
+                                break
+                    else:
+                        # Table too big to cache (memory guard) - old path.
+                        for row in all_rows:
+                            if folded in row[1].casefold():
+                                rows.append(row)
+                                continue
+                            if folded in _casefold_artists(row[2]):
+                                rows.append(row)
+                            if len(rows) >= limit:
+                                break
                 songs = []
                 for row in rows[:limit]:
                     songs.append({
