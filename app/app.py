@@ -379,8 +379,9 @@ class App:
 
         Args:
             force: When *False* the check honours the user's
-                ``update_check`` INI toggle; when *True* it always runs
-                (manual "Check for updates now" button).
+                ``[update_check] interval`` setting (off / launch /
+                timed); when *True* it always runs (manual "Check for
+                updates now" button).
             on_done: Optional callback ``f(available, error)`` marshalled
                 to the main thread after the check completes.  The first
                 positional arg is a bool (``True`` when an update is

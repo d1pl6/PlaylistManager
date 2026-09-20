@@ -35,8 +35,9 @@ class TestEnsureSettingsFile:
         config.ensure_settings_file()
         assert settings.exists()
         cp = _read(settings)
-        # Boolean settings are per-section with an is_true key.
-        assert cp.getboolean("update_check", "is_true", fallback=None) is True
+        # Value settings have their own keys per section.
+        assert cp.get("update_check", "interval") == "launch"
+        assert cp.get("update_check", "last_check") == "0"
         assert cp.getboolean("global_listener", "is_true", fallback=None) is True
         assert cp.getboolean("duplicate_check", "is_true", fallback=None) is False
 
@@ -77,22 +78,48 @@ class TestEnsureSettingsFile:
         # Defaults were merged in alongside the legacy section.
         assert cp.has_section("update_check")
 
-    def test_merges_missing_keys_into_existing(self, paths):
+    def test_legacy_update_check_boolean_migrated(self, paths):
         settings, _ = paths
-        settings.write_text("[update_check]\nis_true = no\n", encoding="utf-8")
+        # The pre-interval era wrote [update_check] is_true = no.
+        settings.write_text(
+            "[update_check]\nis_true = no\n", encoding="utf-8"
+        )
         config.ensure_settings_file()
         cp = _read(settings)
-        # Existing user value survives.
+        # A disabled legacy flag must not become "launch" (which would
+        # silently re-enable a check on every launch) - it maps to "off".
+        assert cp.get("update_check", "interval") == "off"
+        # Dead key preserved, defaults for the new keys added alongside.
         assert cp.getboolean("update_check", "is_true") is False
+        assert cp.get("update_check", "last_check") == "0"
         # Other default sections were added.
         assert cp.has_section("center_windows")
+
+    def test_legacy_update_check_enabled_maps_to_launch(self, paths):
+        settings, _ = paths
+        settings.write_text(
+            "[update_check]\nis_true = yes\n", encoding="utf-8"
+        )
+        config.ensure_settings_file()
+        cp = _read(settings)
+        assert cp.get("update_check", "interval") == "launch"
+
+    def test_legacy_migration_never_overwrites_existing_interval(self, paths):
+        settings, _ = paths
+        settings.write_text(
+            "[update_check]\nis_true = no\ninterval = 24h\n",
+            encoding="utf-8",
+        )
+        config.ensure_settings_file()
+        cp = _read(settings)
+        assert cp.get("update_check", "interval") == "24h"
 
     def test_corrupt_file_self_heals(self, paths):
         settings, _ = paths
         settings.write_text("[unterminated\nno_section_here", encoding="utf-8")
         config.ensure_settings_file()  # must not raise
         cp = _read(settings)
-        assert cp.getboolean("update_check", "is_true", fallback=True) is True
+        assert cp.get("update_check", "interval") == "launch"
 
 
 class TestGetSetSetting:
@@ -127,6 +154,13 @@ class TestSettingValues:
 
     def test_value_defaults_written(self, paths):
         assert config.get_setting_value("showcase", "count", "0") == "0"
+
+    def test_update_check_interval_round_trip(self, paths):
+        config.set_setting_value("update_check", "interval", "24h")
+        assert (
+            config.get_setting_value("update_check", "interval", "launch")
+            == "24h"
+        )
 
 
 class TestEnsureThemeFile:

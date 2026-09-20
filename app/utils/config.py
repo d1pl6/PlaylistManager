@@ -20,7 +20,13 @@ _profile_store.initialize()
 SETTINGS_PATH = _profile_store.cfg_dir() / "settings.ini"
 
 DEFAULT_SETTINGS = {
-    "update_check": {"is_true": "yes"},
+    # How often to check GitHub for a newer release (see utils/updater.py):
+    #   "off"    - never (the archived behavior of the old is_true=no)
+    #   "launch" - every launch (the historical default)
+    #   12h/24h/7d/14d/30d - at most once per interval; "last_check"
+    #              holds the epoch-seconds time of the last attempt and is
+    #              stamped by the updater after each run.
+    "update_check": {"interval": "launch", "last_check": "0"},
     "center_windows": {"is_true": "yes"},
     "auto_resize": {"is_true": "no"},
     # Restore the main window's last size/position on launch (saved live
@@ -98,6 +104,31 @@ DEFAULT_SETTINGS = {
 
 # Valid [thumbnails] mode values; anything else falls back to "off".
 THUMBNAIL_MODES = ("off", "download", "dedupe", "cache", "max")
+
+# [update_check] interval values (read by utils/updater.py).  "off" never
+# checks (the archived is_true=no behavior), "launch" checks on every
+# startup (the historical default), the timed values check at most once
+# per interval, spaced by the [update_check] last_check stamp.  Any other
+# value falls back to "launch".
+UPDATE_CHECK_INTERVALS = ("off", "launch", "12h", "24h", "7d", "14d", "30d")
+UPDATE_CHECK_DEFAULT_INTERVAL = "launch"
+UPDATE_CHECK_INTERVAL_LABELS = {
+    "off": "Never",
+    "launch": "On launch",
+    "12h": "Every 12 hours",
+    "24h": "Every 24 hours",
+    "7d": "Every 7 days",
+    "14d": "Every 14 days",
+    "30d": "Every 30 days",
+}
+# Real-time equivalents of the timed intervals; "off"/"launch" have none.
+UPDATE_CHECK_INTERVAL_SECONDS = {
+    "12h": 12 * 3600,
+    "24h": 24 * 3600,
+    "7d": 7 * 86400,
+    "14d": 14 * 86400,
+    "30d": 30 * 86400,
+}
 
 # Valid [grid_sort] values (see services/playlist_sort.py).  The header
 # combobox/arrow in main_window writes these live; anything else falls
@@ -239,6 +270,29 @@ def _safe_read_config(cfg: ConfigParser, path: Path) -> ConfigParser:
         )
         return ConfigParser()
     return cfg
+
+
+def _migrate_legacy_update_check(cfg: ConfigParser) -> None:
+    """One-time migration of the boolean ``[update_check] is_true`` era.
+
+    The setting used to be a boolean section (``is_true``); the merge
+    loop below would otherwise force the new ``interval`` default
+    ("launch") onto a user who had explicitly disabled checks
+    (``is_true = no``), silently re-enabling a check on every launch.
+    A disabled legacy flag therefore maps to ``interval = off``.  The
+    dead ``is_true`` key is preserved, not deleted - settings writers
+    tolerate unknown keys by design.
+    Delete in 0.6.0
+    """
+    if not cfg.has_section("update_check"):
+        return
+    section = cfg["update_check"]
+    if "is_true" in section and "interval" not in section:
+        try:
+            disabled = not cfg.getboolean("update_check", "is_true")
+        except Exception:
+            disabled = False
+        section["interval"] = "off" if disabled else "launch"
 
 
 def ensure_theme_file() -> None:
@@ -515,6 +569,7 @@ def _cached_config() -> ConfigParser:
         cfg = ConfigParser()
         if sig is not None:
             cfg = _safe_read_config(cfg, SETTINGS_PATH)
+        _migrate_legacy_update_check(cfg)
         changed = False
         for section, values in DEFAULT_SETTINGS.items():
             if section not in cfg:
@@ -541,6 +596,7 @@ def ensure_settings_file() -> None:
     cfg = ConfigParser()
     if SETTINGS_PATH.exists():
         cfg = _safe_read_config(cfg, SETTINGS_PATH)
+    _migrate_legacy_update_check(cfg)
     changed = False
     for section, values in DEFAULT_SETTINGS.items():
         if section not in cfg:

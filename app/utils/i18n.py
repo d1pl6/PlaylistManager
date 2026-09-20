@@ -87,11 +87,11 @@ DEFAULT_STRINGS: dict[str, str] = {
     # --- settings dialog (app/ui/settings_ui.py) ------------------------------
     "settings.title": "Settings",
     "settings.app_behavior": "App behavior",
-    "settings.check_updates_startup": "Check for updates on startup",
     "settings.checking": "Checking...",
     "settings.check_updates_now": "Check for updates now",
     "settings.check_failed_retry": "Check failed - try again",
     "settings.up_to_date": "Up to date!",
+    "settings.update_check_interval": "Check for updates:",
     "settings.center_windows": "Center windows after launch",
     "settings.remember_window_geometry": "Remember window size/position",
     "settings.reset_window_geometry": "Reset window size/position",

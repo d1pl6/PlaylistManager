@@ -1,17 +1,78 @@
 import logging
 import re
 import threading
+import time
 
 import requests
 
 from _version import __version__
-from utils.config import get_setting
+from utils.config import (
+    UPDATE_CHECK_DEFAULT_INTERVAL,
+    UPDATE_CHECK_INTERVALS,
+    UPDATE_CHECK_INTERVAL_SECONDS,
+    get_setting_value,
+    set_setting_value,
+)
 
 logger = logging.getLogger(__name__)
 
 GITHUB_OWNER = "d1pl6"
 GITHUB_REPO = "PlaylistManager"
 API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+
+
+def read_interval() -> str:
+    """The normalized [update_check] interval value.
+
+    One of ``UPDATE_CHECK_INTERVALS`` ("off" / "launch" / a timed value);
+    anything else in the INI falls back to the default ("launch").
+    """
+    value = get_setting_value(
+        "update_check", "interval", UPDATE_CHECK_DEFAULT_INTERVAL
+    )
+    if value not in UPDATE_CHECK_INTERVALS:
+        return UPDATE_CHECK_DEFAULT_INTERVAL
+    return value
+
+
+def interval_due(interval: str, last_check: float, now: float) -> bool:
+    """Whether a check is due given *last_check* and *now* (epoch seconds).
+
+    ``"off"`` never checks; ``"launch"`` always checks; a timed interval
+    checks once ``interval`` seconds have elapsed since the last check.  A
+    missing/zero stamp counts as due, so a fresh install checks on first
+    launch.
+    """
+    if interval == "off":
+        return False
+    if interval == "launch":
+        return True
+    seconds = UPDATE_CHECK_INTERVAL_SECONDS.get(interval)
+    if not seconds:
+        return True
+    return now - last_check >= seconds
+
+
+def _last_check() -> float:
+    """Epoch-seconds stamp of the last completed check attempt (0 = none)."""
+    raw = get_setting_value("update_check", "last_check", "0")
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _stamp_last_check() -> None:
+    """Persist the check time so the next launch can space itself out.
+
+    Best-effort: a settings-write failure must not fail the check itself.
+    """
+    try:
+        set_setting_value("update_check", "last_check", str(int(time.time())))
+    except Exception:
+        logger.debug(
+            "Failed to persist update-check timestamp", exc_info=True
+        )
 
 
 def parse_version(v: str) -> tuple:
@@ -64,18 +125,27 @@ def check(callback=None, *, force: bool = False):
 
     Args:
         callback: Optional callable(available, latest_version, download_url, body, error)
-        force: If True, bypasses the update_check setting.
+        force: If True, bypasses the [update_check] interval setting.
     """
 
     def _check():
         try:
             if not force:
-                enabled = get_setting("update_check", True)
-                if not enabled:
-                    logger.debug("Update check is disabled in settings")
+                interval = read_interval()
+                last_check = _last_check()
+                if not interval_due(interval, last_check, time.time()):
+                    logger.debug(
+                        "Update check skipped: interval %r, last check %s",
+                        interval,
+                        last_check or "never",
+                    )
                     if callback:
                         callback(False, None, None, None, None)
                     return
+            # Stamp before the network attempt: a failed check (offline,
+            # rate limit) still spaces the next one, so a flaky network
+            # cannot turn a timed interval into a per-launch hammer.
+            _stamp_last_check()
 
             resp = requests.get(API_URL, timeout=10)
 

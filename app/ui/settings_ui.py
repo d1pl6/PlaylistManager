@@ -21,6 +21,9 @@ from utils.config import (
     REMOVE_PLAYLIST_DEFAULT_MODE,
     REMOVE_PLAYLIST_MODE_LABELS,
     THUMBNAIL_MODES,
+    UPDATE_CHECK_DEFAULT_INTERVAL,
+    UPDATE_CHECK_INTERVALS,
+    UPDATE_CHECK_INTERVAL_LABELS,
     get_setting,
     get_setting_value,
     set_setting,
@@ -177,7 +180,11 @@ def show_settings_dialog(
     has_lastfm = "lastfm" in installed
     has_soundcloud = "soundcloud" in installed
 
-    update_var_value = 1 if get_setting("update_check", fallback=True) else 0
+    update_interval_value = get_setting_value(
+        "update_check", "interval", UPDATE_CHECK_DEFAULT_INTERVAL
+    )
+    if update_interval_value not in UPDATE_CHECK_INTERVALS:
+        update_interval_value = UPDATE_CHECK_DEFAULT_INTERVAL
     center_var_value = 1 if get_setting("center_windows", fallback=True) else 0
     resize_var_value = 1 if get_setting("auto_resize", fallback=False) else 0
     remember_var_value = 1 if get_setting("remember_geometry", fallback=True) else 0
@@ -197,7 +204,6 @@ def show_settings_dialog(
         columns_value = 2
     font_family_value = get_setting_value("font", "family", "")
 
-    update_var = tk.IntVar(value=update_var_value)
     center_var = tk.IntVar(value=center_var_value)
     resize_var = tk.IntVar(value=resize_var_value)
     remember_var = tk.IntVar(value=remember_var_value)
@@ -209,16 +215,45 @@ def show_settings_dialog(
     app_section.pack(fill="both", padx=8, pady=(0, 8))
     _section_header(app_section, tr("settings.app_behavior"))
 
-    tk.Checkbutton(
-        app_section,
-        text=tr("settings.check_updates_startup"),
-        cursor="hand2",
-        selectcolor=theme_check_select,
-        **checkbutton_style,
+    # Update-check interval: replaces the old "check on startup" checkbox.
+    # The interval is honored by utils/updater.py at each launch; the
+    # "Check for updates now" button below always bypasses it.
+    _UPD_KEY_TO_LABEL = dict(UPDATE_CHECK_INTERVAL_LABELS)
+    update_var = tk.StringVar(value=_UPD_KEY_TO_LABEL[update_interval_value])
+
+    def _on_update_interval_change(value: str) -> None:
+        key = next(
+            (k for k, label in _UPD_KEY_TO_LABEL.items() if label == value),
+            UPDATE_CHECK_DEFAULT_INTERVAL,
+        )
+        try:
+            set_setting_value("update_check", "interval", key)
+        except Exception as e:
+            logger.error("Failed to write update-check interval: %s", e)
+
+    update_row = tk.Frame(app_section, background=theme_check_bg)
+    update_row.pack(fill="both", pady=(0, 5), padx=16)
+    tk.Label(
+        update_row,
+        text=tr("settings.update_check_interval"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
         font=ui_font(12),
-        command=lambda: _toggle_setting("update_check", update_var),
-        variable=update_var,
-    ).pack(fill="both", pady=(0,5), padx=16)
+    ).pack(side="left", pady=(0, 5))
+    update_combo = ttk.Combobox(
+        update_row,
+        textvariable=update_var,
+        cursor="hand2",
+        values=tuple(_UPD_KEY_TO_LABEL.values()),
+        state="readonly",
+        width=18,
+        font=ui_font(12),
+    )
+    update_combo.pack(side="left", pady=(0, 5))
+    update_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_update_interval_change(update_var.get()),
+    )
 
     def _do_check_now():
         if not callable(on_check_updates_now):
