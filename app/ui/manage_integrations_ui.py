@@ -23,7 +23,7 @@ from tkinter import messagebox
 from typing import Any, Callable, Dict, List, Optional, cast
 
 from plugin_loader import PluginRegistry
-from services import duplicate_queue, integration_manager
+from services import duplicate_queue, health_check, integration_manager
 from ui.scrollable import ScrollableFrame
 from utils.i18n import tr, trn
 from utils.icons import IconService
@@ -181,6 +181,14 @@ def show_manage_dialog(
     # Platforms with a version check in flight - one per platform so a
     # storm of row refreshes cannot pile up duplicate GitHub requests.
     _version_checking: set = set()
+    # Latest authenticated-probe verdict per platform id ((ok, detail)),
+    # populated by _background_auth_probe in a daemon thread, never by the
+    # render path; popped on download/update/uninstall completion so the
+    # next refresh re-probes the changed installation.
+    _auth_cache: dict = {}
+    # Platforms with an auth probe in flight - one per platform so a storm
+    # of row refreshes cannot pile up duplicate live API calls.
+    _auth_checking: set = set()
 
     def _has_update(pid: str) -> bool:
         """Return True when the installed plugin is behind the latest release.
@@ -220,6 +228,51 @@ def show_manage_dialog(
                 verdict = False
             _update_cache[pid] = verdict
             _version_checking.discard(pid)
+
+            def _apply() -> None:
+                try:
+                    dialog_open = bool(win.winfo_exists())
+                except tk.TclError:
+                    dialog_open = False
+                if dialog_open:
+                    _refresh_rows()
+
+            _after_main(_apply)
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _background_auth_probe(pid: str) -> None:
+        """Live authenticated probe for an installed platform, off the main thread.
+
+        The TCP reachability banner only proves the API endpoint accepts
+        connects - the OAuth token can be dead while the banner says "up".
+        This runs a cheap authenticated API call (via
+        ``health_check.probe_authenticated``) and caches the verdict per
+        platform so a refresh storm probes at most once; when the verdict
+        lands the row re-renders via ``_after_main``.  Platforms without a
+        live integration (never authenticated this session) or without a
+        probe implementation get a ``(None, None)`` verdict, which renders
+        as a plain "Installed".
+        """
+        if pid in _auth_checking or pid in _auth_cache:
+            return
+        if integration_registry is None:
+            _auth_cache[pid] = (None, None)
+            return
+        integration = integration_registry.get(pid)
+        if integration is None:
+            _auth_cache[pid] = (None, None)
+            return
+        _auth_checking.add(pid)
+
+        def _work() -> None:
+            verdict = (None, None)
+            try:
+                verdict = health_check.probe_authenticated(integration)
+            except Exception as e:
+                logger.debug("Auth probe failed for %s: %s", pid, e)
+            _auth_cache[pid] = verdict
+            _auth_checking.discard(pid)
 
             def _apply() -> None:
                 try:
@@ -297,6 +350,11 @@ def show_manage_dialog(
                 # verdicts render below); the worker refreshes the row
                 # when the verdict lands.
                 _background_version_check(pid)
+            if is_installed:
+                # Fire the async authenticated probe for this row (cache-
+                # only verdicts render below).  Runs alongside the version
+                # check; both are guarded by their in-flight/cached sets.
+                _background_auth_probe(pid)
             if catalog_repo is not None:
                 display_name = catalog_repo.display_name
             else:
@@ -340,6 +398,24 @@ def show_manage_dialog(
                 font=ui_font(9),
             )
             status_lbl.pack(side="left", padx=(8, 0))
+
+            if is_installed and pid in _auth_cache:
+                # Authenticated-probe verdict (if any) for this platform.
+                # None means "no probe possible" - keep plain "Installed".
+                verdict_ok = _auth_cache[pid][0]
+                if verdict_ok is True:
+                    status_lbl.config(
+                        text=tr("manage.installed") + " · " + tr("manage.auth_ok"),
+                        foreground=good_fg,
+                    )
+                elif verdict_ok is False:
+                    detail = _auth_cache[pid][1]
+                    if detail:
+                        logger.debug("Auth probe detail for %s: %s", pid, detail)
+                    status_lbl.config(
+                        text=tr("manage.installed") + " · " + tr("manage.auth_failed"),
+                        foreground=bad_fg,
+                    )
 
             if busy:
                 # In-flight download or uninstall: no button, just the
@@ -470,6 +546,7 @@ def show_manage_dialog(
                 if not dialog_open:
                     return
                 _update_cache.pop(pid, None)  # fresh verdict after the install
+                _auth_cache.pop(pid, None)  # fresh auth verdict after the install
                 _refresh_rows()
                 if error is not None:
                     _set_footer(tr("manage.download_failed", error=error), error=True)
@@ -563,6 +640,7 @@ def show_manage_dialog(
                     dialog_open = False
                 if not dialog_open:
                     return
+                _auth_cache.pop(pid, None)  # creds were purged - re-probe if still installed
                 _refresh_rows()
                 if error is not None:
                     text = tr("manage.uninstall_failed", error=error)
@@ -677,6 +755,7 @@ def show_manage_dialog(
                 w.config(state="disabled", text=tr("manage.updating_ellipsis"))
         status_lbl.config(text=tr("manage.updating_ellipsis"), foreground=label_fg)
         _update_cache.pop(pid, None)
+        _auth_cache.pop(pid, None)
 
         def _worker() -> None:
             error: Optional[str] = None
@@ -843,6 +922,8 @@ def show_manage_dialog(
                     dialog_open = False
                 if not dialog_open:
                     return
+                for pid in targets:
+                    _auth_cache.pop(pid, None)  # creds were purged - re-probe survivors
                 _refresh_rows()
                 if failures:
                     text = (
@@ -901,6 +982,7 @@ def show_manage_dialog(
         _bulk_busy[0] = True
         for pid in targets:
             _update_cache.pop(pid, None)
+            _auth_cache.pop(pid, None)
 
         def _worker() -> None:
             failures: List[str] = []

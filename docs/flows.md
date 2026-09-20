@@ -210,3 +210,32 @@ name is read by `services/profile_store.initialize()` during
   (playlists.json, extra.json, scrobbles.json, every `<platform>/*.db`);
   a shared bucket removes nothing (the shared data is owned by everyone).
   Immediate, no restart needed (the deleted profile is never active).
+
+## 10. Manage dialog status refresh (authenticated probe)
+
+`login_ui` "Manage" -> `ui/manage_integrations_ui.show_manage_dialog`
+renders one row per platform. For every **installed** row whose
+integration is live in the registry, `_refresh_rows` fires
+`_background_auth_probe(pid)` (guarded per platform by
+`_auth_checking` / `_auth_cache`, so a refresh storm probes each platform
+at most once):
+
+1. A daemon worker calls
+   `services.health_check.probe_authenticated(integration)`.
+2. The probe runs on an internal watchdog thread (bounded by
+   `_AUTH_PROBE_TIMEOUT_S`, because the plugin HTTP layers do not all set
+   socket timeouts) and makes a cheap authenticated API call:
+   `get_me()` for Spotify / SoundCloud / Deezer,
+   `get_library_playlists(limit=1)` for YouTube Music (the same call the
+   login verification uses), one page of `user.getLovedTracks` for
+   Last.fm.  A plugin may supply its own `probe_authenticated()` method
+   instead (duck-typed, see plugins.md).
+3. The verdict `(ok, detail)` lands back via `_after_main` and re-renders
+   the row: "Installed · auth OK" (green), "Installed · auth failed"
+   (red), or plain "Installed" when the probe did not apply (`ok` is
+   None - e.g. never authenticated this session).
+
+The verdict catches the case a TCP probe cannot: the platform endpoint
+accepts connections while the OAuth token is revoked/expired.  Download /
+update / uninstall completion pops the per-platform verdict, so the next
+refresh re-probes the changed installation.

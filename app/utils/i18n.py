@@ -263,6 +263,8 @@ DEFAULT_STRINGS: dict[str, str] = {
     "manage.no_integrations_available": "No integrations available",
     "manage.installed": "Installed",
     "manage.not_installed": "Not installed",
+    "manage.auth_ok": "auth OK",
+    "manage.auth_failed": "auth failed",
     "manage.uninstalling_ellipsis": "Uninstalling...",
     "manage.downloading_ellipsis": "Downloading...",
     "manage.updating_ellipsis": "Updating...",
