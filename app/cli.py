@@ -37,6 +37,7 @@ import json
 import logging
 import re
 import sys
+import time
 
 from plugin_loader import PluginRegistry, get_default_registry
 from services import auth_setup, duplicate_queue, integration_manager
@@ -57,6 +58,31 @@ from utils.thumbnail import ThumbnailService
 logger = logging.getLogger(__name__)
 
 URL_WAIT_TIMEOUT = 30
+YTM_LOGIN_POLL_INTERVAL = 2
+YTM_LOGIN_MAX_POLLS = 150
+
+
+def _wait_for_ytmusic_auth(auth_dir: str) -> tuple[bool, str]:
+    """Poll for browser.json and verify YouTube Music authentication works.
+
+    Returns (success, message). On success, message is empty. On failure,
+    message describes the error.
+    """
+    from services import auth_setup
+
+    for _ in range(YTM_LOGIN_MAX_POLLS):
+        if auth_setup.browser_file_ready():
+            try:
+                from integrations.youtube_music.youtube_music import (
+                    youtube_auth,
+                )
+
+                if youtube_auth.setup_auth():
+                    return True, ""
+            except Exception as e:
+                logger.debug("YT Music auth verification failed during poll: %s", e)
+        time.sleep(YTM_LOGIN_POLL_INTERVAL)
+    return False, tr("login.browser_json_missing")
 
 
 class UsageError(Exception):
@@ -897,7 +923,18 @@ def run_login(
             tr("cli.ym_opened_terminal", auth_dir=auth_setup.AUTH_DIR),
             flush=True,
         )
-        return 0
+        # Poll for browser.json and verify authentication works
+        print(tr("cli.ym_waiting_auth"), flush=True)
+        success, error = _wait_for_ytmusic_auth(str(auth_setup.AUTH_DIR))
+        if success:
+            print(tr("cli.login_ok", platform="YouTube Music"), flush=True)
+            return 0
+        else:
+            print(
+                tr("cli.login_failed", platform="YouTube Music", reason=error),
+                file=sys.stderr,
+            )
+            return 1
 
     if platform == "lastfm":
         # Last.fm auth needs the browser-authorization + auth.getSession
