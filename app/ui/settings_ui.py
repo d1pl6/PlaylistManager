@@ -181,7 +181,9 @@ def show_settings_dialog(
     win.transient(parent)
     win.grab_set()
 
-    win.geometry("420x640")
+    # Win width is wider than the old single-column dialog: the tab row
+    # (esp. non-English labels like "Wiedergabelisten") needs the space.
+    win.geometry("480x640")
     win.minsize(350, 400)
 
     tk.Label(
@@ -192,14 +194,63 @@ def show_settings_dialog(
         font=ui_font(14),
     ).pack(fill="both", pady=(0,5))
 
-    sf = ScrollableFrame(win, bg=C["scrollable_frame_bg"], show_scrollbar=True,
-                         bind_all_mousewheel=True)
-    sf.pack(side="left", fill="both", expand=True)
-    sf.style_scrollbar(
-        hover_bg(C["button_main_bg"]),
-        C["scrollable_frame_bg"],
+    # The settings surface outgrew one long column, so the sections are
+    # grouped into tabs: Behavior / Appearance / Playlists / Integrations /
+    # Misc.  Each tab is its own ScrollableFrame, so content stays
+    # scrollable per tab and the window keeps a sane width.
+    style = ttk.Style(win)
+    style.theme_use("default")
+
+    style.configure(
+        "PMSettings.TNotebook",
+        background=theme_win_bg,
+        borderwidth=0,
+        bd=0,
+        tabmargins=(2, 3, 2, 0),
     )
-    content = sf.content
+    style.configure(
+        "PMSettings.TNotebook.Tab",
+        background=C["button_main_bg"],
+        foreground=C["button_main_fg"],
+        padding=(12, 4),
+        borderwidth=0,
+        bd=0,
+        font=ui_font(10),
+    )
+    style.map(
+        "PMSettings.TNotebook.Tab",
+        background=[("selected", C["frame_head_bg"])],
+        foreground=[("selected", C["label_def_fg"])],
+    )
+
+    # 580px tab viewport keeps the dialog near its old 640px height; a
+    # taller tab scrolls inside its own page instead of growing the window.
+    notebook = ttk.Notebook(win, style="PMSettings.TNotebook", height=580)
+    notebook.pack(side="left", fill="both", expand=True)
+
+    # Every tab scrollable, so the width fit at the end can measure them all.
+    tab_scfs: list[ScrollableFrame] = []
+
+    def _add_tab(text: str) -> ScrollableFrame:
+        """Create one notebook page: a themed, scrollable settings tab."""
+        tab = ScrollableFrame(
+            notebook,
+            bg=C["scrollable_frame_bg"],
+            show_scrollbar=True,
+            bind_all_mousewheel=True,
+        )
+        tab.style_scrollbar(
+            hover_bg(C["button_main_bg"]),
+            C["scrollable_frame_bg"],
+        )
+        notebook.add(tab, text=text)
+        tab_scfs.append(tab)
+        return tab
+
+    behavior_content = _add_tab(tr("settings.tab_behavior")).content
+    appearance_content = _add_tab(tr("settings.tab_appearance")).content
+    integrations_content = _add_tab(tr("settings.tab_integrations")).content
+    misc_content = _add_tab(tr("settings.tab_misc")).content
 
     # Optional service plugins: hide their settings sections when the
     # plugin is not installed (integration not registered).
@@ -238,7 +289,7 @@ def show_settings_dialog(
     global_var = tk.IntVar(value=global_var_value)
     tray_var = tk.IntVar(value=tray_var_value)
 
-    app_section = tk.Frame(content, background=theme_win_bg)
+    app_section = tk.Frame(behavior_content, background=theme_win_bg)
     app_section.pack(fill="both", padx=8, pady=(0, 8))
     _section_header(app_section, tr("settings.app_behavior"))
 
@@ -348,10 +399,6 @@ def show_settings_dialog(
     ).pack(fill="both", pady=(0,5), padx=16)
 
     def _on_reset_window_geometry():
-        # Forget the remembered size/position and apply the default
-        # geometry live: resize to fit the current content, then center
-        # on screen.  The persisted value is cleared so the next launch
-        # starts with the same default; remember_geometry is untouched.
         try:
             set_setting_value("window", "geometry", "")
         except Exception as e:
@@ -483,9 +530,150 @@ def show_settings_dialog(
     if not getattr(tray_available, "available", False):
         start_tray_ck.configure(state="disabled", cursor="arrow")
 
+    # --- Song removal: ask before the showcase ✕ deletes a song.  The
+    # removal is always a full one (platform + local row + scrobble).
+    confirm_song_remove_var = tk.IntVar(
+        value=1 if get_setting("confirm_on_song_remove", fallback=True) else 0
+    )
+    tk.Checkbutton(
+        app_section,
+        text=tr("settings.ask_before_song_remove"),
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=lambda: _toggle_setting(
+            "confirm_on_song_remove", confirm_song_remove_var
+        ),
+        variable=confirm_song_remove_var,
+    ).pack(fill="both", pady=(0,5), padx=16)
+
+    # --- Playlist removal: ask before a playlist card is closed; when
+    # not asking, [remove_playlist] default decides (Remove / Keep DB).
+    confirm_playlist_remove_var = tk.IntVar(
+        value=1 if get_setting("confirm_on_playlist_remove", fallback=True) else 0
+    )
+
+    def _on_confirm_playlist_remove_toggle():
+        _toggle_setting("confirm_on_playlist_remove", confirm_playlist_remove_var)
+        # The default-mode row is moot while the dialog is on.
+        try:
+            playlist_remove_combo.configure(
+                state="readonly" if confirm_playlist_remove_var.get() == 0 else "disabled"
+            )
+        except tk.TclError:
+            pass
+
+    tk.Checkbutton(
+        app_section,
+        text=tr("settings.ask_before_playlist_remove"),
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=_on_confirm_playlist_remove_toggle,
+        variable=confirm_playlist_remove_var,
+    ).pack(fill="both", pady=(0,5), padx=16)
+
+    playlist_remove_default_value = get_setting_value(
+        "remove_playlist", "default", REMOVE_PLAYLIST_DEFAULT_MODE
+    )
+    _REMOVAL_LABELS = {
+        k: tr(f"settings.removal_mode_{k}") for k in REMOVE_PLAYLIST_MODE_LABELS
+    }
+    playlist_remove_default_label = _REMOVAL_LABELS.get(
+        playlist_remove_default_value,
+        _REMOVAL_LABELS[REMOVE_PLAYLIST_DEFAULT_MODE],
+    )
+
+    def _on_playlist_remove_default_change(label_value):
+        chosen = next(
+            (k for k, v in _REMOVAL_LABELS.items() if v == label_value),
+            REMOVE_PLAYLIST_DEFAULT_MODE,
+        )
+        try:
+            set_setting_value("remove_playlist", "default", chosen)
+        except Exception as e:
+            logger.error("Failed to save playlist-removal default: %s", e)
+
+    playlist_remove_default_row = tk.Frame(app_section, background=theme_check_bg)
+    playlist_remove_default_row.pack(fill="both", pady=(0,5), padx=16)
+    tk.Label(
+        playlist_remove_default_row,
+        text=tr("settings.default_playlist_removal"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0,5))
+
+    playlist_remove_var = tk.StringVar(value=playlist_remove_default_label)
+    playlist_remove_combo = ttk.Combobox(
+        playlist_remove_default_row,
+        textvariable=playlist_remove_var,
+        cursor="hand2",
+        values=tuple(_REMOVAL_LABELS.values()),
+        state="disabled" if confirm_playlist_remove_var.get() == 1 else "readonly",
+        width=18,
+        font=ui_font(12),
+    )
+    playlist_remove_combo.pack(side="left", pady=(0,5))
+    playlist_remove_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_playlist_remove_default_change(playlist_remove_var.get()),
+    )
+
+    appearance_section = tk.Frame(appearance_content, background=theme_win_bg)
+    appearance_section.pack(fill="both", padx=8, pady=(0, 8))
+    _section_header(appearance_section, tr("settings.appearance"))
+
+    def _on_showcase_count_change(value: str) -> None:
+        try:
+            set_setting_value("showcase", "count", value)
+        except Exception as e:
+            logger.error("Failed to write showcase count setting: %s", e)
+        if on_showcase_count_change is not None:
+            try:
+                on_showcase_count_change(int(value))
+            except (ValueError, TypeError):
+                pass
+
+    def _on_showcase_log_toggle():
+        _toggle_setting("showcase_log", showcase_log_var)
+        if on_showcase_log_change is not None:
+            on_showcase_log_change(showcase_log_var.get() == 1)
+
+    showcase_log_var = tk.IntVar(value=showcase_log_value)
+    tk.Checkbutton(
+        appearance_section,
+        text=tr("settings.show_log_row"),
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=_on_showcase_log_toggle,
+        variable=showcase_log_var,
+    ).pack(fill="both", pady=(0,5), padx=16)
+
+    def _on_playlist_stats_toggle():
+        _toggle_setting("playlist_stats", playlist_stats_var)
+        if on_playlist_stats_change is not None:
+            on_playlist_stats_change(playlist_stats_var.get() == 1)
+
+    playlist_stats_var = tk.IntVar(value=playlist_stats_value)
+    tk.Checkbutton(
+        appearance_section,
+        text=tr("settings.show_playlist_stats"),
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=_on_playlist_stats_toggle,
+        variable=playlist_stats_var,
+    ).pack(fill="both", pady=(0,5), padx=16)
+
     pin_buttons_var = tk.BooleanVar(value=get_setting("show_pin_buttons", fallback=True))
     pin_buttons_check = tk.Checkbutton(
-        app_section,
+        appearance_section,
         text=tr("settings.pin_unpin_buttons"),
         cursor="hand2",
         selectcolor=theme_check_select,
@@ -505,8 +693,132 @@ def show_settings_dialog(
 
     pin_buttons_check.config(command=_on_pin_buttons_toggle)
 
+    showcase_row = tk.Frame(appearance_section, background=theme_check_bg)
+    showcase_row.pack(fill="both", pady=(0,5), padx=16)
+    tk.Label(
+        showcase_row,
+        text=tr("settings.show_last_n_added"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0,5))
+
+    showcase_count_var = tk.StringVar(value=str(showcase_count_value))
+    showcase_combo = ttk.Combobox(
+        showcase_row,
+        textvariable=showcase_count_var,
+        cursor="hand2",
+        values=("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"),
+        state="readonly",
+        width=4,
+        font=ui_font(12),
+    )
+    showcase_combo.pack(side="left", pady=(0,5))
+    showcase_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_showcase_count_change(showcase_count_var.get()),
+    )
+    tk.Label(
+        showcase_row,
+        text=tr("settings.zero_off_hint"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(9),
+    ).pack(side="left", pady=(0,5))
+
+    def _on_ui_scale_change(value: str) -> None:
+        try:
+            set_setting_value("ui_scale", "value", value)
+        except Exception as e:
+            logger.error("Failed to write ui_scale setting: %s", e)
+
+    scale_row = tk.Frame(appearance_section, background=theme_check_bg)
+    scale_row.pack(fill="both", pady=(0, 5), padx=16)
+    tk.Label(
+        scale_row,
+        text=tr("settings.ui_scale"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0,5))
+
+    scale_var = tk.StringVar(value=get_setting_value("ui_scale", "value", "auto"))
+    scale_combo = ttk.Combobox(
+        scale_row,
+        textvariable=scale_var,
+        cursor="hand2",
+        values=UI_SCALE_PRESETS,
+        state="readonly",
+        width=6,
+        font=ui_font(12),
+    )
+    scale_combo.pack(side="left", pady=(0,5))
+    scale_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_ui_scale_change(scale_var.get()),
+    )
+    tk.Label(
+        scale_row,
+        text=tr("settings.restart_to_apply"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(9),
+    ).pack(side="left", pady=(0,5))
+
+    # --- Font family ---
+    def _on_font_family_change(value: str) -> None:
+        try:
+            set_setting_value("font", "family", value)
+        except Exception as e:
+            logger.error("Failed to write font family setting: %s", e)
+
+    font_family_row = tk.Frame(appearance_section, background=theme_check_bg)
+    font_family_row.pack(fill="both", pady=(0,5), padx=16)
+    tk.Label(
+        font_family_row,
+        text=tr("settings.font"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0,5))
+
+    # Build the family list: "(Default)" first, then every Tk-known family
+    # sorted case-insensitively.
+    _all_families = sorted(set(tkinter.font.families()), key=str.casefold)
+    font_family_values = ["(Default)"] + list(_all_families)
+    # If user has a custom family selected, make sure it appears in the list.
+    if font_family_value and font_family_value not in _all_families:
+        font_family_values.insert(0, font_family_value)
+
+    font_family_var = tk.StringVar(
+        value=font_family_value if font_family_value else "(Default)"
+    )
+    font_family_combo = ttk.Combobox(
+        font_family_row,
+        textvariable=font_family_var,
+        cursor="hand2",
+        values=font_family_values,
+        state="readonly",
+        width=18,
+        font=ui_font(12),
+    )
+    font_family_combo.pack(side="left", pady=(0,5))
+    font_family_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_font_family_change(
+            "" if font_family_var.get() == "(Default)" else font_family_var.get()
+        ),
+    )
+    tk.Label(
+        font_family_row,
+        text=tr("settings.restart_to_apply"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(9),
+    ).pack(side="left", pady=(0,5))
+
     # --- Sort playlists: key combobox + direction arrow ----------------
-    sort_row = tk.Frame(app_section, background=theme_win_bg)
+    sort_row = tk.Frame(appearance_section, background=theme_win_bg)
     sort_row.pack(fill="both", pady=(0, 5), padx=16)
     tk.Label(
         sort_row,
@@ -542,7 +854,7 @@ def show_settings_dialog(
         cursor="hand2",
         highlightthickness=0,
         relief="raised",
-        font=ui_font(12),
+        font=ui_font(8),
         **btn_colors(C["button_main_bg"], C["button_main_fg"]),
     )
     sort_arrow.pack(side="left")
@@ -578,7 +890,586 @@ def show_settings_dialog(
     sort_arrow.config(command=_on_sort_arrow)
     sort_arrow.config(text="\u2191" if _sort_direction() == "asc" else "\u2193")
 
-    dupcheck_section = tk.Frame(content, background=theme_win_bg)
+
+    # --- Thumbnails (data-saver modes) ---
+    # Mode keys match utils.config.THUMBNAIL_MODES; the combo shows
+    # friendly labels.  The mode is read per fetch, so a change applies
+    # live (existing in-memory/disk entries are simply reused as-is).
+    _THUMBNAIL_LABELS = tuple(
+        (mode, tr(f"settings.thumbnail_mode_{mode}")) for mode in THUMBNAIL_MODES
+    )
+
+    def _on_thumbnail_mode_change(value: str) -> None:
+        key = value
+        for k, label in _THUMBNAIL_LABELS:
+            if label == value:
+                key = k
+                break
+        try:
+            set_setting_value("thumbnails", "mode", key)
+        except Exception as e:
+            logger.error("Failed to write thumbnail mode setting: %s", e)
+
+    thumb_row = tk.Frame(appearance_section, background=theme_check_bg)
+    thumb_row.pack(fill="both", pady=(0,5), padx=16)
+    tk.Label(
+        thumb_row,
+        text=tr("settings.data_saver"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0,5))
+
+    thumb_mode_value = get_setting_value("thumbnails", "mode", "off")
+    if thumb_mode_value not in THUMBNAIL_MODES:
+        thumb_mode_value = "off"
+    _thumb_key_to_label = dict(_THUMBNAIL_LABELS)
+    thumb_labels = tuple(_thumb_key_to_label.values())
+    thumb_var = tk.StringVar(value=_thumb_key_to_label[thumb_mode_value])
+    thumb_combo = ttk.Combobox(
+        thumb_row,
+        textvariable=thumb_var,
+        cursor="hand2",
+        values=thumb_labels,
+        state="readonly",
+        width=22,
+        font=ui_font(12),
+    )
+    thumb_combo.pack(side="left", pady=(0,5))
+    thumb_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_thumbnail_mode_change(thumb_var.get()),
+    )
+
+    cache_size_var = tk.StringVar(value="")
+
+    def _refresh_cache_size_label() -> None:
+        try:
+            size = ThumbnailService.disk_cache_size()
+        except Exception:
+            size = 0
+        if size > 0:
+            text = (
+                f"{size / (1024 * 1024):.1f} MB"
+                if size >= 1024 * 1024
+                else f"{size / 1024:.0f} KB"
+            )
+        else:
+            text = tr("settings.cache_empty")
+        cache_size_var.set(f"({text})")
+
+    tk.Label(
+        thumb_row,
+        textvariable=cache_size_var,
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(9),
+    ).pack(side="left", pady=(0,5), padx=(6, 0))
+    _refresh_cache_size_label()
+
+    tk.Label(
+        appearance_section,
+        text=tr("settings.thumbnails_modes_desc"),
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        justify="left",
+        font=ui_font(9),
+    ).pack(anchor="w", padx=16, pady=(0, 6))
+
+    def _on_clear_cache() -> None:
+        if not messagebox.askyesno(
+            tr("settings.clear_thumbnail_cache_title"),
+            tr("settings.clear_thumbnail_cache_ask"),
+            parent=win,
+        ):
+            return
+        try:
+            ThumbnailService.clear_disk_cache()
+        except Exception as e:
+            logger.error("Failed to clear thumbnail cache: %s", e)
+            return
+        _refresh_cache_size_label()
+
+    tk.Button(
+        appearance_section,
+        text=tr("settings.clear_thumbnail_cache"),
+        cursor="hand2",
+        relief="raised",
+        bd=0,
+        highlightthickness=0,
+        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+        font=ui_font(10),
+        command=_on_clear_cache,
+    ).pack(fill="x", pady=(0, 5), padx=16)
+
+    def _on_columns_change(value: str) -> None:
+        try:
+            set_setting_value("layout", "columns", value)
+        except Exception as e:
+            logger.error("Failed to write columns setting: %s", e)
+        if on_columns_change is not None:
+            try:
+                on_columns_change(int(value))
+            except (ValueError, TypeError):
+                pass
+
+    columns_row = tk.Frame(appearance_section, background=theme_check_bg)
+    columns_row.pack(fill="both", pady=(0,5), padx=16)
+    tk.Label(
+        columns_row,
+        text=tr("settings.card_columns"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0,5))
+
+    columns_var = tk.StringVar(value=str(columns_value))
+    columns_combo = ttk.Combobox(
+        columns_row,
+        textvariable=columns_var,
+        cursor="hand2",
+        values=("1", "2", "3", "4"),
+        state="readonly",
+        width=4,
+        font=ui_font(12),
+    )
+    columns_combo.pack(side="left", pady=(0,5))
+    columns_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_columns_change(columns_var.get()),
+    )
+
+    # --- Language (restart to apply) ---
+    def _on_language_change(value: str) -> None:
+        try:
+            set_setting_value("language", "lang", language_code_for(value))
+        except Exception as e:
+            logger.error("Failed to write language setting: %s", e)
+
+    _lang_codes = available_languages()
+    language_row = tk.Frame(appearance_section, background=theme_check_bg)
+    language_row.pack(fill="both", pady=(0, 5), padx=16)
+    tk.Label(
+        language_row,
+        text=tr("settings.language"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0,5))
+
+    language_var = tk.StringVar(
+        value=language_display(get_setting_value("language", "lang", "en"))
+    )
+    language_combo = ttk.Combobox(
+        language_row,
+        textvariable=language_var,
+        cursor="hand2",
+        values=tuple(language_display(c) for c in _lang_codes),
+        state="readonly",
+        width=12,
+        font=ui_font(12),
+    )
+    language_combo.pack(side="left", pady=(0,5))
+    language_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_language_change(language_var.get()),
+    )
+    tk.Label(
+        language_row,
+        text=tr("settings.restart_to_apply"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(9),
+    ).pack(side="left", pady=(0,5))
+
+    tk.Button(
+        appearance_section,
+        text=tr("settings.theme_settings"),
+        cursor="hand2",
+        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+        font=ui_font(12),
+        highlightthickness=0,
+        relief="raised",
+        bd=0,
+        command=lambda: show_theme_dialog(win, on_theme_change=on_theme_change),
+    ).pack(fill="both", pady=(0,4), padx=16)
+
+    # -- Notification bar section ----------------------------------------
+    # Fixed status row ("Playlist | Artist - Song | Status"); the
+    # Artist - Song segment aligns left or center, the bar itself sits
+    # top (above the header) / below the header / bottom (under the
+    # cards).  The near-duplicate prompt toggle lives in the Duplicate
+    # Check section (same [notification_bar] settings group).
+    notif_section = tk.Frame(appearance_content, background=theme_win_bg)
+    notif_section.pack(fill="both", padx=8, pady=(0, 8))
+    _section_header(notif_section, tr("settings.notification_bar"))
+
+    notif_enabled_var = tk.IntVar(
+        value=1 if get_setting_value("notification_bar", "enabled", "yes") == "yes" else 0
+    )
+
+    def _on_notif_enabled_toggle():
+        try:
+            set_setting_value(
+                "notification_bar", "enabled",
+                "yes" if notif_enabled_var.get() else "no",
+            )
+        except Exception as e:
+            logger.error("Failed to write notification_bar enabled setting: %s", e)
+        if on_notif_enabled_change is not None:
+            try:
+                on_notif_enabled_change(bool(notif_enabled_var.get()))
+            except Exception as e:
+                logger.error("Failed to apply notification_bar enabled change: %s", e)
+
+    tk.Checkbutton(
+        notif_section,
+        text=tr("settings.notif_enabled"),
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=_on_notif_enabled_toggle,
+        variable=notif_enabled_var,
+    ).pack(fill="both", pady=(0, 2), padx=16)
+
+    # --- Artist - Song segment alignment (left / center) -----------------
+    def _align_label(key: str) -> str:
+        return tr(f"settings.notif_song_align_{key}")
+
+    align_var = tk.StringVar(value=_align_label(resolve_notification_align()))
+
+    def _on_align_change(value: str) -> None:
+        key = next(
+            (k for k in NOTIFICATION_SONG_ALIGNS if _align_label(k) == value),
+            NOTIFICATION_DEFAULT_ALIGN,
+        )
+        try:
+            set_setting_value("notification_bar", "song_align", key)
+        except Exception as e:
+            logger.error("Failed to write notification_bar song_align: %s", e)
+        if on_notif_align_change is not None:
+            try:
+                on_notif_align_change(key)
+            except Exception as e:
+                logger.error("Failed to apply notification_bar song_align: %s", e)
+
+    align_row = tk.Frame(notif_section, background=theme_check_bg)
+    align_row.pack(fill="both", pady=(2, 5), padx=16)
+    tk.Label(
+        align_row,
+        text=tr("settings.notif_song_align"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0, 5))
+    align_combo = ttk.Combobox(
+        align_row,
+        textvariable=align_var,
+        cursor="hand2",
+        values=[_align_label(k) for k in NOTIFICATION_SONG_ALIGNS],
+        state="readonly",
+        width=12,
+        font=ui_font(12),
+    )
+    align_combo.pack(side="left", pady=(0, 5))
+    align_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_align_change(align_var.get()),
+    )
+
+    # --- Bar location (top / below header / bottom) ----------------------
+    def _position_label(key: str) -> str:
+        return tr(f"settings.notif_position_{key}")
+
+    position_var = tk.StringVar(
+        value=_position_label(resolve_notification_position())
+    )
+
+    def _on_position_change(value: str) -> None:
+        key = next(
+            (k for k in NOTIFICATION_POSITIONS if _position_label(k) == value),
+            NOTIFICATION_DEFAULT_POSITION,
+        )
+        try:
+            set_setting_value("notification_bar", "position", key)
+        except Exception as e:
+            logger.error("Failed to write notification_bar position: %s", e)
+        if on_notif_position_change is not None:
+            try:
+                on_notif_position_change(key)
+            except Exception as e:
+                logger.error("Failed to apply notification_bar position: %s", e)
+
+    position_row = tk.Frame(notif_section, background=theme_check_bg)
+    position_row.pack(fill="both", pady=(0, 5), padx=16)
+    tk.Label(
+        position_row,
+        text=tr("settings.notif_position"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0, 5))
+    position_combo = ttk.Combobox(
+        position_row,
+        textvariable=position_var,
+        cursor="hand2",
+        values=[_position_label(k) for k in NOTIFICATION_POSITIONS],
+        state="readonly",
+        width=16,
+        font=ui_font(12),
+    )
+    position_combo.pack(side="left", pady=(0, 5))
+    position_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_position_change(position_var.get()),
+    )
+
+    # -- Last.fm section -----------------------------------------------
+    if has_lastfm:
+        lastfm_section = tk.Frame(integrations_content, background=theme_win_bg)
+        lastfm_section.pack(fill="both", padx=8, pady=(0, 8))
+        _section_header(lastfm_section, "Last.fm")
+
+        like_button_var = tk.BooleanVar(value=get_setting("like_button"))
+        like_button_check = tk.Checkbutton(
+            lastfm_section,
+            text=tr("settings.like_button"),
+            variable=like_button_var,
+            cursor="hand2",
+            selectcolor=theme_check_select,
+            **checkbutton_style,
+            font=ui_font(11),
+        )
+        like_button_check.pack(anchor="w", padx=16, pady=4)
+
+        def on_like_button_toggle():
+            enabled = bool(like_button_var.get())
+            _toggle_setting("like_button", like_button_var)
+            if on_like_button_change:
+                try:
+                    on_like_button_change(enabled)
+                except Exception as e:
+                    logger.error("Failed to apply like_button change: %s", e)
+
+        like_button_check.config(command=on_like_button_toggle)
+
+        scrobble_on_add_var = tk.BooleanVar(value=get_setting("scrobble_on_add"))
+        scrobble_on_add_check = tk.Checkbutton(
+            lastfm_section,
+            text=tr("settings.scrobble_added_songs"),
+            variable=scrobble_on_add_var,
+            cursor="hand2",
+            selectcolor=theme_check_select,
+            **checkbutton_style,
+            font=ui_font(11),
+        )
+        scrobble_on_add_check.pack(anchor="w", padx=16, pady=4)
+
+        # -- Per-platform scrobble sources ---------------------------------
+        # Only visible when the master gate is on.  Only installed music
+        # platforms are listed (Last.fm is the scrobble TARGET, never a
+        # source).  Storage semantics: empty = all installed (historical
+        # default), "none" = nothing, otherwise an explicit comma list.
+        scrobble_plat_area = tk.Frame(lastfm_section, background=theme_check_bg)
+        scrobble_plat_vars: dict = {}
+        raw_plat = get_setting_value("scrobble", "platforms", "")
+        _is_none = raw_plat.strip().lower() == SCROBBLE_NONE
+        _stored_ids = set() if _is_none else set(split_platforms(raw_plat))
+        _music_platforms = sorted(
+            (p for p in installed if p != "lastfm"),
+            key=lambda pid: (platform_display_names or {}).get(pid, pid).lower(),
+        )
+
+        if _music_platforms:
+            tk.Label(
+                scrobble_plat_area,
+                text=tr("settings.scrobble_platforms_from"),
+                background=theme_check_bg,
+                foreground=theme_check_fg,
+                font=ui_font(11),
+            ).pack(anchor="w", padx=4, pady=(6, 0))
+
+            _plat_scf = ScrollableFrame(
+                scrobble_plat_area,
+                bg=theme_check_bg,
+                max_viewport_height=px(100),
+            )
+            _plat_scf.pack(fill="both", padx=0, pady=(2, 4))
+            _plat_scf.update_scrollregion()
+            _plat_scf.style_scrollbar(
+                hover_bg(theme_check_fg), theme_check_bg,
+            )
+
+            for _pid in _music_platforms:
+                _pname = (platform_display_names or {}).get(_pid, _pid)
+                _var = tk.BooleanVar(
+                    value=(not _stored_ids and not _is_none) or _pid in _stored_ids,
+                )
+                _cb = tk.Checkbutton(
+                    _plat_scf.content,
+                    text=_pname,
+                    variable=_var,
+                    cursor="hand2",
+                    selectcolor=theme_check_select,
+                    **checkbutton_style,
+                    font=ui_font(11),
+                    command=lambda: set_setting_value(
+                        "scrobble",
+                        "platforms",
+                        ",".join(
+                            p for p in _music_platforms
+                            if scrobble_plat_vars[p].get()
+                        ) or SCROBBLE_NONE,
+                    ),
+                )
+                _cb.pack(anchor="w", padx=4, pady=1)
+                scrobble_plat_vars[_pid] = _var
+        else:
+            tk.Label(
+                scrobble_plat_area,
+                text=tr("settings.install_integration_first"),
+                background=theme_check_bg,
+                foreground=theme_check_fg,
+                font=ui_font(11),
+            ).pack(anchor="w", padx=4, pady=(6, 4))
+
+        def _apply_scrobble_list_visibility():
+            """Pack / un-pack the platform list based on the master gate."""
+            try:
+                if scrobble_on_add_var.get():
+                    scrobble_plat_area.pack(fill="x", padx=0, pady=(0, 4))
+                else:
+                    scrobble_plat_area.pack_forget()
+            except tk.TclError:
+                pass
+
+        def on_scrobble_on_add_toggle():
+            _toggle_setting("scrobble_on_add", scrobble_on_add_var)
+            _apply_scrobble_list_visibility()
+
+        scrobble_on_add_check.config(command=on_scrobble_on_add_toggle)
+        _apply_scrobble_list_visibility()
+
+        # Scrobble keybind capture row
+        scrobble_keybind_row = tk.Frame(lastfm_section, background=theme_check_bg)
+        scrobble_keybind_row.pack(fill="x", padx=16, pady=4)
+
+        tk.Label(
+            scrobble_keybind_row,
+            text=tr("settings.scrobble_keybind"),
+            background=theme_check_bg,
+            foreground=theme_check_fg,
+            font=ui_font(11),
+        ).pack(side="left")
+
+        scrobble_keybind_display = tk.Label(
+            scrobble_keybind_row,
+            text=get_setting_value("scrobble_keybind", "keybind") or tr("settings.keybind_none"),
+            background=theme_check_bg,
+            foreground=theme_check_fg,
+            font=ui_font(11),
+            anchor="w",
+        )
+        scrobble_keybind_display.pack(side="left", fill="x", expand=True, padx=(8, 4))
+
+        def capture_scrobble_keybind():
+            if not keybind_controller:
+                logger.warning("Keybind controller not available")
+                return
+
+            def on_combo(combo_str):
+                set_setting_value("scrobble_keybind", "keybind", combo_str)
+                scrobble_keybind_display.config(text=combo_str or tr("settings.keybind_none"))
+                if on_scrobble_keybind_change is not None:
+                    try:
+                        on_scrobble_keybind_change()
+                    except Exception as e:
+                        logger.error("Failed to re-register scrobble keybind: %s", e)
+
+            keybind_controller.start_recording(on_combo)
+
+        tk.Button(
+            scrobble_keybind_row,
+            text=tr("settings.record"),
+            cursor="hand2",
+            **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+            font=ui_font(10),
+            highlightthickness=0,
+            relief="raised",
+            bd=0,
+            command=capture_scrobble_keybind,
+        ).pack(side="left", padx=(0, 4))
+
+        tk.Button(
+            scrobble_keybind_row,
+            text=tr("settings.clear"),
+            cursor="hand2",
+            **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+            font=ui_font(10),
+            highlightthickness=0,
+            relief="raised",
+            bd=0,
+            command=lambda: (
+                set_setting_value("scrobble_keybind", "keybind", ""),
+                scrobble_keybind_display.config(text=tr("settings.keybind_none")),
+                on_scrobble_keybind_change() if on_scrobble_keybind_change is not None else None,
+            ),
+        ).pack(side="left")
+
+    if has_soundcloud:
+        # -- SoundCloud section ---------------------------------------------
+        soundcloud_section = tk.Frame(integrations_content, background=theme_win_bg)
+        soundcloud_section.pack(fill="both", padx=8, pady=(0, 8))
+        _section_header(soundcloud_section, "SoundCloud")
+
+        scmode_row = tk.Frame(soundcloud_section, background=theme_win_bg)
+        scmode_row.pack(fill="both", pady=(0, 5), padx=16)
+        tk.Label(
+            scmode_row,
+            text=tr("settings.capture_song_via"),
+            background=theme_win_bg,
+            foreground=theme_label_fg,
+            font=ui_font(12),
+        ).pack(side="left", pady=(0, 5))
+
+        scmode_var = tk.StringVar(
+            value=get_setting_value("soundcloud", "capture_mode", "hybrid")
+        )
+        scmode_combo = ttk.Combobox(
+            scmode_row,
+            textvariable=scmode_var,
+            cursor="hand2",
+            values=("hybrid", "api", "extension"),
+            state="readonly",
+            width=11,
+            font=ui_font(12),
+        )
+        scmode_combo.pack(side="left", pady=(0, 5))
+
+        def _on_soundcloud_mode_change(mode: str) -> None:
+            try:
+                set_setting_value("soundcloud", "capture_mode", mode)
+            except Exception:
+                logger.error("Failed to write SoundCloud capture mode", exc_info=True)
+            # Applied on the next flow build; keybind flows read it at
+            # construction (KeybindController refresh rebuilds the flow).
+
+        scmode_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: _on_soundcloud_mode_change(scmode_var.get()),
+        )
+        tk.Label(
+            soundcloud_section,
+            text=tr("settings.soundcloud_mode_desc"),
+            background=theme_win_bg,
+            foreground=theme_label_fg,
+            justify="left",
+            font=ui_font(9),
+        ).pack(anchor="w", padx=16, pady=(0, 6))
+
+    # --- Duplicate  check ----------------------------------------------
+    dupcheck_section = tk.Frame(misc_content, background=theme_win_bg)
     dupcheck_section.pack(fill="both", padx=8, pady=(0, 8))
     _section_header(dupcheck_section, tr("settings.duplicate_check"))
 
@@ -818,850 +1709,9 @@ def show_settings_dialog(
         variable=notif_dup_var,
     ).pack(fill="both", pady=(0, 5), padx=16)
 
-    appearance_section = tk.Frame(content, background=theme_win_bg)
-    appearance_section.pack(fill="both", padx=8, pady=(0, 8))
-    _section_header(appearance_section, tr("settings.appearance"))
-
-    def _on_showcase_count_change(value: str) -> None:
-        try:
-            set_setting_value("showcase", "count", value)
-        except Exception as e:
-            logger.error("Failed to write showcase count setting: %s", e)
-        if on_showcase_count_change is not None:
-            try:
-                on_showcase_count_change(int(value))
-            except (ValueError, TypeError):
-                pass
-
-    def _on_showcase_log_toggle():
-        _toggle_setting("showcase_log", showcase_log_var)
-        if on_showcase_log_change is not None:
-            on_showcase_log_change(showcase_log_var.get() == 1)
-
-    showcase_log_var = tk.IntVar(value=showcase_log_value)
-    tk.Checkbutton(
-        appearance_section,
-        text=tr("settings.show_log_row"),
-        cursor="hand2",
-        selectcolor=theme_check_select,
-        **checkbutton_style,
-        font=ui_font(12),
-        command=_on_showcase_log_toggle,
-        variable=showcase_log_var,
-    ).pack(fill="both", pady=(0,5), padx=16)
-
-    def _on_playlist_stats_toggle():
-        _toggle_setting("playlist_stats", playlist_stats_var)
-        if on_playlist_stats_change is not None:
-            on_playlist_stats_change(playlist_stats_var.get() == 1)
-
-    playlist_stats_var = tk.IntVar(value=playlist_stats_value)
-    tk.Checkbutton(
-        appearance_section,
-        text=tr("settings.show_playlist_stats"),
-        cursor="hand2",
-        selectcolor=theme_check_select,
-        **checkbutton_style,
-        font=ui_font(12),
-        command=_on_playlist_stats_toggle,
-        variable=playlist_stats_var,
-    ).pack(fill="both", pady=(0,5), padx=16)
-
-    # --- Song removal: ask before the showcase ✕ deletes a song.  The
-    # removal is always a full one (platform + local row + scrobble).
-    confirm_song_remove_var = tk.IntVar(
-        value=1 if get_setting("confirm_on_song_remove", fallback=True) else 0
-    )
-    tk.Checkbutton(
-        appearance_section,
-        text=tr("settings.ask_before_song_remove"),
-        cursor="hand2",
-        selectcolor=theme_check_select,
-        **checkbutton_style,
-        font=ui_font(12),
-        command=lambda: _toggle_setting(
-            "confirm_on_song_remove", confirm_song_remove_var
-        ),
-        variable=confirm_song_remove_var,
-    ).pack(fill="both", pady=(0,5), padx=16)
-
-    # --- Playlist removal: ask before a playlist card is closed; when
-    # not asking, [remove_playlist] default decides (Remove / Keep DB).
-    confirm_playlist_remove_var = tk.IntVar(
-        value=1 if get_setting("confirm_on_playlist_remove", fallback=True) else 0
-    )
-
-    def _on_confirm_playlist_remove_toggle():
-        _toggle_setting("confirm_on_playlist_remove", confirm_playlist_remove_var)
-        # The default-mode row is moot while the dialog is on.
-        try:
-            playlist_remove_combo.configure(
-                state="readonly" if confirm_playlist_remove_var.get() == 0 else "disabled"
-            )
-        except tk.TclError:
-            pass
-
-    tk.Checkbutton(
-        appearance_section,
-        text=tr("settings.ask_before_playlist_remove"),
-        cursor="hand2",
-        selectcolor=theme_check_select,
-        **checkbutton_style,
-        font=ui_font(12),
-        command=_on_confirm_playlist_remove_toggle,
-        variable=confirm_playlist_remove_var,
-    ).pack(fill="both", pady=(0,5), padx=16)
-
-    playlist_remove_default_value = get_setting_value(
-        "remove_playlist", "default", REMOVE_PLAYLIST_DEFAULT_MODE
-    )
-    _REMOVAL_LABELS = {
-        k: tr(f"settings.removal_mode_{k}") for k in REMOVE_PLAYLIST_MODE_LABELS
-    }
-    playlist_remove_default_label = _REMOVAL_LABELS.get(
-        playlist_remove_default_value,
-        _REMOVAL_LABELS[REMOVE_PLAYLIST_DEFAULT_MODE],
-    )
-
-    def _on_playlist_remove_default_change(label_value):
-        chosen = next(
-            (k for k, v in _REMOVAL_LABELS.items() if v == label_value),
-            REMOVE_PLAYLIST_DEFAULT_MODE,
-        )
-        try:
-            set_setting_value("remove_playlist", "default", chosen)
-        except Exception as e:
-            logger.error("Failed to save playlist-removal default: %s", e)
-
-    playlist_remove_default_row = tk.Frame(appearance_section, background=theme_check_bg)
-    playlist_remove_default_row.pack(fill="both", pady=(0,5), padx=16)
-    tk.Label(
-        playlist_remove_default_row,
-        text=tr("settings.default_playlist_removal"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(12),
-    ).pack(side="left", pady=(0,5))
-
-    playlist_remove_var = tk.StringVar(value=playlist_remove_default_label)
-    playlist_remove_combo = ttk.Combobox(
-        playlist_remove_default_row,
-        textvariable=playlist_remove_var,
-        cursor="hand2",
-        values=tuple(_REMOVAL_LABELS.values()),
-        state="disabled" if confirm_playlist_remove_var.get() == 1 else "readonly",
-        width=18,
-        font=ui_font(12),
-    )
-    playlist_remove_combo.pack(side="left", pady=(0,5))
-    playlist_remove_combo.bind(
-        "<<ComboboxSelected>>",
-        lambda e: _on_playlist_remove_default_change(playlist_remove_var.get()),
-    )
-
-    showcase_row = tk.Frame(appearance_section, background=theme_check_bg)
-    showcase_row.pack(fill="both", pady=(0,5), padx=16)
-    tk.Label(
-        showcase_row,
-        text=tr("settings.show_last_n_added"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(12),
-    ).pack(side="left", pady=(0,5))
-
-    showcase_count_var = tk.StringVar(value=str(showcase_count_value))
-    showcase_combo = ttk.Combobox(
-        showcase_row,
-        textvariable=showcase_count_var,
-        cursor="hand2",
-        values=("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"),
-        state="readonly",
-        width=4,
-        font=ui_font(12),
-    )
-    showcase_combo.pack(side="left", pady=(0,5))
-    showcase_combo.bind(
-        "<<ComboboxSelected>>",
-        lambda e: _on_showcase_count_change(showcase_count_var.get()),
-    )
-    tk.Label(
-        showcase_row,
-        text=tr("settings.zero_off_hint"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(9),
-    ).pack(side="left", pady=(0,5))
-
-    def _on_ui_scale_change(value: str) -> None:
-        try:
-            set_setting_value("ui_scale", "value", value)
-        except Exception as e:
-            logger.error("Failed to write ui_scale setting: %s", e)
-
-    scale_row = tk.Frame(appearance_section, background=theme_check_bg)
-    scale_row.pack(fill="both", pady=(0, 5), padx=16)
-    tk.Label(
-        scale_row,
-        text=tr("settings.ui_scale"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(12),
-    ).pack(side="left", pady=(0,5))
-
-    scale_var = tk.StringVar(value=get_setting_value("ui_scale", "value", "auto"))
-    scale_combo = ttk.Combobox(
-        scale_row,
-        textvariable=scale_var,
-        cursor="hand2",
-        values=UI_SCALE_PRESETS,
-        state="readonly",
-        width=6,
-        font=ui_font(12),
-    )
-    scale_combo.pack(side="left", pady=(0,5))
-    scale_combo.bind(
-        "<<ComboboxSelected>>",
-        lambda e: _on_ui_scale_change(scale_var.get()),
-    )
-    tk.Label(
-        scale_row,
-        text=tr("settings.restart_to_apply"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(9),
-    ).pack(side="left", pady=(0,5))
-
-    # --- Font family ---
-    def _on_font_family_change(value: str) -> None:
-        try:
-            set_setting_value("font", "family", value)
-        except Exception as e:
-            logger.error("Failed to write font family setting: %s", e)
-
-    font_family_row = tk.Frame(appearance_section, background=theme_check_bg)
-    font_family_row.pack(fill="both", pady=(0,5), padx=16)
-    tk.Label(
-        font_family_row,
-        text=tr("settings.font"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(12),
-    ).pack(side="left", pady=(0,5))
-
-    # Build the family list: "(Default)" first, then every Tk-known family
-    # sorted case-insensitively.
-    _all_families = sorted(set(tkinter.font.families()), key=str.casefold)
-    font_family_values = ["(Default)"] + list(_all_families)
-    # If user has a custom family selected, make sure it appears in the list.
-    if font_family_value and font_family_value not in _all_families:
-        font_family_values.insert(0, font_family_value)
-
-    font_family_var = tk.StringVar(
-        value=font_family_value if font_family_value else "(Default)"
-    )
-    font_family_combo = ttk.Combobox(
-        font_family_row,
-        textvariable=font_family_var,
-        cursor="hand2",
-        values=font_family_values,
-        state="readonly",
-        width=18,
-        font=ui_font(12),
-    )
-    font_family_combo.pack(side="left", pady=(0,5))
-    font_family_combo.bind(
-        "<<ComboboxSelected>>",
-        lambda e: _on_font_family_change(
-            "" if font_family_var.get() == "(Default)" else font_family_var.get()
-        ),
-    )
-    tk.Label(
-        font_family_row,
-        text=tr("settings.restart_to_apply"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(9),
-    ).pack(side="left", pady=(0,5))
-
-    # --- Language (restart to apply) ---
-    def _on_language_change(value: str) -> None:
-        try:
-            set_setting_value("language", "lang", language_code_for(value))
-        except Exception as e:
-            logger.error("Failed to write language setting: %s", e)
-
-    _lang_codes = available_languages()
-    language_row = tk.Frame(appearance_section, background=theme_check_bg)
-    language_row.pack(fill="both", pady=(0, 5), padx=16)
-    tk.Label(
-        language_row,
-        text=tr("settings.language"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(12),
-    ).pack(side="left", pady=(0,5))
-
-    language_var = tk.StringVar(
-        value=language_display(get_setting_value("language", "lang", "en"))
-    )
-    language_combo = ttk.Combobox(
-        language_row,
-        textvariable=language_var,
-        cursor="hand2",
-        values=tuple(language_display(c) for c in _lang_codes),
-        state="readonly",
-        width=12,
-        font=ui_font(12),
-    )
-    language_combo.pack(side="left", pady=(0,5))
-    language_combo.bind(
-        "<<ComboboxSelected>>",
-        lambda e: _on_language_change(language_var.get()),
-    )
-    tk.Label(
-        language_row,
-        text=tr("settings.restart_to_apply"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(9),
-    ).pack(side="left", pady=(0,5))
-
-    # --- Thumbnails (data-saver modes) ---
-    # Mode keys match utils.config.THUMBNAIL_MODES; the combo shows
-    # friendly labels.  The mode is read per fetch, so a change applies
-    # live (existing in-memory/disk entries are simply reused as-is).
-    _THUMBNAIL_LABELS = tuple(
-        (mode, tr(f"settings.thumbnail_mode_{mode}")) for mode in THUMBNAIL_MODES
-    )
-
-    def _on_thumbnail_mode_change(value: str) -> None:
-        key = value
-        for k, label in _THUMBNAIL_LABELS:
-            if label == value:
-                key = k
-                break
-        try:
-            set_setting_value("thumbnails", "mode", key)
-        except Exception as e:
-            logger.error("Failed to write thumbnail mode setting: %s", e)
-
-    thumb_row = tk.Frame(appearance_section, background=theme_check_bg)
-    thumb_row.pack(fill="both", pady=(0,5), padx=16)
-    tk.Label(
-        thumb_row,
-        text=tr("settings.data_saver"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(12),
-    ).pack(side="left", pady=(0,5))
-
-    thumb_mode_value = get_setting_value("thumbnails", "mode", "off")
-    if thumb_mode_value not in THUMBNAIL_MODES:
-        thumb_mode_value = "off"
-    _thumb_key_to_label = dict(_THUMBNAIL_LABELS)
-    thumb_labels = tuple(_thumb_key_to_label.values())
-    thumb_var = tk.StringVar(value=_thumb_key_to_label[thumb_mode_value])
-    thumb_combo = ttk.Combobox(
-        thumb_row,
-        textvariable=thumb_var,
-        cursor="hand2",
-        values=thumb_labels,
-        state="readonly",
-        width=22,
-        font=ui_font(12),
-    )
-    thumb_combo.pack(side="left", pady=(0,5))
-    thumb_combo.bind(
-        "<<ComboboxSelected>>",
-        lambda e: _on_thumbnail_mode_change(thumb_var.get()),
-    )
-
-    cache_size_var = tk.StringVar(value="")
-
-    def _refresh_cache_size_label() -> None:
-        try:
-            size = ThumbnailService.disk_cache_size()
-        except Exception:
-            size = 0
-        if size > 0:
-            text = (
-                f"{size / (1024 * 1024):.1f} MB"
-                if size >= 1024 * 1024
-                else f"{size / 1024:.0f} KB"
-            )
-        else:
-            text = tr("settings.cache_empty")
-        cache_size_var.set(f"({text})")
-
-    tk.Label(
-        thumb_row,
-        textvariable=cache_size_var,
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(9),
-    ).pack(side="left", pady=(0,5), padx=(6, 0))
-    _refresh_cache_size_label()
-
-    tk.Label(
-        appearance_section,
-        text=tr("settings.thumbnails_modes_desc"),
-        background=theme_win_bg,
-        foreground=theme_label_fg,
-        justify="left",
-        font=ui_font(9),
-    ).pack(anchor="w", padx=16, pady=(0, 6))
-
-    def _on_clear_cache() -> None:
-        if not messagebox.askyesno(
-            tr("settings.clear_thumbnail_cache_title"),
-            tr("settings.clear_thumbnail_cache_ask"),
-            parent=win,
-        ):
-            return
-        try:
-            ThumbnailService.clear_disk_cache()
-        except Exception as e:
-            logger.error("Failed to clear thumbnail cache: %s", e)
-            return
-        _refresh_cache_size_label()
-
-    tk.Button(
-        appearance_section,
-        text=tr("settings.clear_thumbnail_cache"),
-        cursor="hand2",
-        relief="raised",
-        bd=0,
-        highlightthickness=0,
-        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
-        font=ui_font(10),
-        command=_on_clear_cache,
-    ).pack(fill="x", pady=(0, 5), padx=16)
-
-    def _on_columns_change(value: str) -> None:
-        try:
-            set_setting_value("layout", "columns", value)
-        except Exception as e:
-            logger.error("Failed to write columns setting: %s", e)
-        if on_columns_change is not None:
-            try:
-                on_columns_change(int(value))
-            except (ValueError, TypeError):
-                pass
-
-    columns_row = tk.Frame(appearance_section, background=theme_check_bg)
-    columns_row.pack(fill="both", pady=(0,5), padx=16)
-    tk.Label(
-        columns_row,
-        text=tr("settings.card_columns"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(12),
-    ).pack(side="left", pady=(0,5))
-
-    columns_var = tk.StringVar(value=str(columns_value))
-    columns_combo = ttk.Combobox(
-        columns_row,
-        textvariable=columns_var,
-        cursor="hand2",
-        values=("1", "2", "3", "4"),
-        state="readonly",
-        width=4,
-        font=ui_font(12),
-    )
-    columns_combo.pack(side="left", pady=(0,5))
-    columns_combo.bind(
-        "<<ComboboxSelected>>",
-        lambda e: _on_columns_change(columns_var.get()),
-    )
-
-    tk.Button(
-        appearance_section,
-        text=tr("settings.theme_settings"),
-        cursor="hand2",
-        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
-        font=ui_font(12),
-        highlightthickness=0,
-        relief="raised",
-        bd=0,
-        command=lambda: show_theme_dialog(win, on_theme_change=on_theme_change),
-    ).pack(fill="both", pady=(0,4), padx=16)
-
-    # -- Notification bar section ----------------------------------------
-    # Fixed status row ("Playlist | Artist - Song | Status"); the
-    # Artist - Song segment aligns left or center, the bar itself sits
-    # top (above the header) / below the header / bottom (under the
-    # cards).  The near-duplicate prompt toggle lives in the Duplicate
-    # Check section (same [notification_bar] settings group).
-    notif_section = tk.Frame(content, background=theme_win_bg)
-    notif_section.pack(fill="both", padx=8, pady=(0, 8))
-    _section_header(notif_section, tr("settings.notification_bar"))
-
-    notif_enabled_var = tk.IntVar(
-        value=1 if get_setting_value("notification_bar", "enabled", "yes") == "yes" else 0
-    )
-
-    def _on_notif_enabled_toggle():
-        try:
-            set_setting_value(
-                "notification_bar", "enabled",
-                "yes" if notif_enabled_var.get() else "no",
-            )
-        except Exception as e:
-            logger.error("Failed to write notification_bar enabled setting: %s", e)
-        if on_notif_enabled_change is not None:
-            try:
-                on_notif_enabled_change(bool(notif_enabled_var.get()))
-            except Exception as e:
-                logger.error("Failed to apply notification_bar enabled change: %s", e)
-
-    tk.Checkbutton(
-        notif_section,
-        text=tr("settings.notif_enabled"),
-        cursor="hand2",
-        selectcolor=theme_check_select,
-        **checkbutton_style,
-        font=ui_font(12),
-        command=_on_notif_enabled_toggle,
-        variable=notif_enabled_var,
-    ).pack(fill="both", pady=(0, 2), padx=16)
-
-    # --- Artist - Song segment alignment (left / center) -----------------
-    def _align_label(key: str) -> str:
-        return tr(f"settings.notif_song_align_{key}")
-
-    align_var = tk.StringVar(value=_align_label(resolve_notification_align()))
-
-    def _on_align_change(value: str) -> None:
-        key = next(
-            (k for k in NOTIFICATION_SONG_ALIGNS if _align_label(k) == value),
-            NOTIFICATION_DEFAULT_ALIGN,
-        )
-        try:
-            set_setting_value("notification_bar", "song_align", key)
-        except Exception as e:
-            logger.error("Failed to write notification_bar song_align: %s", e)
-        if on_notif_align_change is not None:
-            try:
-                on_notif_align_change(key)
-            except Exception as e:
-                logger.error("Failed to apply notification_bar song_align: %s", e)
-
-    align_row = tk.Frame(notif_section, background=theme_check_bg)
-    align_row.pack(fill="both", pady=(2, 5), padx=16)
-    tk.Label(
-        align_row,
-        text=tr("settings.notif_song_align"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(12),
-    ).pack(side="left", pady=(0, 5))
-    align_combo = ttk.Combobox(
-        align_row,
-        textvariable=align_var,
-        cursor="hand2",
-        values=[_align_label(k) for k in NOTIFICATION_SONG_ALIGNS],
-        state="readonly",
-        width=12,
-        font=ui_font(12),
-    )
-    align_combo.pack(side="left", pady=(0, 5))
-    align_combo.bind(
-        "<<ComboboxSelected>>",
-        lambda e: _on_align_change(align_var.get()),
-    )
-
-    # --- Bar location (top / below header / bottom) ----------------------
-    def _position_label(key: str) -> str:
-        return tr(f"settings.notif_position_{key}")
-
-    position_var = tk.StringVar(
-        value=_position_label(resolve_notification_position())
-    )
-
-    def _on_position_change(value: str) -> None:
-        key = next(
-            (k for k in NOTIFICATION_POSITIONS if _position_label(k) == value),
-            NOTIFICATION_DEFAULT_POSITION,
-        )
-        try:
-            set_setting_value("notification_bar", "position", key)
-        except Exception as e:
-            logger.error("Failed to write notification_bar position: %s", e)
-        if on_notif_position_change is not None:
-            try:
-                on_notif_position_change(key)
-            except Exception as e:
-                logger.error("Failed to apply notification_bar position: %s", e)
-
-    position_row = tk.Frame(notif_section, background=theme_check_bg)
-    position_row.pack(fill="both", pady=(0, 5), padx=16)
-    tk.Label(
-        position_row,
-        text=tr("settings.notif_position"),
-        background=theme_check_bg,
-        foreground=theme_check_fg,
-        font=ui_font(12),
-    ).pack(side="left", pady=(0, 5))
-    position_combo = ttk.Combobox(
-        position_row,
-        textvariable=position_var,
-        cursor="hand2",
-        values=[_position_label(k) for k in NOTIFICATION_POSITIONS],
-        state="readonly",
-        width=16,
-        font=ui_font(12),
-    )
-    position_combo.pack(side="left", pady=(0, 5))
-    position_combo.bind(
-        "<<ComboboxSelected>>",
-        lambda e: _on_position_change(position_var.get()),
-    )
-
-    # -- Last.fm section -----------------------------------------------
-    if has_lastfm:
-        lastfm_section = tk.Frame(content, background=theme_win_bg)
-        lastfm_section.pack(fill="both", padx=8, pady=(0, 8))
-        _section_header(lastfm_section, "Last.fm")
-
-        like_button_var = tk.BooleanVar(value=get_setting("like_button"))
-        like_button_check = tk.Checkbutton(
-            lastfm_section,
-            text=tr("settings.like_button"),
-            variable=like_button_var,
-            cursor="hand2",
-            selectcolor=theme_check_select,
-            **checkbutton_style,
-            font=ui_font(11),
-        )
-        like_button_check.pack(anchor="w", padx=16, pady=4)
-
-        def on_like_button_toggle():
-            enabled = bool(like_button_var.get())
-            _toggle_setting("like_button", like_button_var)
-            if on_like_button_change:
-                try:
-                    on_like_button_change(enabled)
-                except Exception as e:
-                    logger.error("Failed to apply like_button change: %s", e)
-
-        like_button_check.config(command=on_like_button_toggle)
-
-        scrobble_on_add_var = tk.BooleanVar(value=get_setting("scrobble_on_add"))
-        scrobble_on_add_check = tk.Checkbutton(
-            lastfm_section,
-            text=tr("settings.scrobble_added_songs"),
-            variable=scrobble_on_add_var,
-            cursor="hand2",
-            selectcolor=theme_check_select,
-            **checkbutton_style,
-            font=ui_font(11),
-        )
-        scrobble_on_add_check.pack(anchor="w", padx=16, pady=4)
-
-        # -- Per-platform scrobble sources ---------------------------------
-        # Only visible when the master gate is on.  Only installed music
-        # platforms are listed (Last.fm is the scrobble TARGET, never a
-        # source).  Storage semantics: empty = all installed (historical
-        # default), "none" = nothing, otherwise an explicit comma list.
-        scrobble_plat_area = tk.Frame(lastfm_section, background=theme_check_bg)
-        scrobble_plat_vars: dict = {}
-        raw_plat = get_setting_value("scrobble", "platforms", "")
-        _is_none = raw_plat.strip().lower() == SCROBBLE_NONE
-        _stored_ids = set() if _is_none else set(split_platforms(raw_plat))
-        _music_platforms = sorted(
-            (p for p in installed if p != "lastfm"),
-            key=lambda pid: (platform_display_names or {}).get(pid, pid).lower(),
-        )
-
-        if _music_platforms:
-            tk.Label(
-                scrobble_plat_area,
-                text=tr("settings.scrobble_platforms_from"),
-                background=theme_check_bg,
-                foreground=theme_check_fg,
-                font=ui_font(11),
-            ).pack(anchor="w", padx=4, pady=(6, 0))
-
-            _plat_scf = ScrollableFrame(
-                scrobble_plat_area,
-                bg=theme_check_bg,
-                max_viewport_height=px(100),
-            )
-            _plat_scf.pack(fill="both", padx=0, pady=(2, 4))
-            _plat_scf.update_scrollregion()
-            _plat_scf.style_scrollbar(
-                hover_bg(theme_check_fg), theme_check_bg,
-            )
-
-            for _pid in _music_platforms:
-                _pname = (platform_display_names or {}).get(_pid, _pid)
-                _var = tk.BooleanVar(
-                    value=(not _stored_ids and not _is_none) or _pid in _stored_ids,
-                )
-                _cb = tk.Checkbutton(
-                    _plat_scf.content,
-                    text=_pname,
-                    variable=_var,
-                    cursor="hand2",
-                    selectcolor=theme_check_select,
-                    **checkbutton_style,
-                    font=ui_font(11),
-                    command=lambda: set_setting_value(
-                        "scrobble",
-                        "platforms",
-                        ",".join(
-                            p for p in _music_platforms
-                            if scrobble_plat_vars[p].get()
-                        ) or SCROBBLE_NONE,
-                    ),
-                )
-                _cb.pack(anchor="w", padx=4, pady=1)
-                scrobble_plat_vars[_pid] = _var
-        else:
-            tk.Label(
-                scrobble_plat_area,
-                text=tr("settings.install_integration_first"),
-                background=theme_check_bg,
-                foreground=theme_check_fg,
-                font=ui_font(11),
-            ).pack(anchor="w", padx=4, pady=(6, 4))
-
-        def _apply_scrobble_list_visibility():
-            """Pack / un-pack the platform list based on the master gate."""
-            try:
-                if scrobble_on_add_var.get():
-                    scrobble_plat_area.pack(fill="x", padx=0, pady=(0, 4))
-                else:
-                    scrobble_plat_area.pack_forget()
-            except tk.TclError:
-                pass
-
-        def on_scrobble_on_add_toggle():
-            _toggle_setting("scrobble_on_add", scrobble_on_add_var)
-            _apply_scrobble_list_visibility()
-
-        scrobble_on_add_check.config(command=on_scrobble_on_add_toggle)
-        _apply_scrobble_list_visibility()
-
-        # Scrobble keybind capture row
-        scrobble_keybind_row = tk.Frame(lastfm_section, background=theme_check_bg)
-        scrobble_keybind_row.pack(fill="x", padx=16, pady=4)
-
-        tk.Label(
-            scrobble_keybind_row,
-            text=tr("settings.scrobble_keybind"),
-            background=theme_check_bg,
-            foreground=theme_check_fg,
-            font=ui_font(11),
-        ).pack(side="left")
-
-        scrobble_keybind_display = tk.Label(
-            scrobble_keybind_row,
-            text=get_setting_value("scrobble_keybind", "keybind") or tr("settings.keybind_none"),
-            background=theme_check_bg,
-            foreground=theme_check_fg,
-            font=ui_font(11),
-            anchor="w",
-        )
-        scrobble_keybind_display.pack(side="left", fill="x", expand=True, padx=(8, 4))
-
-        def capture_scrobble_keybind():
-            if not keybind_controller:
-                logger.warning("Keybind controller not available")
-                return
-
-            def on_combo(combo_str):
-                set_setting_value("scrobble_keybind", "keybind", combo_str)
-                scrobble_keybind_display.config(text=combo_str or tr("settings.keybind_none"))
-                if on_scrobble_keybind_change is not None:
-                    try:
-                        on_scrobble_keybind_change()
-                    except Exception as e:
-                        logger.error("Failed to re-register scrobble keybind: %s", e)
-
-            keybind_controller.start_recording(on_combo)
-
-        tk.Button(
-            scrobble_keybind_row,
-            text=tr("settings.record"),
-            cursor="hand2",
-            **btn_colors(C["button_main_bg"], C["button_main_fg"]),
-            font=ui_font(10),
-            highlightthickness=0,
-            relief="raised",
-            bd=0,
-            command=capture_scrobble_keybind,
-        ).pack(side="left", padx=(0, 4))
-
-        tk.Button(
-            scrobble_keybind_row,
-            text=tr("settings.clear"),
-            cursor="hand2",
-            **btn_colors(C["button_main_bg"], C["button_main_fg"]),
-            font=ui_font(10),
-            highlightthickness=0,
-            relief="raised",
-            bd=0,
-            command=lambda: (
-                set_setting_value("scrobble_keybind", "keybind", ""),
-                scrobble_keybind_display.config(text=tr("settings.keybind_none")),
-                on_scrobble_keybind_change() if on_scrobble_keybind_change is not None else None,
-            ),
-        ).pack(side="left")
-
-    if has_soundcloud:
-        # -- SoundCloud section ---------------------------------------------
-        soundcloud_section = tk.Frame(content, background=theme_win_bg)
-        soundcloud_section.pack(fill="both", padx=8, pady=(0, 8))
-        _section_header(soundcloud_section, "SoundCloud")
-
-        scmode_row = tk.Frame(soundcloud_section, background=theme_win_bg)
-        scmode_row.pack(fill="both", pady=(0, 5), padx=16)
-        tk.Label(
-            scmode_row,
-            text=tr("settings.capture_song_via"),
-            background=theme_win_bg,
-            foreground=theme_label_fg,
-            font=ui_font(12),
-        ).pack(side="left", pady=(0, 5))
-
-        scmode_var = tk.StringVar(
-            value=get_setting_value("soundcloud", "capture_mode", "hybrid")
-        )
-        scmode_combo = ttk.Combobox(
-            scmode_row,
-            textvariable=scmode_var,
-            cursor="hand2",
-            values=("hybrid", "api", "extension"),
-            state="readonly",
-            width=11,
-            font=ui_font(12),
-        )
-        scmode_combo.pack(side="left", pady=(0, 5))
-
-        def _on_soundcloud_mode_change(mode: str) -> None:
-            try:
-                set_setting_value("soundcloud", "capture_mode", mode)
-            except Exception:
-                logger.error("Failed to write SoundCloud capture mode", exc_info=True)
-            # Applied on the next flow build; keybind flows read it at
-            # construction (KeybindController refresh rebuilds the flow).
-
-        scmode_combo.bind(
-            "<<ComboboxSelected>>",
-            lambda e: _on_soundcloud_mode_change(scmode_var.get()),
-        )
-        tk.Label(
-            soundcloud_section,
-            text=tr("settings.soundcloud_mode_desc"),
-            background=theme_win_bg,
-            foreground=theme_label_fg,
-            justify="left",
-            font=ui_font(9),
-        ).pack(anchor="w", padx=16, pady=(0, 6))
 
     # -- Profiles section ----------------------------------------------
-    profiles_section = tk.Frame(content, background=theme_win_bg)
+    profiles_section = tk.Frame(misc_content, background=theme_win_bg)
     profiles_section.pack(fill="both", padx=8, pady=(0, 8))
     _section_header(profiles_section, tr("settings.profiles"))
 
@@ -1858,7 +1908,7 @@ def show_settings_dialog(
     # permissions.  The write paths enforce 0600 files / 0700 dirs; this
     # panel surfaces anything looser than that (hand edits, restoring
     # umasks, shared copies) with a warning color.
-    cred_section = tk.Frame(content, background=theme_win_bg)
+    cred_section = tk.Frame(integrations_content, background=theme_win_bg)
     cred_section.pack(fill="both", padx=8, pady=(0, 8))
     _section_header(cred_section, tr("settings.credentials_title"))
 
@@ -1967,7 +2017,7 @@ def show_settings_dialog(
             anchor="w",
         ).pack(fill="x", padx=16, pady=(4, 0))
 
-    about_section = tk.Frame(content, background=theme_win_bg)
+    about_section = tk.Frame(misc_content, background=theme_win_bg)
     about_section.pack(fill="both", padx=8, pady=(0, 8))
     _section_header(about_section, tr("settings.about"))
     tk.Label(
@@ -2018,18 +2068,26 @@ def show_settings_dialog(
         anchor="w",
     ).pack(fill="x", pady=(0,4), padx=16)
 
-    # Fit the window width to its content at the current font settings.
-    # Wide font families (e.g. Adwaita Mono) render rows much wider than
-    # the 420px default, and the scrollable canvas stretches its content
-    # to the window width with no horizontal scrollbar - wider content
-    # clips at the window edge.  Widen the window to the content's
-    # requested width instead (capped so a huge font cannot force a
-    # full-screen dialog); the 24px margin covers the scrollbar and frame
-    # paddings.
-    sf.update_scrollregion()
+    # Fit the window width to the WIDEST tab: with a tabbed layout the
+    # widest content may sit in a not-currently-visible tab, so every
+    # tab's scrollable is measured.  Wide font families (e.g. Adwaita
+    # Mono) render rows much wider than the default, and the scrollable
+    # canvas stretches its content to the window width with no horizontal
+    # scrollbar - wider content clips at the window edge.  Widen the
+    # window to the content's requested width instead (capped so a huge
+    # font cannot force a full-screen dialog); the 24px margin covers the
+    # scrollbar and frame paddings.
+    for _tab in tab_scfs:
+        _tab.update_scrollregion()
     win.update_idletasks()
-    needed = sf.content.winfo_reqwidth() + 24
-    if needed > 420:  # the default window width
+    needed = max(_tab.content.winfo_reqwidth() for _tab in tab_scfs) + 24
+    # Pin the notebook's request to the widest page.  Otherwise the tab
+    # row (or whichever page is selected first) wins, and
+    # fit_window_to_screen - which sizes an unmapped window from the
+    # toplevel's requested width - would leave the widest tab clipping at
+    # the right edge.
+    notebook.configure(width=needed)
+    if needed > 480:  # the default window width
         win.geometry(f"{min(needed, 900)}x{win.winfo_height()}")
 
     # Safety net: never open taller than the screen (the width cap above

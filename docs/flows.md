@@ -240,7 +240,7 @@ accepts connections while the OAuth token is revoked/expired.  Download /
 update / uninstall completion pops the per-platform verdict, so the next
 refresh re-probes the changed installation.
 
-## 11. Settings -> Stored credentials (paths & permissions)
+## 11. Settings -> Stored credentials (paths & permissions, Integrations tab)
 
 `main_window` opens `ui/settings_ui.show_settings_dialog` and hands in the
 live `plugin_registry` (new `plugin_registry=` kwarg; without it the

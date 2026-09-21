@@ -86,6 +86,11 @@ DEFAULT_STRINGS: dict[str, str] = {
     "showcase.stats.followers.other": "{count} followers",
     # --- settings dialog (app/ui/settings_ui.py) ------------------------------
     "settings.title": "Settings",
+    # Settings-dialog tabs (Behavior / Appearance / Playlists / Integrations / Misc)
+    "settings.tab_behavior": "Behavior",
+    "settings.tab_appearance": "Appearance",
+    "settings.tab_integrations": "Integrations",
+    "settings.tab_misc": "Misc",
     "settings.app_behavior": "App behavior",
     # Stored-credentials panel (paths & permissions)
     "settings.auth_dir_name": "Auth dir",
@@ -109,7 +114,7 @@ DEFAULT_STRINGS: dict[str, str] = {
     "settings.wayland_global_hint": "(not available on Wayland - use compositor shortcuts `playlistmanager add N`)",
     "settings.hide_in_tray": "Hide in tray on minimize",
     "settings.start_in_tray": "Start in tray (on next launch)",
-    "settings.pin_unpin_buttons": "Pin/unpin buttons (on playlist cards)",
+    "settings.pin_unpin_buttons": "Pin/unpin playlist buttons (on playlist cards)",
     "settings.sort_playlists_by": "Sort playlists by:",
     "settings.duplicate_check": "Duplicate check",
     "settings.extra_duplicate_check": "Extra duplicate check",
