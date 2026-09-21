@@ -87,6 +87,14 @@ DEFAULT_STRINGS: dict[str, str] = {
     # --- settings dialog (app/ui/settings_ui.py) ------------------------------
     "settings.title": "Settings",
     "settings.app_behavior": "App behavior",
+    # Stored-credentials panel (paths & permissions)
+    "settings.auth_dir_name": "Auth dir",
+    "settings.cred_missing": "missing",
+    "settings.cred_open": "{mode} - open permissions",
+    "settings.credentials_dir": "Credentials live in: {path}",
+    "settings.credentials_none": "No platforms declare credential files.",
+    "settings.credentials_title": "Stored credentials",
+    "settings.open_auth_dir": "Open auth dir",
     "settings.checking": "Checking...",
     "settings.check_updates_now": "Check for updates now",
     "settings.check_failed_retry": "Check failed - try again",
@@ -427,6 +435,10 @@ DEFAULT_STRINGS: dict[str, str] = {
     "activity.pending_songs_count": "Pending songs ({count})",
     "activity.scan_results_count": "Scan results ({count})",
     "activity.marked_pairs": "Marked / decided pairs ({count}) {arrow}",
+    # --- notification bar (app/ui/notification_bar.py) --------------------------------
+    "notif.duplicate_prompt": "Similar song already in playlist",
+    "notif.scan_found.one": "Duplicate scan: {count} pending",
+    "notif.scan_found.other": "Duplicate scan: {count} pending",
     # --- playlist picker (app/ui/playlist_dialog.py) ---------------------------------
     "playlist_picker.select_hint": "Select a Playlist below",
     # --- theme picker (app/ui/settings_theme_ui.py) ----------------------------------
@@ -512,6 +524,17 @@ DEFAULT_STRINGS: dict[str, str] = {
     "settings.edit_profile_title": "Edit profile: {name}",
     "settings.profile_keep_separate": "What does this profile keep separate?",
     "settings.profile_changes_restart": "Changes take effect after the app restarts.",
+    # --- notification bar section (app/ui/settings_ui.py) -----------------------------
+    "settings.notification_bar": "Notification bar",
+    "settings.notif_enabled": "Show notification bar",
+    "settings.notif_song_align": "Artist - Song position",
+    "settings.notif_song_align_left": "Left",
+    "settings.notif_song_align_center": "Center",
+    "settings.notif_position": "Notification bar location",
+    "settings.notif_position_top": "Top (fixed)",
+    "settings.notif_position_below_header": "Below header",
+    "settings.notif_position_bottom": "Bottom (fixed)",
+    "settings.notif_show_duplicates": "Show duplicate prompts in the notification bar",
 }
 
 #: Known card-status codes (:func:`tr_status` translates only these).

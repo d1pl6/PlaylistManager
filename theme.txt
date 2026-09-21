@@ -42,6 +42,8 @@ label_playlist_stats_fg
 scrollable_frame_bg
 search_bar_bg
 search_bar_fg
+notif_bar_bg
+notif_bar_fg
 search_result_bg
 search_result_fg
 

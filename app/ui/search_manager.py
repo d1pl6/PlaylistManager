@@ -30,6 +30,7 @@ class SearchManager:
         sync_empty_state,
         update_card_height,
         update_scrollregion,
+        search_row: int = 1,
     ) -> None:
         self.root = root
         self._card_grid = card_grid
@@ -41,6 +42,11 @@ class SearchManager:
         self._sync_empty_state = sync_empty_state
         self._update_card_height = update_card_height
         self._update_scrollregion = update_scrollregion
+
+        # Root-grid row the search bar is gridded at.  The notification
+        # bar steals a row, so MainWindow pushes the computed row here
+        # and re-pushes it on a position change (see set_row).
+        self._search_row = search_row
 
         self._search_mode: str | None = None
         self._search_frame: tk.Frame | None = None
@@ -54,6 +60,19 @@ class SearchManager:
         self._columns = columns
         if self._search_frame is not None and self._search_frame.winfo_ismapped():
             self._search_frame.grid_configure(columnspan=columns)
+
+    def set_row(self, row: int) -> None:
+        """Re-target the search bar's root-grid row (notification-bar layout).
+
+        A visible bar is re-gridded in place; a hidden one just records
+        the new row for the next ``_show_search_bar``.
+        """
+        self._search_row = row
+        if self._search_frame is not None and self._search_frame.winfo_ismapped():
+            try:
+                self._search_frame.grid_configure(row=row)
+            except tk.TclError:
+                pass
 
     def on_card_closed(self, index: int) -> None:
         """Renumber search results after a card is removed from the grid."""
@@ -101,7 +120,7 @@ class SearchManager:
 
         self._search_frame = tk.Frame(self.root, background=search_bg, pady=3, padx=6)
         self._search_frame.grid(
-            row=1, column=0, columnspan=self._columns, sticky="ew"
+            row=self._search_row, column=0, columnspan=self._columns, sticky="ew"
         )
 
         placeholder = (

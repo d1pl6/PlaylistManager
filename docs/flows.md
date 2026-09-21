@@ -239,3 +239,79 @@ The verdict catches the case a TCP probe cannot: the platform endpoint
 accepts connections while the OAuth token is revoked/expired.  Download /
 update / uninstall completion pops the per-platform verdict, so the next
 refresh re-probes the changed installation.
+
+## 11. Settings -> Stored credentials (paths & permissions)
+
+`main_window` opens `ui/settings_ui.show_settings_dialog` and hands in the
+live `plugin_registry` (new `plugin_registry=` kwarg; without it the
+section falls back to the hardcoded `auth_setup.PLATFORM_CREDENTIAL_FILES`
+map).  The section renders, at dialog build time:
+
+1. The profile-aware auth dir (`profile_store.auth_dir()`) as its own
+   first row, plus an "Open auth dir" button calling
+   `utils.platform.open_directory` (creates the dir with 0o700 first when
+   absent - the same enforcement the YT auth flow applies).
+2. One row per installed platform (`plugin_registry.get_all()`) with a
+   declared `auth_file`; each manifest-declared path
+   (`PluginInfo.auth_paths`: auth-dir file + repo-root fallbacks) is
+   listed with its on-disk status from
+   `services.auth_setup.credential_path_status(path)`:
+   - exists + private (no group/other bits; the 0600/0700 policy) ->
+     the octal mode in green;
+   - exists + loose (group/other bits set - hand edit, restoring umask,
+     shared copy) -> "{mode} - open permissions" in warning color;
+   - missing -> "missing" in the default label color.
+
+The panel is a read-only view - login/logout/uninstall remain the
+mutating paths.  Credential *writes* still go through the per-platform
+0600 writers / 0700 dir enforcement (see modules.md); this section only
+surfaces what is actually on disk.
+
+## 12. Notification bar (status row + duplicate prompts)
+
+A fixed row (default: directly under the header) renders the last
+flow event as `Playlist | Artist - Song | Status`.  The widget is
+`ui/notification_bar.py`; `main_window` owns it and feeds it.  There is
+no pub-sub plumbing for the bar - the event feed rides the call chains
+that already exist:
+
+1. **Keybind add-song** (`_make_keybind_callbacks`): `on_song_info`
+   remembers the last non-empty artist/song into `main_window._notif_song`
+   (status callbacks fire *before* the song info in the flow, so the bar
+   cannot read the card labels); `on_status` forwards terminal status
+   codes as distinct event kinds (`duplicate`/`exists`/`error`/opaque
+   messages) to `notification_bar.show_event(...)` - the transient
+   `busy`/`loading` states and the `added` code are skipped (the added
+   outcome is re-rendered authoritatively by `on_song_added`), so the bar
+   shows results, not progress.
+2. **Duplicate prompts** (inline **Add** / **Don't add** buttons): the
+   service layer has no UI hooks (the CLI writes the same
+   `db/extra.json`), so prompts are poll-driven - the existing 2 s
+   `_poll_activity_stamp` badge poll (extra.json mtime) calls
+   `notification_bar.on_store_changed(pending, duplicates_enabled)`.
+   The bar takes over only when it is idle or already showing a
+   duplicate/scan result - an "added"/"exists"/"error" event stays
+   visible until the next event.  The buttons fire
+   `on_action(record, "add"|"dismiss")` through the same
+   `_handle_activity_song` dispatcher the Activity window uses (dismiss
+   additionally calls `clear_prompt()` so the bar does not linger on a
+   resolved record).
+3. **Pending add outcomes** (`_pending_add_worker`): success
+   (`added`/`exists`/`duplicate`) and errors render bar events from the
+   queued record's own fields (colors resolved on the UI thread inside
+   the scheduled call - worker threads never read theme state).
+4. **Manual duplicate scan** (`_run_duplicate_scan._publish`): a found
+   count renders a `notif.scan_found` plural-status event (and still
+   opens the Activity window).
+
+Settings (`[notification_bar]`, see config.md): `enabled` toggles the
+bar itself (grid show/hide), `song_align` re-anchors the Artist - Song
+segment, `position` re-assigns the root-grid rows of header/bar/search/
+cards (`utils.config.compute_notification_rows`; the search bar follows
+via `SearchManager.set_row`), `duplicates` gates the inline prompts
+(checkbox also exposed in the Settings Duplicate Check section).
+
+**Desktop Notification (future)**: `show_event(kind, ...)` is the single
+choke point every notification funnels through, so a later desktop sink
+plugs in here without re-plumbing - it needs a new `desktop` setting key
+and a `show_event` branch, nothing else.

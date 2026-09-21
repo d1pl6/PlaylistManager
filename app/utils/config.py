@@ -100,6 +100,20 @@ DEFAULT_SETTINGS = {
     # "pinned" flags live per-playlist in the registry, not here.
     "grid_sort": {"key": "name", "direction": "asc"},
     "show_pin_buttons": {"is_true": "yes"},  # per-card pin/unpin buttons
+    # Notification bar: a fixed status row showing the last flow event
+    # ("Playlist | Artist - Song | Status").  Read by
+    # ui/notification_bar.py (via the resolve_* helpers below).
+    #   enabled    - show the bar at all
+    #   song_align - "left" | "center" — Artist - Song segment alignment
+    #   position   - "top" | "below_header" | "bottom" — bar location
+    #   duplicates - show queued near-duplicate prompts (inline
+    #                Add / Don't-add) in the bar
+    "notification_bar": {
+        "enabled": "yes",
+        "song_align": "center",
+        "position": "below_header",
+        "duplicates": "yes",
+    },
 }
 
 # Valid [thumbnails] mode values; anything else falls back to "off".
@@ -143,6 +157,75 @@ GRID_SORT_KEY_LABELS = {
 GRID_SORT_DIRECTIONS = ("asc", "desc")
 GRID_SORT_DEFAULT_KEY = "name"
 GRID_SORT_DEFAULT_DIRECTION = "asc"
+
+# [notification_bar] location / alignment values (read by
+# ui/notification_bar.py + ui/main_window.py).  Labels for the Settings
+# comboboxes live in the i18n catalog (settings.notif_position_* /
+# settings.notif_song_align_*) - every user-facing string is translated.
+NOTIFICATION_POSITIONS = ("top", "below_header", "bottom")
+NOTIFICATION_DEFAULT_POSITION = "below_header"
+NOTIFICATION_SONG_ALIGNS = ("left", "center")
+NOTIFICATION_DEFAULT_ALIGN = "center"
+
+
+def resolve_notification_position() -> str:
+    """Read ``[notification_bar] position``, falling back to the default.
+
+    Any stored value outside ``NOTIFICATION_POSITIONS`` (hand edit,
+    legacy value, corrupt file) falls back to ``"below_header"`` - same
+    discipline as the thumbnail/sort resolvers.
+    """
+    value = get_setting_value(
+        "notification_bar", "position", NOTIFICATION_DEFAULT_POSITION
+    )
+    if value in NOTIFICATION_POSITIONS:
+        return value
+    return NOTIFICATION_DEFAULT_POSITION
+
+
+def resolve_notification_align() -> str:
+    """Read ``[notification_bar] song_align`` (default ``"center"``)."""
+    value = get_setting_value(
+        "notification_bar", "song_align", NOTIFICATION_DEFAULT_ALIGN
+    )
+    if value in NOTIFICATION_SONG_ALIGNS:
+        return value
+    return NOTIFICATION_DEFAULT_ALIGN
+
+
+def notification_bar_enabled() -> bool:
+    """Whether the notification bar should be shown (default yes)."""
+    return get_setting_value("notification_bar", "enabled", "yes") == "yes"
+
+
+def notification_duplicates_enabled() -> bool:
+    """Whether near-duplicate prompts appear in the bar (default yes)."""
+    return get_setting_value("notification_bar", "duplicates", "yes") == "yes"
+
+
+def compute_notification_rows(position: str) -> dict:
+    """Root-grid rows for the header / notification bar / search bar / main area.
+
+    The search bar is a transient row that currently hardcodes ``row=1``;
+    the bar steals a row, so the position setting re-assigns every widget
+    to keep the mapping collision-free:
+
+    ==============  =====  =====  =====  =====
+    position        notif  header search main
+    ==============  =====  =====  =====  =====
+    ``top``         0      1      2      3
+    ``below_header`` 1     0      2      3
+    ``bottom``      3      0      1      2
+    ==============  =====  =====  =====  =====
+
+    Unknown positions fall back to ``below_header``.  Pure function -
+    headless-testable, no config read.
+    """
+    if position == "top":
+        return {"header": 1, "notif": 0, "search": 2, "main": 3}
+    if position == "bottom":
+        return {"header": 0, "notif": 3, "search": 1, "main": 2}
+    return {"header": 0, "notif": 1, "search": 2, "main": 3}
 
 # Playlist-close mode choices (see DEFAULT_SETTINGS [remove_playlist]).
 # The labels are shown in the Settings combobox.
@@ -218,6 +301,10 @@ DEFAULT_THEME = {
     "search_bar": {
         "background": "#1E1E1E",
         "foreground": "#E0E0E0",
+    },
+    "notification_bar": {
+        "background": "#1E1E1E",
+        "foreground": "#EDEDED",
     },
     "search_result": {
         "background": "#2A2A2A",
@@ -381,6 +468,10 @@ THEME_PRESETS = {
         "search_bar": {
             "background": "#F0F0F0",
             "foreground": "#111111",
+        },
+        "notification_bar": {
+            "background": "#F0F0F0",
+            "foreground": "#1A1A1A",
         },
         "search_result": {
             "background": "#F5F5F5",

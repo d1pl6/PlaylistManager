@@ -29,9 +29,10 @@ from services.playlist_sync import PlaylistSyncService
 from services.song_manager import SongManager
 from utils.icons import IconService
 from utils.scaling import px, ui_font
-from utils.i18n import tr, tr_status
+from utils.i18n import tr, trn, tr_status
 from ui.activity_window import show_activity_window
 from ui.card_grid import CardGridManager
+from ui.notification_bar import NotificationBar
 from ui.search_manager import SearchManager
 from ui.showcase_manager import ShowcaseManager
 from ui.login_ui import show_login_dialog
@@ -42,8 +43,12 @@ from utils.window import center_window, resize_window
 from utils.config import (
     GRID_SORT_DEFAULT_DIRECTION,
     GRID_SORT_DEFAULT_KEY,
+    compute_notification_rows,
     get_setting,
     get_setting_value,
+    notification_bar_enabled,
+    notification_duplicates_enabled,
+    resolve_notification_position,
     set_setting_value,
 )
 from ui.scrollable import ScrollableFrame
@@ -99,6 +104,11 @@ class MainWindow:
         self._connectivity_after_id: str | None = None
         self._service_after_id: str | None = None
         self._activity_poll_after_id: str | None = None
+
+        # Last song info seen by a keybind flow - the notification bar
+        # pairs it with the flow's status code (on_status fires before
+        # on_song_info, so the bar cannot read the card labels).
+        self._notif_song: tuple[str, str] = ("", "")
 
         # Drag-to-move anchor; only meaningful between <Button-1> and the
         # following <B1-Motion>, but initialized so a synthetic motion
@@ -178,6 +188,11 @@ class MainWindow:
         self.main_area.grid(
             row=2, column=0, columnspan=self._columns, sticky="nsew"
         )
+
+        # ----- notification bar (fixed status row; see _apply_notification_layout)
+        self.notification_bar = NotificationBar(
+            self.root, on_action=self._handle_activity_song
+        )
         self.sf = ScrollableFrame(
             self.main_area, bg=C["scrollable_frame_bg"],
             show_scrollbar=False,
@@ -249,11 +264,72 @@ class MainWindow:
             playlist_cover_img_path=playlist_cover_img_path,
         )
 
+        # Place the header / notification bar / search bar / main area on
+        # their [notification_bar] position rows (the default below-header
+        # layout matches the historical rows until a setting says otherwise).
+        self._apply_notification_layout()
+
     def _card_index(self, card) -> int | None:
         try:
             return self.card_grid.cards.index(card)
         except ValueError:
             return None
+
+    # ------------------------------------------------------------------
+    # Notification bar layout
+    # ------------------------------------------------------------------
+
+    def _apply_notification_layout(self) -> None:
+        """Grid the header / notification bar / main area on the position rows.
+
+        The root grid owns four rows: header, notification bar, the
+        transient search bar, and the cards area.  ``[notification_bar]
+        position`` picks the assignment via
+        :func:`utils.config.compute_notification_rows` (``top`` puts the
+        bar above the header, ``below_header`` between header and search,
+        ``bottom`` under the cards).  Called at init and live from the
+        Settings dialog on a position/enabled change.
+        """
+        rows = compute_notification_rows(resolve_notification_position())
+        for r in range(4):
+            self.root.grid_rowconfigure(r, weight=1 if r == rows["main"] else 0)
+        self.header_frame.grid(
+            row=rows["header"], column=0, columnspan=self._columns, sticky="nsew"
+        )
+        if notification_bar_enabled():
+            self.notification_bar.grid(
+                row=rows["notif"], column=0, columnspan=self._columns, sticky="ew"
+            )
+        else:
+            self.notification_bar.grid_remove()
+        self.main_area.grid(
+            row=rows["main"], column=0, columnspan=self._columns, sticky="nsew"
+        )
+        self.search.set_row(rows["search"])
+
+    def _apply_notification_enabled(self, enabled: bool) -> None:
+        """Live show/hide the notification bar (Settings → Notification bar)."""
+        self.notification_bar.set_enabled(enabled)
+        self._apply_notification_layout()
+        self._fit_window()
+
+    def _apply_notification_align(self, align: str) -> None:
+        """Live re-anchor the Artist - Song segment (Settings)."""
+        self.notification_bar.set_song_align(align)
+
+    def _apply_notification_position(self, position: str) -> None:
+        """Live relocate the notification bar (Settings → location)."""
+        self._apply_notification_layout()
+        self._fit_window()
+
+    def _apply_notification_duplicates(self, enabled: bool) -> None:
+        """Live toggle duplicate prompts in the bar (Settings → Duplicate Check)."""
+        self.notification_bar.set_duplicates_enabled(enabled)
+        try:
+            pending = duplicate_queue.list_pending()
+        except Exception:
+            pending = []
+        self.notification_bar.on_store_changed(pending, enabled)
 
     # ------------------------------------------------------------------
     # CardGridManager callbacks
@@ -316,6 +392,7 @@ class MainWindow:
 
         self.card_grid.apply_theme()
         self.search.apply_theme()
+        self.notification_bar.apply_theme()
 
     # ------------------------------------------------------------------
     # Widget creation
@@ -392,12 +469,17 @@ on_like_button_change=self._apply_like_button_visibility,
                 on_pin_buttons_change=self._apply_pin_visibility,
                 on_sort_change=self.apply_grid_sort,
                 on_scrobble_keybind_change=self._register_scrobble_keybind,
+                on_notif_enabled_change=self._apply_notification_enabled,
+                on_notif_align_change=self._apply_notification_align,
+                on_notif_position_change=self._apply_notification_position,
+                on_notif_duplicates_change=self._apply_notification_duplicates,
                 on_restart_app=self.ac.restart_app,
                 plugin_availability=set(self.integrations.get_all()),
                 platform_display_names={
                     pid: integ.display_name
                     for pid, integ in self.integrations.get_all().items()
                 },
+                plugin_registry=self.plugin_registry,
             ),
         )
         ToolTip(self.btn_open_settings, tr("settings.title"))
@@ -753,10 +835,36 @@ on_like_button_change=self._apply_like_button_visibility,
             # Known status codes render translated ("added" -> tr'd text);
             # opaque flow/plugin messages pass through unchanged.
             _set(card.log_status, text=tr_status(text), background=background)
+            if text in ("busy", "loading"):
+                # Transient flow states - the bar shows results, not progress.
+                return
+            try:
+                playlist = card.name_label.cget("text")
+            except tk.TclError:
+                playlist = ""
+            artist, song = self._notif_song
+            # "added" is re-rendered authoritatively by on_song_added (the
+            # flow calls both); "duplicate" lets the poll swap in the
+            # inline prompt; the other terminal codes keep the bar until
+            # the next event.
+            if text == "added":
+                return
+            kind = "status"
+            if text == "duplicate":
+                kind = "duplicate"
+            elif text in ("exists", "error"):
+                kind = text
+            self.notification_bar.show_event(
+                kind,
+                playlist=playlist, artist=artist, song=song,
+                status=text, bg=background,
+            )
 
         def on_song_info(artist: str, name: str) -> None:
             _set(card.log_artist, text=artist)
             _set(card.log_name, text=name)
+            if artist or name:
+                self._notif_song = (artist, name)
 
         def on_entry_state(state: str) -> None:
             _set(card.keybind_entry, state=state)
@@ -772,9 +880,18 @@ on_like_button_change=self._apply_like_button_visibility,
             # Resolve the card's live index - the card may have been
             # closed or renumbered since the callbacks were created.
             cur_idx = self._card_index(card)
+            try:
+                playlist_name = card.name_label.cget("text")
+            except tk.TclError:
+                playlist_name = ""
+            artist, song = self._notif_song
+            self.notification_bar.show_event(
+                "added",
+                playlist=playlist_name, artist=artist, song=song,
+                status="added", bg=C["label_playlist_good_bg"],
+            )
             if cur_idx is None:
                 return
-            playlist_name = card.name_label.cget("text")
             self.showcase.refresh(
                 cur_idx, playlist_name, card.platform
             )
@@ -832,11 +949,20 @@ on_like_button_change=self._apply_like_button_visibility,
         Catches mutations from every source - keybind flows, this UI, and
         even the CLI process writing the same file - without any pub-sub
         plumbing.  A stat() per tick is far cheaper than re-reading.
+        Also feeds the notification bar's duplicate prompt: a queued
+        near-duplicate surfaces as the inline Add / Don't-add pair.
         """
         current = duplicate_queue.stamp()
         if current != getattr(self, "_activity_stamp", None):
             self._activity_stamp = current
             self.refresh_activity_badge()
+            try:
+                pending = duplicate_queue.list_pending()
+            except Exception:
+                pending = []
+            self.notification_bar.on_store_changed(
+                pending, notification_duplicates_enabled()
+            )
         try:
             self._activity_poll_after_id = self.root.after(
                 2000, self._poll_activity_stamp
@@ -878,6 +1004,7 @@ on_like_button_change=self._apply_like_button_visibility,
         if action == "dismiss":
             duplicate_queue.remove_pending(record["id"])
             duplicate_queue.set_song(record["pair_key"], "dismissed")
+            self.notification_bar.clear_prompt()
         elif action == "add":
             duplicate_queue.remove_pending(record["id"])
             alive = PlaylistStore.playlist_still_registered(
@@ -965,6 +1092,34 @@ on_like_button_change=self._apply_like_button_visibility,
             def on_status(msg: str) -> None:
                 pass
 
+            def _feed_bar(status: str) -> None:
+                """Show the pending-add outcome on the notification bar.
+
+                Colors are resolved on the UI thread inside the scheduled
+                call (worker threads must not read theme state mid-swap).
+                """
+
+                def _apply() -> None:
+                    if status == "added":
+                        kind, bg = "added", C["label_playlist_good_bg"]
+                    elif status == "duplicate":
+                        kind, bg = "duplicate", C["label_playlist_warn_bg"]
+                    elif status == "error":
+                        kind, bg = "error", C["status_error_bg"]
+                    else:
+                        # "exists" and opaque flow outcomes: informational.
+                        kind, bg = "status", C["label_playlist_warn_bg"]
+                    self.notification_bar.show_event(
+                        kind,
+                        playlist=rec.get("playlist_name", ""),
+                        artist=", ".join(rec.get("artists") or []),
+                        song=rec.get("title", ""),
+                        status=status,
+                        bg=bg,
+                    )
+
+                _ui(_apply)
+
             def on_error(msg: str) -> None:
                 try:
                     # re-enqueue for another try
@@ -973,11 +1128,13 @@ on_like_button_change=self._apply_like_button_visibility,
                 except Exception as e:
                     logger.error("Could not persist add error for %s: %s", platform, e)
                 _ui(self.refresh_activity_badge)
+                _feed_bar("error")
 
             def on_success(result: dict) -> None:
                 # added / exists / duplicate all resolve the queue entry;
                 # badge refresh keeps the count honest either way.
                 _ui(self.refresh_activity_badge)
+                _feed_bar(result.get("status", "error"))
 
             try:
                 flow.execute_flow(
@@ -1146,6 +1303,11 @@ on_like_button_change=self._apply_like_button_visibility,
                         pass
                 if found and not error:
                     self._open_activity_window()
+                    self.notification_bar.show_event(
+                        "scan",
+                        status=trn("notif.scan_found", found, count=found),
+                        bg=C["label_playlist_warn_bg"],
+                    )
 
             try:
                 self.root.after(0, _publish)
@@ -1602,6 +1764,7 @@ on_like_button_change=self._apply_like_button_visibility,
             self.card_grid.content_frame.grid_columnconfigure(c, weight=0)
         self.header_frame.grid_configure(columnspan=self._columns)
         self.main_area.grid_configure(columnspan=self._columns)
+        self.notification_bar.grid_configure(columnspan=self._columns)
         self.card_grid._layout_frames()
         self.card_grid._sync_empty_state()
         self._fit_window()

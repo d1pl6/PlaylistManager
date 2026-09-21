@@ -72,6 +72,8 @@ THEME_MAP = {
     "scrollable_frame_bg": ("scrollable_frame", "background"),
     "search_bar_bg": ("search_bar", "background"),
     "search_bar_fg": ("search_bar", "foreground"),
+    "notif_bar_bg": ("notification_bar", "background"),
+    "notif_bar_fg": ("notification_bar", "foreground"),
     "search_result_bg": ("search_result", "background"),
     "search_result_fg": ("search_result", "foreground"),
 }

@@ -629,3 +629,29 @@ def delete_platform_credentials(
         else:
             missing.append(path)
     return deleted, missing
+
+
+def credential_path_status(path: Path) -> Dict[str, Any]:
+    """Inspect one credential path for the Settings credentials panel.
+
+    Returns ``{"exists": bool, "mode": str | None, "private": bool}``:
+
+    * ``mode`` - octal permission string ("0600") when the path exists;
+    * ``private`` - True when neither group nor other has any access bit
+      set.  Credential files are written 0600 and the auth dir is enforced
+      0700, so "not private" means the path is looser than the app wrote
+      it (a restoring umask, a hand edit, a shared copy) and worth
+      surfacing in the panel.
+
+    Never raises: a missing or unreadable path reports ``exists`` False.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return {"exists": False, "mode": None, "private": False}
+    mode = st.st_mode & 0o777
+    return {
+        "exists": True,
+        "mode": f"{mode:04o}",
+        "private": (mode & 0o077) == 0,
+    }

@@ -5,7 +5,7 @@ import webbrowser
 from tkinter import messagebox, ttk
 
 from _version import __version__
-from services import profile_store
+from services import auth_setup, profile_store
 from services.scrobble import SCROBBLE_NONE, split_platforms
 from ui.profiles_ui import (
     show_create_profile_dialog,
@@ -18,6 +18,10 @@ from utils.config import (
     GRID_SORT_DEFAULT_DIRECTION,
     GRID_SORT_DEFAULT_KEY,
     GRID_SORT_KEY_LABELS,
+    NOTIFICATION_DEFAULT_ALIGN,
+    NOTIFICATION_DEFAULT_POSITION,
+    NOTIFICATION_POSITIONS,
+    NOTIFICATION_SONG_ALIGNS,
     REMOVE_PLAYLIST_DEFAULT_MODE,
     REMOVE_PLAYLIST_MODE_LABELS,
     THUMBNAIL_MODES,
@@ -26,12 +30,14 @@ from utils.config import (
     UPDATE_CHECK_INTERVAL_LABELS,
     get_setting,
     get_setting_value,
+    resolve_notification_align,
+    resolve_notification_position,
     set_setting,
     set_setting_value,
 )
 from utils.i18n import available_languages, language_code_for, language_display, tr
 from utils.scaling import UI_SCALE_PRESETS, px, ui_font
-from utils.platform import is_wayland_session
+from utils.platform import is_wayland_session, open_directory
 from utils.theme import C, btn_colors, hover_bg
 from utils.thumbnail import ThumbnailService
 from utils.window import center_window, fit_window_to_screen, resize_window
@@ -84,9 +90,14 @@ def show_settings_dialog(
     on_pin_buttons_change=None,
     on_sort_change=None,
     on_scrobble_keybind_change=None,
+    on_notif_enabled_change=None,
+    on_notif_align_change=None,
+    on_notif_position_change=None,
+    on_notif_duplicates_change=None,
     on_restart_app=None,
     plugin_availability=None,
     platform_display_names=None,
+    plugin_registry=None,
     ):
     """Show the settings dialog.
 
@@ -122,6 +133,18 @@ def show_settings_dialog(
             scrobble keybind is recorded or cleared (no args); the caller
             re-registers/unregisters the live action keybind so the change
             takes effect immediately instead of after a restart.
+        on_notif_enabled_change: optional callback applied live with the
+            new notification-bar enabled state (bool) when the checkbox
+            changes.
+        on_notif_align_change: optional callback applied live with the new
+            Artist - Song alignment ("left"/"center") when the combobox
+            changes.
+        on_notif_position_change: optional callback applied live with the
+            new bar location ("top"/"below_header"/"bottom") when the
+            combobox changes.
+        on_notif_duplicates_change: optional callback applied live with
+            the new show-duplicate-prompts state (bool) when the checkbox
+            changes.
         on_restart_app: optional callable()` restarting the app.  Used
             by the Profiles section when the user switches profile or
             creates/edits one - the change needs a restart to apply.
@@ -132,6 +155,10 @@ def show_settings_dialog(
         platform_display_names: optional mapping of platform id -> display
             name, used for the per-platform scrobble-source list labels.
             Falls back to the raw id when a platform is absent.
+        plugin_registry: optional live ``PluginRegistry``.  The stored-
+            credentials section (paths & permissions) lists each installed
+            platform's manifest-declared credential paths (auth-dir file
+            + fallbacks) when given, else the hardcoded platform map.
     """
     theme_win_bg = C["frame_main_bg"]
     theme_header_bg = C["frame_head_bg"]
@@ -758,6 +785,39 @@ def show_settings_dialog(
     )
     dup_btn.pack(fill="both", pady=(4,5), padx=16)
 
+    # --- Near-duplicate prompts in the notification bar --------------------
+    # The inline Approve / Don't-add pair lives on the fixed notification
+    # bar (ui/notification_bar.py); this toggle gates whether queued
+    # prompts surface there (the Activity window keeps working either way).
+    notif_dup_var = tk.IntVar(
+        value=1 if get_setting_value("notification_bar", "duplicates", "yes") == "yes" else 0
+    )
+
+    def _on_notif_dup_toggle():
+        try:
+            set_setting_value(
+                "notification_bar", "duplicates",
+                "yes" if notif_dup_var.get() else "no",
+            )
+        except Exception as e:
+            logger.error("Failed to write notification_bar duplicates setting: %s", e)
+        if on_notif_duplicates_change is not None:
+            try:
+                on_notif_duplicates_change(bool(notif_dup_var.get()))
+            except Exception as e:
+                logger.error("Failed to apply notification_bar duplicates change: %s", e)
+
+    tk.Checkbutton(
+        dupcheck_section,
+        text=tr("settings.notif_show_duplicates"),
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(11),
+        command=_on_notif_dup_toggle,
+        variable=notif_dup_var,
+    ).pack(fill="both", pady=(0, 5), padx=16)
+
     appearance_section = tk.Frame(content, background=theme_win_bg)
     appearance_section.pack(fill="both", padx=8, pady=(0, 8))
     _section_header(appearance_section, tr("settings.appearance"))
@@ -1226,6 +1286,137 @@ def show_settings_dialog(
         command=lambda: show_theme_dialog(win, on_theme_change=on_theme_change),
     ).pack(fill="both", pady=(0,4), padx=16)
 
+    # -- Notification bar section ----------------------------------------
+    # Fixed status row ("Playlist | Artist - Song | Status"); the
+    # Artist - Song segment aligns left or center, the bar itself sits
+    # top (above the header) / below the header / bottom (under the
+    # cards).  The near-duplicate prompt toggle lives in the Duplicate
+    # Check section (same [notification_bar] settings group).
+    notif_section = tk.Frame(content, background=theme_win_bg)
+    notif_section.pack(fill="both", padx=8, pady=(0, 8))
+    _section_header(notif_section, tr("settings.notification_bar"))
+
+    notif_enabled_var = tk.IntVar(
+        value=1 if get_setting_value("notification_bar", "enabled", "yes") == "yes" else 0
+    )
+
+    def _on_notif_enabled_toggle():
+        try:
+            set_setting_value(
+                "notification_bar", "enabled",
+                "yes" if notif_enabled_var.get() else "no",
+            )
+        except Exception as e:
+            logger.error("Failed to write notification_bar enabled setting: %s", e)
+        if on_notif_enabled_change is not None:
+            try:
+                on_notif_enabled_change(bool(notif_enabled_var.get()))
+            except Exception as e:
+                logger.error("Failed to apply notification_bar enabled change: %s", e)
+
+    tk.Checkbutton(
+        notif_section,
+        text=tr("settings.notif_enabled"),
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=_on_notif_enabled_toggle,
+        variable=notif_enabled_var,
+    ).pack(fill="both", pady=(0, 2), padx=16)
+
+    # --- Artist - Song segment alignment (left / center) -----------------
+    def _align_label(key: str) -> str:
+        return tr(f"settings.notif_song_align_{key}")
+
+    align_var = tk.StringVar(value=_align_label(resolve_notification_align()))
+
+    def _on_align_change(value: str) -> None:
+        key = next(
+            (k for k in NOTIFICATION_SONG_ALIGNS if _align_label(k) == value),
+            NOTIFICATION_DEFAULT_ALIGN,
+        )
+        try:
+            set_setting_value("notification_bar", "song_align", key)
+        except Exception as e:
+            logger.error("Failed to write notification_bar song_align: %s", e)
+        if on_notif_align_change is not None:
+            try:
+                on_notif_align_change(key)
+            except Exception as e:
+                logger.error("Failed to apply notification_bar song_align: %s", e)
+
+    align_row = tk.Frame(notif_section, background=theme_check_bg)
+    align_row.pack(fill="both", pady=(2, 5), padx=16)
+    tk.Label(
+        align_row,
+        text=tr("settings.notif_song_align"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0, 5))
+    align_combo = ttk.Combobox(
+        align_row,
+        textvariable=align_var,
+        cursor="hand2",
+        values=[_align_label(k) for k in NOTIFICATION_SONG_ALIGNS],
+        state="readonly",
+        width=12,
+        font=ui_font(12),
+    )
+    align_combo.pack(side="left", pady=(0, 5))
+    align_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_align_change(align_var.get()),
+    )
+
+    # --- Bar location (top / below header / bottom) ----------------------
+    def _position_label(key: str) -> str:
+        return tr(f"settings.notif_position_{key}")
+
+    position_var = tk.StringVar(
+        value=_position_label(resolve_notification_position())
+    )
+
+    def _on_position_change(value: str) -> None:
+        key = next(
+            (k for k in NOTIFICATION_POSITIONS if _position_label(k) == value),
+            NOTIFICATION_DEFAULT_POSITION,
+        )
+        try:
+            set_setting_value("notification_bar", "position", key)
+        except Exception as e:
+            logger.error("Failed to write notification_bar position: %s", e)
+        if on_notif_position_change is not None:
+            try:
+                on_notif_position_change(key)
+            except Exception as e:
+                logger.error("Failed to apply notification_bar position: %s", e)
+
+    position_row = tk.Frame(notif_section, background=theme_check_bg)
+    position_row.pack(fill="both", pady=(0, 5), padx=16)
+    tk.Label(
+        position_row,
+        text=tr("settings.notif_position"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0, 5))
+    position_combo = ttk.Combobox(
+        position_row,
+        textvariable=position_var,
+        cursor="hand2",
+        values=[_position_label(k) for k in NOTIFICATION_POSITIONS],
+        state="readonly",
+        width=16,
+        font=ui_font(12),
+    )
+    position_combo.pack(side="left", pady=(0, 5))
+    position_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_position_change(position_var.get()),
+    )
+
     # -- Last.fm section -----------------------------------------------
     if has_lastfm:
         lastfm_section = tk.Frame(content, background=theme_win_bg)
@@ -1658,6 +1849,123 @@ def show_settings_dialog(
         justify="left",
         font=ui_font(9),
     ).pack(anchor="w", padx=16, pady=(2, 4))
+
+    # ------------------------------------------------------------------
+    # Stored credentials (paths & permissions) - security panel
+    # ------------------------------------------------------------------
+    # Shows where each platform's credential files live (profile-aware
+    # auth dir + manifest-declared fallbacks) with their on-disk
+    # permissions.  The write paths enforce 0600 files / 0700 dirs; this
+    # panel surfaces anything looser than that (hand edits, restoring
+    # umasks, shared copies) with a warning color.
+    cred_section = tk.Frame(content, background=theme_win_bg)
+    cred_section.pack(fill="both", padx=8, pady=(0, 8))
+    _section_header(cred_section, tr("settings.credentials_title"))
+
+    auth_dir = profile_store.auth_dir()
+
+    def _open_auth_dir() -> None:
+        # The file manager needs the dir to exist; create it and enforce
+        # 0o700 the same way the YT auth flow does.
+        try:
+            auth_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        except OSError:
+            logger.warning("Could not create auth dir %s", auth_dir)
+            return
+        try:
+            auth_dir.chmod(0o700)
+        except OSError:
+            pass
+        open_directory(auth_dir)
+
+    cred_header = tk.Frame(cred_section, background=theme_win_bg)
+    cred_header.pack(fill="x", padx=16, pady=(4, 0))
+    tk.Label(
+        cred_header,
+        text=tr("settings.credentials_dir", path=str(auth_dir)),
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        font=ui_font(9),
+        anchor="w",
+        justify="left",
+    ).pack(side="left", fill="x", expand=True)
+    tk.Button(
+        cred_header,
+        text=tr("settings.open_auth_dir"),
+        cursor="hand2",
+        **btn_colors(C["button_main_bg"], C["button_main_fg"]),
+        highlightthickness=0,
+        relief="raised",
+        font=ui_font(9),
+        command=_open_auth_dir,
+    ).pack(side="right", padx=(8, 0))
+
+    def _cred_row(name: str, paths) -> None:
+        """One row: *name* plus a status line per path (mode / warning /
+        missing), colored by the path's on-disk permissions."""
+        tk.Label(
+            cred_section,
+            text=name,
+            background=theme_win_bg,
+            foreground=theme_label_fg,
+            font=ui_font(10, "bold"),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(6, 0))
+        for path in paths:
+            line = tk.Frame(cred_section, background=theme_win_bg)
+            line.pack(fill="x", padx=16)
+            tk.Label(
+                line,
+                text=str(path),
+                background=theme_win_bg,
+                foreground=theme_label_fg,
+                font=ui_font(9),
+                anchor="w",
+            ).pack(side="left", fill="x", expand=True)
+            status = auth_setup.credential_path_status(path)
+            if status["exists"]:
+                if status["private"]:
+                    text, fg = status["mode"], C["label_playlist_good_fg"]
+                else:
+                    text = tr("settings.cred_open", mode=status["mode"])
+                    fg = C["label_playlist_warn_fg"]
+            else:
+                text, fg = tr("settings.cred_missing"), theme_label_fg
+            tk.Label(
+                line,
+                text=text,
+                background=theme_win_bg,
+                foreground=fg,
+                font=ui_font(9),
+                anchor="e",
+            ).pack(side="right", padx=(8, 0))
+
+    # Always show the auth dir itself (path + its own permission), then
+    # one block per platform from the live registry (fallback: the
+    # hardcoded credential map when no registry was handed in).
+    _cred_row(tr("settings.auth_dir_name"), [auth_dir])
+    if plugin_registry is not None:
+        cred_rows = [
+            ((platform_display_names or {}).get(pid, pid), plugin.auth_paths)
+            for pid, plugin in sorted(plugin_registry.get_all().items())
+            if plugin.auth_paths
+        ]
+    else:
+        cred_rows = [
+            (pid, paths)
+            for pid, paths in sorted(auth_setup.PLATFORM_CREDENTIAL_FILES.items())
+        ]
+    for name, paths in cred_rows:
+        _cred_row(name, paths)
+    if not cred_rows:
+        tk.Label(
+            cred_section,
+            text=tr("settings.credentials_none"),
+            background=theme_win_bg,
+            foreground=theme_label_fg,
+            font=ui_font(9),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(4, 0))
 
     about_section = tk.Frame(content, background=theme_win_bg)
     about_section.pack(fill="both", padx=8, pady=(0, 8))
