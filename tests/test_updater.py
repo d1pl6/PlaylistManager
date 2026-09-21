@@ -100,6 +100,61 @@ class TestLastCheckStamp:
         assert before <= int(value) <= after
 
 
+class TestParseVersion:
+    def test_plain_versions(self):
+        cases = [
+            ("1.0.1", (1, 0, 1, 0, 0, 0)),
+            ("1.0", (1, 0, 0, 0, 0, 0)),
+            ("1.0.1.2", (1, 0, 1, 2, 0, 0)),
+            ("2", (2, 0, 0, 0, 0, 0)),
+        ]
+        for raw, expected in cases:
+            assert updater.parse_version(raw) == expected, raw
+
+    def test_strips_prefix_and_whitespace(self):
+        assert updater.parse_version("v1.2.3") == updater.parse_version("1.2.3")
+        assert updater.parse_version("V1.2.3-beta1") == updater.parse_version(
+            "1.2.3-beta1"
+        )
+        assert updater.parse_version(" 1.2.3 ") == updater.parse_version("1.2.3")
+
+    def test_pre_release_suffix_number(self):
+        assert updater.parse_version("1.0.1-beta0") == (1, 0, 1, 0, -1, 0)
+        assert updater.parse_version("1.0.1-beta1") == (1, 0, 1, 0, -1, 1)
+        # A bare suffix (no number) counts as zero.
+        assert updater.parse_version("1.0.1-beta") == (1, 0, 1, 0, -1, 0)
+
+    def test_attached_and_dotted_suffix_compare_equal(self):
+        assert updater.parse_version("1.0.1-beta.2") == updater.parse_version(
+            "1.0.1-beta2"
+        )
+        # Only the suffix NUMBER participates in ordering, not its label.
+        assert updater.parse_version("1.0.1-rc1") == updater.parse_version(
+            "1.0.1-beta1"
+        )
+
+    def test_ordering_table(self):
+        cases = [
+            ("1.0.1", "1.0"),
+            ("1.0.1.2", "1.0.1"),
+            ("1.0.2", "1.0.1-rc9"),
+            ("1.0.1-beta1", "1.0.1-beta0"),
+            ("1.0.2-beta1", "1.0.1-beta1"),
+        ]
+        for newer, older in cases:
+            assert updater.parse_version(newer) > updater.parse_version(older), (
+                f"{newer} should sort above {older}"
+            )
+        # Every pre-release sorts below its stable release.
+        assert updater.parse_version("1.0.1-beta1") < updater.parse_version("1.0.1")
+        assert updater.parse_version("1.0.1-rc9") < updater.parse_version("1.0.1")
+
+    def test_garbage_does_not_raise(self):
+        # Non-version input must never crash the update check thread.
+        assert updater.parse_version("") is not None
+        assert updater.parse_version("abc") is not None
+
+
 class TestCheckFlow:
     @pytest.fixture(autouse=True)
     def _sync_threads(self, monkeypatch):

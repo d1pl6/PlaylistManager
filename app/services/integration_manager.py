@@ -328,6 +328,11 @@ def _validate_plugin_manifest(manifest: Path, expected_id: str) -> None:
         raw = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise ValueError(f"Invalid plugin.json in download: {e}") from e
+    if not isinstance(raw, dict):
+        raise ValueError(
+            "Invalid plugin.json in download: expected a JSON object, "
+            f"got {type(raw).__name__}"
+        )
     declared = raw.get("id", "")
     if declared != expected_id:
         raise ValueError(
@@ -470,6 +475,13 @@ def _remove_plugin_directories(platform_id: str) -> int:
         try:
             raw = json.loads(manifest.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            continue
+        if not isinstance(raw, dict):
+            logger.warning(
+                "Ignoring non-object plugin.json at %s while removing %s",
+                manifest,
+                platform_id,
+            )
             continue
         if raw.get("id") != platform_id:
             continue

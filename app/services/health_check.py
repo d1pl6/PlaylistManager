@@ -58,8 +58,10 @@ def check_network(timeout: float = _INTERNET_TIMEOUT_S) -> bool:
     a clear message instead of confusing per-request errors mid-flow.
     """
     try:
-        socket.create_connection(_INTERNET_PROBE, timeout=timeout)
-        return True
+        # The context manager closes the connected probe socket instead
+        # of leaving the fd to refcount finalization.
+        with socket.create_connection(_INTERNET_PROBE, timeout=timeout):
+            return True
     except (OSError, SocketTimeout):
         return False
 
@@ -73,8 +75,8 @@ def probe_platform(platform: str, timeout: float = _API_TIMEOUT_S) -> bool:
     if target is None:
         return False
     try:
-        socket.create_connection(target, timeout=timeout)
-        return True
+        with socket.create_connection(target, timeout=timeout):
+            return True
     except (OSError, SocketTimeout):
         return False
 

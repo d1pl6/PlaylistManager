@@ -9,6 +9,9 @@ code, mirroring how the production callers hand over a live integration.
 """
 
 import time
+from socket import timeout as SocketTimeout
+
+import pytest
 
 from services import health_check
 
@@ -52,52 +55,132 @@ def _integration(pid: str, **handles) -> object:
 
 
 # ---------------------------------------------------------------------------
-# TCP probes
+# TCP probes (stubbed socket)
 # ---------------------------------------------------------------------------
 
 
-def test_check_network_ok(monkeypatch):
+class _FakeSocket:
+    """A connected-socket stand-in that records whether it was released."""
+
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
+def _stub_connect(monkeypatch, *, exc=None):
+    """Replace ``socket.create_connection`` with a recording stub.
+
+    Returns ``(calls, sockets)``: *calls* records each
+    ``(host, port, timeout)``; *sockets* holds the fake socket handed back
+    on success (empty when *exc* is given).
+    """
+    calls = []
+    sockets = []
+
+    def _create_connection(address, timeout=None):
+        host, port = address
+        calls.append((host, port, timeout))
+        if exc is not None:
+            raise exc
+        sock = _FakeSocket()
+        sockets.append(sock)
+        return sock
+
     monkeypatch.setattr(
-        health_check.socket, "create_connection", lambda *a, **kw: None
+        health_check.socket, "create_connection", _create_connection
     )
-    assert health_check.check_network() is True
+    return calls, sockets
 
 
-def test_check_network_failure(monkeypatch):
-    def _refused(*a, **kw):
-        raise OSError("connection refused")
+class TestCheckNetwork:
+    def test_ok_probes_dns_endpoint_and_releases_socket(self, monkeypatch):
+        calls, sockets = _stub_connect(monkeypatch)
+        assert health_check.check_network() is True
+        assert calls == [("1.1.1.1", 53, health_check._INTERNET_TIMEOUT_S)]
+        # The connected socket is closed deterministically, not left to GC.
+        assert len(sockets) == 1
+        assert sockets[0].closed is True
 
-    monkeypatch.setattr(health_check.socket, "create_connection", _refused)
-    assert health_check.check_network() is False
+    def test_forwards_timeout(self, monkeypatch):
+        calls, _ = _stub_connect(monkeypatch)
+        health_check.check_network(timeout=0.25)
+        assert calls == [("1.1.1.1", 53, 0.25)]
+
+    def test_refused_returns_false(self, monkeypatch):
+        calls, sockets = _stub_connect(monkeypatch, exc=OSError("refused"))
+        assert health_check.check_network() is False
+        assert len(calls) == 1
+        assert sockets == []
+
+    def test_timed_out_returns_false(self, monkeypatch):
+        _stub_connect(monkeypatch, exc=SocketTimeout("timed out"))
+        assert health_check.check_network() is False
 
 
-def test_probe_platform_ok(monkeypatch):
-    monkeypatch.setattr(
-        health_check.socket, "create_connection", lambda *a, **kw: None
+class TestProbePlatform:
+    @pytest.mark.parametrize(
+        "platform, host, port",
+        [
+            ("youtube_music", "music.youtube.com", 443),
+            ("spotify", "api.spotify.com", 443),
+            ("soundcloud", "api.soundcloud.com", 443),
+            ("deezer", "pipe.deezer.com", 443),
+        ],
     )
-    assert health_check.probe_platform("spotify") is True
+    def test_targets_and_releases_socket(self, monkeypatch, platform, host, port):
+        calls, sockets = _stub_connect(monkeypatch)
+        assert health_check.probe_platform(platform) is True
+        assert calls == [(host, port, health_check._API_TIMEOUT_S)]
+        assert len(sockets) == 1
+        assert sockets[0].closed is True
+
+    def test_forwards_timeout(self, monkeypatch):
+        calls, _ = _stub_connect(monkeypatch)
+        health_check.probe_platform("spotify", timeout=0.1)
+        assert calls == [("api.spotify.com", 443, 0.1)]
+
+    def test_unknown_platform_never_touches_socket(self, monkeypatch):
+        calls, _ = _stub_connect(monkeypatch)
+        assert health_check.probe_platform("mystery_platform") is False
+        assert calls == []
+
+    def test_connect_failure_returns_false(self, monkeypatch):
+        calls, sockets = _stub_connect(monkeypatch, exc=OSError("refused"))
+        assert health_check.probe_platform("spotify") is False
+        assert len(calls) == 1
+        assert sockets == []
+
+    def test_timeout_returns_false(self, monkeypatch):
+        _stub_connect(monkeypatch, exc=SocketTimeout("timed out"))
+        assert health_check.probe_platform("spotify") is False
 
 
-def test_probe_platform_connect_failure(monkeypatch):
-    def _timeout(*a, **kw):
-        raise TimeoutError("timed out")
+class TestProbePlatforms:
+    def test_filters_unknown_and_releases_each_socket(self, monkeypatch):
+        calls, sockets = _stub_connect(monkeypatch)
+        result = health_check.probe_platforms({"spotify", "deezer", "mystery"})
+        assert result == {"spotify": True, "deezer": True}
+        # Set iteration order is unspecified - compare as sets.
+        assert set(calls) == {
+            ("api.spotify.com", 443, health_check._API_TIMEOUT_S),
+            ("pipe.deezer.com", 443, health_check._API_TIMEOUT_S),
+        }
+        assert len(sockets) == 2
+        assert all(sock.closed for sock in sockets)
 
-    monkeypatch.setattr(health_check.socket, "create_connection", _timeout)
-    assert health_check.probe_platform("spotify") is False
-
-
-def test_probe_platform_unknown_platform():
-    # No target in PLATFORM_API_TARGETS -> nothing to reach -> False.
-    assert health_check.probe_platform("mystery_platform") is False
-
-
-def test_probe_platforms_filters_unknown(monkeypatch):
-    monkeypatch.setattr(
-        health_check.socket, "create_connection", lambda *a, **kw: None
-    )
-    assert health_check.probe_platforms({"spotify", "mystery"}) == {
-        "spotify": True
-    }
+    def test_empty_set_no_probes(self, monkeypatch):
+        calls, _ = _stub_connect(monkeypatch)
+        assert health_check.probe_platforms(set()) == {}
+        assert calls == []
 
 
 # ---------------------------------------------------------------------------
