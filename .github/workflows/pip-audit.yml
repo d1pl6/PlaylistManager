@@ -1,0 +1,41 @@
+name: dependency audit
+
+on:
+  schedule:
+    # Nightly: audit the dependency surface against the OSV advisory DB.
+    # Scheduled workflows fire on the DEFAULT branch; GitHub may delay
+    # them and disables them entirely after ~60 days of repo inactivity.
+    - cron: "0 4 * * *" # 04:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    name: pip-audit (core + optional + test deps)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with all extras
+        # .[all,test] = core deps + ytmusicapi + pystray + pytest, i.e. the
+        # full dependency surface declared in pyproject.toml.  Scanning the
+        # installed env captures what a --local scan of a bare install would
+        # miss, since optional deps are not installed by default.
+        run: python -m pip install ".[all,test]"
+
+      - name: Install pip-audit
+        run: python -m pip install pip-audit
+
+      - name: Scan installed environment
+        # Exits non-zero when vulnerabilities are found, failing the job.
+        # If a dev-tool advisory is ever a false alarm, silence it with
+        # `--ignore-vuln <OSV-ID>` on this line.
+        run: pip-audit --local

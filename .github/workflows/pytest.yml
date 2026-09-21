@@ -1,0 +1,60 @@
+name: tests
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest / compileall (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Checkout integration plugins
+        # integrations/* is gitignored in the main repo (each platform is a
+        # separate plugin repo cloned into place).  Without this step the
+        # plugin tests would pytest.skip("... not installed in this checkout")
+        # and their coverage would silently vanish from CI.  A clone failure
+        # degrades to skips, never fails the job (owner/repos mirror
+        # INTEGRATION_REPOS in app/services/integration_manager.py).
+        run: |
+          plugins="youtube_music:youtube-music-integration spotify:spotify-integration soundcloud:soundcloud-integration lastfm:lastfm-integration deezer:deezer-integration"
+          for entry in $plugins; do
+            dir="${entry%%:*}"; repo="${entry#*:}"
+            git clone --depth 1 "https://github.com/d1pl6/${repo}.git" "integrations/${dir}" \
+              || echo "warning: could not clone ${repo}; its tests will skip"
+          done
+
+      - name: Install package with all extras + test deps
+        # .[all,test] = core deps + ytmusicapi + pystray + pytest, the same
+        # surface a dev machine with everything installed would have.
+        run: python -m pip install ".[all,test]"
+
+      - name: Byte-compile app
+        run: python -m compileall -q app/
+
+      - name: Run test suite
+        run: python -m pytest
+
+      - name: Headless CLI smoke test
+        # Documented smoke test (AGENTS.md): the CLI shares the GUI's
+        # service layer and needs no display.
+        run: python -m app --list
