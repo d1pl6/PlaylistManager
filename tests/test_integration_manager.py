@@ -7,29 +7,87 @@ ordering:
   members skipped.
 * ``_validate_plugin_manifest`` / ``_validate_install_target`` - the
   manifest-id and destination guards.
-* ``download_integration`` - the staged-swap install: nothing is written
-  to a destination until every copy has validated and staged, a failed
-  reinstall leaves the previous installation intact, and a swap failure
-  restores the parked installation.
+* ``download_integration`` - the release-asset + detached-``.minisig``
+  download, fail-closed signature verification (missing signature,
+  tampered archive, wrong key, disabled-toggle bypass, unavailable
+  verifier, missing pinned key), and the staged-swap install: nothing is
+  written to a destination until every copy has validated and staged, a
+  failed reinstall leaves the previous installation intact, and a swap
+  failure restores the parked installation.
 * ``_remove_plugin_directories`` - on-disk manifest-id matching.
 * ``uninstall_platform_data`` - credentials, registry, DBs and the
   duplicate/scrobble records are deleted *before* the plugin folder.
 
 Network is never touched: ``_download_archive`` is replaced with a local
-tar writer, so the real extraction/staging/swap code runs.  The plugin
-base dir is re-pointed at tmp_path; the real ``integrations/`` tree is
-never read or written.
+writer that serves the release asset and a valid signature from the
+committed TEST-ONLY fixture keypair (``tests/fixtures/minisign-test.*``,
+password ``minisign-test-password``), so the real extraction/staging/swap
+code runs.  The plugin base dir is re-pointed at tmp_path; the real
+``integrations/`` tree is never read or written.
 """
 
 import io
 import json
 import tarfile
+import urllib.error
 from pathlib import Path
 
 import pytest
 
 import plugin_loader
 from services import integration_manager
+from services import plugin_signing
+from utils.i18n import tr
+
+
+# ---------------------------------------------------------------------------
+# Signature fixture helpers (TEST-ONLY keypair - never the pinned key)
+# ---------------------------------------------------------------------------
+
+_FIXTURE_DIR = Path(__file__).parent / "fixtures"
+_FIXTURE_KEY = _FIXTURE_DIR / "minisign-test.key"
+_FIXTURE_PASSWORD = "minisign-test-password"
+
+
+def _sign_bytes(payload: bytes, secret_key=None) -> bytes:
+    """Detached ``.minisig`` bytes over *payload*.
+
+    Defaults to the committed test key; pass a different (unencrypted)
+    ``minisign.SecretKey`` to simulate a foreign signer.
+    """
+    import minisign
+
+    sk = secret_key if secret_key is not None else minisign.SecretKey.from_file(
+        str(_FIXTURE_KEY)
+    )
+    if secret_key is None:
+        sk.decrypt(_FIXTURE_PASSWORD)
+    return bytes(
+        sk.sign(payload, trusted_comment="timestamp:0\tfile:plugin.tar.gz")
+    )
+
+
+def _foreign_secret():
+    """An unencrypted SecretKey from a throwaway keypair (wrong signer)."""
+    import minisign
+
+    return minisign.KeyPair.generate().secret_key
+
+
+@pytest.fixture(autouse=True)
+def _use_fixture_public_key(monkeypatch):
+    """Point the pinned key at the TEST-ONLY fixture public key.
+
+    The download tests sign their archives with the fixture secret key, so
+    verification (which defaults to the repo's real ``minisign.pub``) must
+    resolve to the fixture's public half in this module.  The pinned-key
+    contract itself is covered in tests/test_plugin_signing.py.
+    """
+    monkeypatch.setattr(
+        plugin_signing,
+        "pinned_public_key_path",
+        lambda: _FIXTURE_DIR / "minisign-test.pub",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -101,11 +159,23 @@ def _extract_bytes(payload, dest):
         integration_manager._safe_extract(tar, dest)
 
 
-def _serve(monkeypatch, payload):
-    """Replace the network download with a local tar write."""
+def _serve(monkeypatch, payload, *, unsigned=False, sig=None):
+    """Replace the network download with a local asset + signature writer.
 
-    def _fake_download(url, dest):
-        dest.write_bytes(payload)
+    *payload* is served for the release-asset URL, and a valid detached
+    signature over *payload* (fixture key) for the ``.minisig`` URL.
+    ``unsigned=True`` makes the signature URL return HTTP 404 (a repo that
+    never attached a signature); ``sig=`` overrides the signature bytes
+    (e.g. a signature over different content, or from a foreign key).
+    """
+
+    def _fake_download(url, dest, **kwargs):
+        if url.endswith(plugin_signing.SIGNATURE_SUFFIX):
+            if unsigned:
+                raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+            dest.write_bytes(sig if sig is not None else _sign_bytes(payload))
+        else:
+            dest.write_bytes(payload)
 
     monkeypatch.setattr(integration_manager, "_download_archive", _fake_download)
 
@@ -390,6 +460,118 @@ class TestDownloadIntegration:
         assert not (base_dir / ".youtube_music.old").exists()
         assert not (base_dir / ".youtube_music.install_tmp").exists()
 
+    # ------------------------------------------------------------------
+    # Signature verification (fail-closed by default)
+    # ------------------------------------------------------------------
+
+    def test_unsigned_archive_refused_when_verification_on(
+        self, monkeypatch, base_dir
+    ):
+        pytest.importorskip("minisign")
+        _serve(monkeypatch, _repo_tarball("youtube_music"), unsigned=True)
+        with pytest.raises(ValueError, match="no minisign signature"):
+            integration_manager.download_integration("youtube_music")
+        # Nothing was written - not even a staging dir.
+        assert not (base_dir / "youtube_music").exists()
+        assert not (base_dir / ".youtube_music.install_tmp").exists()
+
+    def test_tampered_archive_refused(self, monkeypatch, base_dir):
+        pytest.importorskip("minisign")
+        payload = _repo_tarball("youtube_music")
+        # Signature is valid, but over different content.
+        _serve(monkeypatch, payload, sig=_sign_bytes(b"different payload"))
+        with pytest.raises(ValueError, match="signature verification failed"):
+            integration_manager.download_integration("youtube_music")
+        assert not (base_dir / "youtube_music").exists()
+
+    def test_signature_from_foreign_key_refused(self, monkeypatch, base_dir):
+        pytest.importorskip("minisign")
+        payload = _repo_tarball("youtube_music")
+        _serve(
+            monkeypatch, payload,
+            sig=_sign_bytes(payload, secret_key=_foreign_secret()),
+        )
+        with pytest.raises(ValueError, match="signature verification failed"):
+            integration_manager.download_integration("youtube_music")
+        assert not (base_dir / "youtube_music").exists()
+
+    def test_toggle_off_installs_unsigned_archive(self, monkeypatch, base_dir):
+        pytest.importorskip("minisign")
+        monkeypatch.setattr(
+            integration_manager,
+            "_signature_verification_enabled",
+            lambda: False,
+        )
+        _serve(monkeypatch, _repo_tarball("youtube_music"), unsigned=True)
+        installed = integration_manager.download_integration("youtube_music")
+        assert (base_dir / "youtube_music" / "plugin.json").is_file()
+        assert installed
+
+    def test_verifier_unavailable_fails_closed(self, monkeypatch, base_dir):
+        pytest.importorskip("minisign")
+
+        def _boom(*args, **kwargs):
+            raise plugin_signing.VerifierUnavailableError(
+                tr("install.verifier_unavailable")
+            )
+
+        monkeypatch.setattr(plugin_signing, "verify_archive", _boom)
+        _serve(monkeypatch, _repo_tarball("youtube_music"))
+        with pytest.raises(ValueError, match="No plugin-signature verifier"):
+            integration_manager.download_integration("youtube_music")
+        assert not (base_dir / "youtube_music").exists()
+
+    def test_pinned_key_missing_fails_closed(self, monkeypatch, base_dir, tmp_path):
+        pytest.importorskip("minisign")
+        monkeypatch.setattr(
+            plugin_signing,
+            "pinned_public_key_path",
+            lambda: tmp_path / "no-such.pub",
+        )
+        _serve(monkeypatch, _repo_tarball("youtube_music"))
+        with pytest.raises(ValueError, match="minisign.pub"):
+            integration_manager.download_integration("youtube_music")
+        assert not (base_dir / "youtube_music").exists()
+
+    def test_signature_fetch_uses_small_cap_and_release_urls(
+        self, monkeypatch, base_dir
+    ):
+        pytest.importorskip("minisign")
+        payload = _repo_tarball("youtube_music")
+        calls = []
+
+        def _spy(url, dest, **kwargs):
+            calls.append((url, kwargs.get("max_bytes")))
+            if url.endswith(plugin_signing.SIGNATURE_SUFFIX):
+                dest.write_bytes(_sign_bytes(payload))
+            else:
+                dest.write_bytes(payload)
+
+        monkeypatch.setattr(integration_manager, "_download_archive", _spy)
+        integration_manager.download_integration("youtube_music")
+
+        assert len(calls) == 2
+        archive_url, archive_cap = calls[0]
+        sig_url, sig_cap = calls[1]
+        assert archive_url.endswith("/releases/latest/download/plugin.tar.gz")
+        # The archive fetch relies on the function default (no max_bytes
+        # passed); the signature fetch must use the small signature cap.
+        assert archive_cap is None
+        assert sig_url.endswith("/releases/latest/download/plugin.tar.gz.minisig")
+        assert sig_cap == integration_manager._MAX_SIGNATURE_BYTES
+
+
+class TestReleaseAssetUrls:
+    def test_catalog_points_at_release_assets_with_signatures(self):
+        for pid, repo in integration_manager.INTEGRATION_REPOS.items():
+            expected_asset = (
+                f"https://github.com/{repo.owner}/{repo.repo}"
+                f"/releases/latest/download/{repo.asset_name}"
+            )
+            assert repo.download_url == expected_asset, pid
+            assert repo.signature_url == expected_asset + ".minisig", pid
+            assert "codeload" not in repo.download_url, pid
+
 
 # ---------------------------------------------------------------------------
 # _download_archive - size cap
@@ -412,7 +594,6 @@ class _FakeResponse:
 
 class TestDownloadArchive:
     def test_writes_payload_under_cap(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(integration_manager, "_MAX_ARCHIVE_BYTES", 100)
         monkeypatch.setattr(
             integration_manager.urllib.request,
             "urlopen",
@@ -425,7 +606,6 @@ class TestDownloadArchive:
     def test_oversized_archive_rejected(self, monkeypatch, tmp_path):
         # A compromised / re-purposed source must not be able to stream
         # unbounded bytes onto disk.
-        monkeypatch.setattr(integration_manager, "_MAX_ARCHIVE_BYTES", 10)
         monkeypatch.setattr(
             integration_manager.urllib.request,
             "urlopen",
@@ -433,7 +613,9 @@ class TestDownloadArchive:
         )
         with pytest.raises(OSError, match="exceeds"):
             integration_manager._download_archive(
-                "https://example.invalid/x", tmp_path / "repo.tar.gz"
+                "https://example.invalid/x",
+                tmp_path / "repo.tar.gz",
+                max_bytes=10,
             )
 
 

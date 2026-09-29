@@ -7,6 +7,13 @@ are installed straight into ``<repo_root>/integrations/<platform>/`` where
 ``plugin_loader`` discovers them.  The network work (``download_integration``)
 is designed to run on a worker thread - it never touches tkinter.
 
+Installations are supply-chain verified (fail-closed by default): the
+release asset must verify against the pinned ``minisign.pub`` via
+``services/plugin_signing``, so a compromised plugin repo or GitHub
+account alone cannot install modified code (see docs/plugins.md
+"Release signing").  The ``[security] verify_plugin_signatures`` toggle
+is the only documented bypass.
+
 Uninstall is the "with database, etc." cleanup behind the Manage dialog and
 mirrors ``cli.run_logout`` plus the plugin directory: credentials, playlist
 registry entries and per-platform song databases are deleted before the
@@ -21,14 +28,16 @@ import shutil
 import tarfile
 import tempfile
 import threading
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from plugin_loader import PluginRegistry
-from services import auth_setup, duplicate_queue
-from services import scrobble_log
+from services import auth_setup, duplicate_queue, plugin_signing
+from services import credential_store, profile_store, scrobble_log
+from utils.i18n import tr
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
 
@@ -42,6 +51,10 @@ _install_lock = threading.Lock()
 # Hard cap for a plugin archive - the repos are a few KB; anything larger
 # is almost certainly not the plugin we are expecting.
 _MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
+
+# Detached minisign signature files are a couple of hundred bytes; a hard
+# cap keeps a misbehaving or malicious release from filling the disk.
+_MAX_SIGNATURE_BYTES = 64 * 1024
 
 _DOWNLOAD_TIMEOUT = 60
 
@@ -71,14 +84,30 @@ class IntegrationRepo:
     owner: str
     repo: str
     copies: Tuple[Tuple[str, str], ...]
+    # Release asset name carrying the plugin package.  Every release of the
+    # plugin repo must attach this asset plus its detached minisign
+    # signature "<asset>.minisig", made with the secret key matching the
+    # pinned ``minisign.pub`` (see docs/plugins.md "Release signing").
+    asset_name: str = "plugin.tar.gz"
 
     @property
     def download_url(self) -> str:
-        """codeload tarball of the default branch (no API, no auth)."""
+        """Latest-release download URL for the plugin asset.
+
+        GitHub redirects ``/releases/latest/download/<asset>`` to the most
+        recent release with no API call, no auth and no rate limit.  The
+        repo must have at least one release: a fresh repo with none
+        returns 404 and cannot be installed.
+        """
         return (
-            f"https://codeload.github.com/{self.owner}/{self.repo}"
-            "/tar.gz/refs/heads/main"
+            f"https://github.com/{self.owner}/{self.repo}"
+            f"/releases/latest/download/{self.asset_name}"
         )
+
+    @property
+    def signature_url(self) -> str:
+        """Detached minisign signature for the release asset."""
+        return self.download_url + plugin_signing.SIGNATURE_SUFFIX
 
     @property
     def repo_url(self) -> str:
@@ -150,19 +179,22 @@ def download_integration(platform_id: str) -> List[Path]:
     """Download + install one integration; returns the installed paths.
 
     Runs on the calling thread (intended: a worker thread).  Downloads
-    the repo tarball to a temp dir, extracts it safely (no path
-    traversal, no symlinks), validates the plugin manifest inside, then
-    stages **every** mapped directory before swapping a single byte:
-    all copies are copied into a per-platform staging root under
-    ``integrations/`` first, and only after every copy validated and
-    staged are they renamed into place.  A content error (missing dir,
-    bad or missing manifest, oversized archive) therefore never leaves a
-    half-installed platform, and the youtube_music browser-extension
-    copy stays safe even though it installs *inside* the plugin
-    directory's own destination.
+    the repo's latest release asset to a temp dir, verifies its detached
+    minisign signature against the pinned ``minisign.pub`` (fail-closed
+    unless ``[security] verify_plugin_signatures = off``), extracts it
+    safely (no path traversal, no symlinks), validates the plugin
+    manifest inside, then stages **every** mapped directory before
+    swapping a single byte: all copies are copied into a per-platform
+    staging root under ``integrations/`` first, and only after every copy
+    validated and staged are they renamed into place.  A content error
+    (missing dir, bad or missing manifest, oversized archive, failed
+    signature) therefore never leaves a half-installed platform, and the
+    youtube_music browser-extension copy stays safe even though it
+    installs *inside* the plugin directory's own destination.
 
-    Raises ``ValueError`` for unknown platforms / manifest mismatches and
-    ``OSError``/``urllib`` errors for network or filesystem failures.
+    Raises ``ValueError`` for unknown platforms, failed signature checks
+    and manifest mismatches, and ``OSError``/``urllib`` errors for network
+    or filesystem failures.
     """
     repo = INTEGRATION_REPOS.get(platform_id)
     if repo is None:
@@ -177,6 +209,37 @@ def download_integration(platform_id: str) -> List[Path]:
             tmp = Path(tmp_str)
             archive = tmp / "repo.tar.gz"
             _download_archive(repo.download_url, archive)
+            if _signature_verification_enabled():
+                signature = tmp / (
+                    repo.asset_name + plugin_signing.SIGNATURE_SUFFIX
+                )
+                try:
+                    _download_archive(
+                        repo.signature_url,
+                        signature,
+                        max_bytes=_MAX_SIGNATURE_BYTES,
+                    )
+                except urllib.error.HTTPError as e:
+                    # A release with no attached signature is a 404 on the
+                    # asset's .minisig - report it as what it is instead of
+                    # a bare HTTP error.
+                    if e.code == 404:
+                        raise plugin_signing.SignatureMissingError(
+                            tr("install.signature_missing")
+                        ) from e
+                    raise
+                plugin_signing.verify_archive(archive, signature)
+                logger.info(
+                    "Plugin signature verified for %s (release asset %s)",
+                    platform_id, repo.asset_name,
+                )
+            else:
+                logger.warning(
+                    "Plugin signature verification DISABLED for %s "
+                    "([security] verify_plugin_signatures = off) - "
+                    "installing unverified",
+                    platform_id,
+                )
             stage = tmp / "tree"
             stage.mkdir()
             with tarfile.open(archive, "r:gz") as tar:
@@ -270,7 +333,9 @@ def download_integration(platform_id: str) -> List[Path]:
             return installed
 
 
-def _download_archive(url: str, dest: Path) -> None:
+def _download_archive(
+    url: str, dest: Path, max_bytes: int = _MAX_ARCHIVE_BYTES
+) -> None:
     """Fetch *url* into *dest* with a size cap and timeout."""
     request = urllib.request.Request(
         url,
@@ -285,12 +350,27 @@ def _download_archive(url: str, dest: Path) -> None:
             if not chunk:
                 break
             copied += len(chunk)
-            if copied > _MAX_ARCHIVE_BYTES:
+            if copied > max_bytes:
                 raise OSError(
-                    f"Downloaded archive exceeds {_MAX_ARCHIVE_BYTES} bytes - "
+                    f"Downloaded archive exceeds {max_bytes} bytes - "
                     "refusing to install"
                 )
             out.write(chunk)
+
+
+def _signature_verification_enabled() -> bool:
+    """Read the ``[security] verify_plugin_signatures`` toggle.
+
+    Defaults to "on" (fail-closed).  An explicit "off" in settings.ini is
+    the documented, admin-visible bypass for environments that must
+    install unverified archives - there is no silent path.  See
+    docs/plugins.md "Release signing".
+    """
+    from utils.config import get_setting_value
+
+    return (
+        get_setting_value("security", "verify_plugin_signatures", "on") != "off"
+    )
 
 
 def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:

@@ -271,6 +271,11 @@ DEFAULT_STRINGS: dict[str, str] = {
     "cli.uninstall_dbs.other": "{count} DBs",
     "cli.uninstall_folders.one": "{count} folder",
     "cli.uninstall_folders.other": "{count} folders",
+    # Plugin download signature failures (services/plugin_signing.py).
+    "install.signature_missing": "Plugin archive has no minisign signature - refusing to install",
+    "install.signature_invalid": "Plugin signature verification failed - the archive may be tampered with or is not the official release",
+    "install.verifier_unavailable": "No plugin-signature verifier is available (install 'py-minisign' or 'minisign', or set [security] verify_plugin_signatures = off)",
+    "install.signing_key_unavailable": "Pinned plugin-signing public key (minisign.pub) is missing or invalid - refusing to install",
     # --- manage-integrations dialog (app/ui/manage_integrations_ui.py) --------
     "manage.dialog_title": "Manage integrations",
     "manage.heading": "Integrations",

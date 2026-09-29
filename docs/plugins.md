@@ -94,6 +94,114 @@ receiver) and
 URLs from the manifest at runtime (`chrome.runtime.getManifest()`) — no
 hardcoded port there.
 
+The same two-file pin applies to every extension platform, and the ports do
+not repeat: YouTube Music 5000, SoundCloud 5001, Deezer 5002, Tidal 5003
+(`plugin.json` `"receiver_port"` + the extension manifest's
+`http://127.0.0.1:<port>/*` host permission).
+
+Every receiver hardens the local server on two more axes:
+
+- **Loopback bind only**. `PluginInfo.build_receiver()` pins
+  `host="127.0.0.1"` from the core side (an explicit caller kwarg still
+  overrides it, e.g. for tests), so a receiver can never default to
+  `0.0.0.0` and expose the token-protected endpoints to the LAN.
+- **Host-header allowlist**. Each receiver's Flask app refuses any request
+  whose `Host` header is not `127.0.0.1[:port]` / `localhost[:port]` with
+  HTTP 403 in a `before_request` hook (before any route code, CORS
+  preflights included). This closes the DNS-rebinding window: a crafted
+  page whose attacker domain resolves to 127.0.0.1 would otherwise be a
+  well-formed (to werkzeug) `Host` value that passes both the token check
+  machinery's browser CORS and the server — CORS only stops browsers from
+  *reading* cross-origin responses, it never filters what reaches the
+  server.
+
+**Port collisions are reported, not swallowed.** A flow's `_start_receiver`
+catches the `OSError(EADDRINUSE)` from `start()` and carries on, so the
+capture then waits out its full ~30 s timeout and blames the extension for
+delivering nothing. Before the flow runs, `services/receiver_port.conflict_for()`
+probes the manifest's port instead (loopback bind with `SO_REUSEADDR`, so it
+matches what werkzeug would do and does not trip over our own `TIME_WAIT`
+sockets). On a collision the add is aborted before any thread starts, with:
+
+- the card status and the status row showing the `receiver_port_busy` code
+  (`tr_status` row in `DEFAULT_STRINGS`);
+- the full diagnostic logged as a warning and stored via
+  `duplicate_queue.record_error`, so it lands in the activity window's
+  Errors tab, naming the port and the holding process (best-effort
+  `/proc` lookup, Linux only, skipped when it is our own already-running
+  receiver);
+- `on_reset` before `on_status`, so the card's status label is not wiped by
+  the reset.
+
+`conflict_for()` returns `None` (meaning "go ahead") when the platform
+declares no port, has no receiver to start, its `flow_type` is not
+`"extension"`, or its receiver is already running and therefore holds the
+port on our behalf. The `flow_type` gate matters: a hybrid/api flow decides
+for itself whether to consult the receiver (SoundCloud declares a receiver
+on 5001 but reads the API directly under `[soundcloud] capture_mode =
+api`), so a busy port does not imply a failed capture. Only `"extension"`
+guarantees the bind, since `_build_flow` refuses to build such a flow
+without a receiver. The bias is deliberate: a missed diagnostic falls back
+to today's behaviour, while a false one would abort a working add.
+
+The probe is a race by nature; a port grabbed between the probe and the
+bind is still handled by the flow's own error path. Core reports the
+collision, it does not fix it: the port cannot be moved from one place (see
+the sync list above).
+
+### Release signing (supply-chain integrity)
+
+Catalog installs (`--install`, the Manage dialog's install/update) fetch
+the plugin repo's **latest GitHub release asset** (`plugin.tar.gz` from
+`/releases/latest/download/<asset>`) plus its detached minisign signature
+(`plugin.tar.gz.minisig`) and verify the archive before anything is
+extracted or staged. See `services/integration_manager.py` / the
+`IntegrationRepo.asset_name` field and `services/plugin_signing.py`.
+
+Policy is **fail-closed** (default `[security] verify_plugin_signatures =
+on` in `cfg/settings.ini`, see docs/config.md):
+
+- No release yet → HTTP 404 on the asset → install fails (normal).
+- Release without the attached signature → HTTP 404 on the `.minisig` →
+  reported as "no minisign signature" and refused.
+- Signature fails verification (tampered archive, wrong key, corrupted
+  file) → refused; nothing is written.
+- Pinned key missing/unparseable, or no verifier backend available
+  (`py-minisign` package or the `minisign` CLI) → refused.
+- `verify_plugin_signatures = off` restores the historical unverified
+  installs — a documented admin-visible bypass only; there is no silent
+  path. Logs warn loudly on the unverified path.
+
+Trust anchor: the public verification key is pinned in the core repo at
+`minisign.pub` (tracked — that file is the trust anchor, treat it like a
+dependency's hash). The matching **secret key lives offline with the
+maintainer and never touches GitHub**: a fully compromised plugin repo or
+GitHub account still cannot mint a valid signature. Rotating the anchor
+is a one-file change (replace `minisign.pub`); releases signed with an
+older key then fail verification until re-signed, so rotate deliberately.
+
+Release process (per plugin repo, maintainer machine, once per release):
+
+```bash
+# 1. build the package: a tarball whose root is the plugin tree
+#    (the loader accepts a single top-level wrapper dir)
+tar -czf plugin.tar.gz -C <package-dir> .
+# 2. sign it with the secret key (prompts for the key password)
+minisign -Sm plugin.tar.gz -s <secret-key-file> -p minisign.pub
+# 3. create the GitHub release (tag = integer per the version
+#    convention) and attach BOTH files:
+#      plugin.tar.gz
+#      plugin.tar.gz.minisig
+```
+
+Verification in the app uses `py-minisign` (the `minisign` Python
+package, a core dependency), falling back to the `minisign` CLI
+(`minisign -Vm <archive> -p <pubkey> -x <sigfile>`).
+
+Hand-dropped plugins (a directory copied into `integrations/` by hand)
+are **not** covered by release signing: the local filesystem the app is
+launched from is the trust boundary for local edits.
+
 ## Service-only plugins (no add-flow)
 
 A plugin may be a *service* rather than a playlist-add platform: it

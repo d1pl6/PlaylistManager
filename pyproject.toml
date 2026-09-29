@@ -28,6 +28,7 @@ dependencies = [
     "flask",
     "flask-cors",
     "pynput",
+    "py-minisign",
 ]
 
 [project.optional-dependencies]

@@ -114,6 +114,17 @@ DEFAULT_SETTINGS = {
         "position": "below_header",
         "duplicates": "yes",
     },
+    # Plugin download authenticity (see services/plugin_signing.py and
+    # docs/plugins.md "Release signing"):
+    #   "on"  - refuse catalog installs whose release asset fails minisign
+    #           verification against the pinned minisign.pub (default,
+    #           fail-closed)
+    #   "off" - install unverified archives (legacy behavior; documented
+    #           bypass only - there is no silent path)
+    "security": {
+        "verify_plugin_signatures": "on",
+        "credential_keyring": "on",
+    },
 }
 
 # Valid [thumbnails] mode values; anything else falls back to "off".
