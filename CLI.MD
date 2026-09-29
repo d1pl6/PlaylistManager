@@ -1,4 +1,9 @@
+```bash
+playlistmanager --help
+```
+
 ## Content
+- [Note](#note)
 - [Debugging](#debugging)
 - [Authentication](#authentication)
 - [Plugins](#plugins)
@@ -7,14 +12,17 @@
 - [Scrobble](#scrobble-lastfm-backend-independent-of-any-playlist)
 - [Data saver, fullscreen](#other)
 - [Global install](#global-install-for-compositor-shortcuts)
+  - [Bind](#then-bind)
+
+### Note
+Every example here is using `playlistmanager` since it's easier (at least for me) to use. If you don't want to *install* app globally on your system - use `python -m app <command>` instead.
 
 ### Debugging:
+```bash
+playlistmanager --verbose / -v  # for verbose logging.
+playlistmanager --debug / -vv   # DEBUG and above (everything)
+playlistmanager --trace / -vvv  # TRACE and above + third-party debug loggers (requests / urllib3 / ytmusicapi / etc)
 ```
---verbose / -v  # for verbose logging.
---debug / -vv   # DEBUG and above (everything)
---trace / -vvv  # TRACE and above + third-party debug loggers (requests / urllib3 / ytmusicapi / etc)
-```
-
 
 ### Authentication:
 ```bash
@@ -85,11 +93,11 @@ playlistmanager --logout spotify            # delete spotify.json + registry ent
 - Unknown platform names exit with code 2.
 
 ### Plugins:
-```
-python -m app --install spotify            # download + install the Spotify plugin
-python -m app --install all                # install every supported platform
-python -m app --uninstall spotify          # remove the plugin + all its local data
-python -m app --uninstall all              # remove every installed platform
+```bash
+playlistmanager --install spotify            # download + install the Spotify plugin
+playlistmanager --install all                # install every supported platform
+playlistmanager --uninstall spotify          # remove the plugin + all its local data
+playlistmanager --uninstall all              # remove every installed platform
 ```
 
 - `--install <platform>` downloads the plugin into `integrations/<platform>/` (catalog-driven,
@@ -103,14 +111,14 @@ python -m app --uninstall all              # remove every installed platform
 - Both accept `all` to act on every supported platform. Unknown platform names exit with code 2.
 
 ### Playlist management:
-```
-python -m app -p add "https://music.youtube.com/playlist?list=PL..."
-python -m app -p add "https://open.spotify.com/playlist/<id>"
-python -m app -p del 1,"Chill Mix"          # remove locally (registry + DB)
-python -m app -p del "https://open.spotify.com/playlist/<id>"   # by URL
-python -m app -p delete all                 # remove every playlist
-python -m app -p ref 2,3                    # re-import all tracks from the platform
-python -m app -p refresh all                # refresh every playlist
+```bash
+playlistmanager -p add "https://music.youtube.com/playlist?list=PL..."
+playlistmanager -p add "https://open.spotify.com/playlist/<id>"
+playlistmanager -p del 1,"Chill Mix"          # remove locally (registry + DB)
+playlistmanager -p del "https://open.spotify.com/playlist/<id>"   # by URL
+playlistmanager -p delete all                 # remove every playlist
+playlistmanager -p ref 2,3                    # re-import all tracks from the platform
+playlistmanager -p refresh all                # refresh every playlist
 ```
 
 - `-p add` registers the playlist from its URL (title fetched from the platform, tracks
@@ -132,19 +140,19 @@ python -m app -p refresh all                # refresh every playlist
 - `-p` consumes the rest of the command line: put it after any other options.
 
 ### Song add:
-```
-python -m app -a 1,2,3            # playlists #1, #2 and #3
-python -m app -a 1-3              # range
-python -m app --add-song "Chill Mix"   # by name
-python -m app -a 1,"Chill Mix",3  # mixed numbers and names
-python -m app --list              # show the numbered playlist list
+```bash
+playlistmanager -a 1,2,3            # playlists #1, #2 and #3
+playlistmanager -a 1-3              # range
+playlistmanager --add-song "Chill Mix"   # by name
+playlistmanager -a 1,"Chill Mix",3  # mixed numbers and names
+playlistmanager --list              # show the numbered playlist list
 ```
 
 ### Scrobble (Last.fm backend, independent of any playlist):
 
-```
-python -m app -s                   # scrobble the currently-playing song
-python -m app --scrobble           # (long form)
+```bash
+playlistmanager -s                   # scrobble the currently-playing song
+playlistmanager --scrobble           # (long form)
 ```
 
 `-s` scrobbles the current song without adding it to any playlist - `api`-type
@@ -154,21 +162,17 @@ Last.fm plugin and credentials to be configured (see the Settings dialog's
 Last.fm section); otherwise it prints an error and exits non-zero.
 
 ### Other:
-```
-python -m app --data-saver   # launch the GUI with thumbnail fetching disabled
-                             # (the "max" thumbnail mode: nothing is shown, nothing
-                             # is downloaded; overrides the [thumbnails] setting for
-                             # the run)
+```bash
+playlistmanager --data-saver   # launch the GUI with thumbnail fetching disabled
+                               # (the "max" thumbnail mode: nothing is shown, nothing
+                               # is downloaded; overrides the [thumbnails] setting for
+                               # the run)
 
-python -m app --fullscreen   # launch app in fullcreen
+playlistmanager --fullscreen   # launch app in fullcreen
 ```
 
 ## Global install (for compositor shortcuts)
-`python -m app ...` only works from the repo root. To bind the command from anywhere
-(i3 / hyprland / etc), install a global `playlistmanager` command.
-
-The simplest way - a symlink (the app resolves its own real location, so any checkout
-path works; nothing machine-specific is hardcoded in the code):
+The simplest way (symlink):
 
 ```sh
 chmod +x /path/to/PlaylistManager/main.py
@@ -182,8 +186,9 @@ or a small wrapper (no symlink indirection):
 exec python3 /path/to/PlaylistManager/main.py "$@"
 ```
 
-(`~/.local/bin` is on PATH on most Linux setups; otherwise use `/usr/local/bin`.)
-Then bind e.g.:
+Put it in (`~/.local/bin` is on PATH on most Linux setups; otherwise use `/usr/local/bin`.)
+
+### Then bind:
 
 i3 / Sway
 
@@ -191,7 +196,9 @@ i3 / Sway
 
 Hyprland
 
-`bind = MODSHIFT, A, exec, playlistmanager -a 1`
+< v0.55: `bind = MODSHIFT, A, exec, playlistmanager -a 1`
+
+v0.55+: `hl.bind("MODSHIFT + A", hl.dsp.exec_cmd("playlistmanager -a 1"))`
 
 KDE Plasma
 

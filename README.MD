@@ -1,8 +1,6 @@
 Add songs that you're currently listening to your chosen playlists or liked tracks using keybinds.
 
-<img width="326" height="249" alt="screenshot1" src="https://github.com/user-attachments/assets/e628af22-43fc-4a05-ab8e-a9b0083ad697" />
-<img width="326" height="249" alt="screenshot2" src="https://github.com/user-attachments/assets/06ec2ba7-d826-4484-8fba-136ae36493d8" />
-<img width="326" height="249" alt="screenshot3" src="https://github.com/user-attachments/assets/18873a88-2a09-4d1c-b881-5f50e6933d65" />
+<img width="326" height="249" alt="screenshot1" src="https://github.com/d1pl6/PlaylistManager/blob/master/assets/screenshot1.png" />
 
 ## Table of Contents
 - [Why?](#why)
@@ -19,28 +17,31 @@ Add songs that you're currently listening to your chosen playlists or liked trac
 - [Q&A](#q--a)
 
 # Why?
-I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage. Since i'm not using streaming platforms much, i'm using ai to create same app but on Python.
+I couldn't find something similar so i did it. First it used Electron, but i didn't like 5 billion (300mb) RAM usage.
+
+P.S: Since I raerly using streaming platforms now, and I'm not interested in programming much, I started using AI to add new functions. So, some functions might work in a way that you don't expect them to work since I'm not able to test them much. If you found something wierd - please, open bug report or disscussion.
 
 # Integrations
 Currently supported:
 - YouTube Music
-- Spotify (not tested)
-- SoundCloud (not tested)
+- Spotify ([not tested](#help-needed))
+- SoundCloud ([not tested](#help-needed))
 - Deezer ([should be working fine](#help-needed))
+- Tidal ([not tested](#help-needed))
 
 See [INTEGRATIONS.MD](INTEGRATIONS.MD)
 
 # Install
 Requires Python 3.10+
 ```bash
-git clone https://github.com/d1pl6/PlaylistManager.git
+git clone https://github.com/d1pl6/PlaylistManager.git --depth 1
 ```
-Or Download ZIP from [Releases](https://github.com/d1pl6/PlaylistManager/releases/latest) page
+Or Download clean ZIP from [Releases](https://github.com/d1pl6/PlaylistManager/releases/latest)
 
 To Update:
-GUI: `Settings -> Check for updates`
+GUI: `Settings → Check for updates`
 
-CLI: `git pull`
+CLI: `git pull --ff-only`
 
 ## Windows / Mac OS
 ```bash
@@ -83,11 +84,11 @@ apt install -y python3-pystray python3-keyring
 > **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
 
 > [!NOTE]
-> **Tray behavior**: restoring the window from the tray ("Open PlaylistManager") is best-effort - compositors may refuse unsolicited raise/focus requests (focus-stealing prevention), so the window can appear unfocused or behind other windows. A maximized window may also restore unmaximized after hide-to-tray (the compositor clears the maximized state when the window is hidden). May be fixed in the future.
+> **Tray behavior**: compositors may refuse unsolicited raise/focus requests (focus-stealing prevention), so the window can appear unfocused or behind other windows. A maximized window may also restore unmaximized after hide-to-tray (the compositor clears the maximized state when the window is hidden). May be fixed in the future.
 
 # Usage
 > [!NOTE]
-> **Wayland**: applications cannot grab global keyboard events (the compositor owns input - a security design decision), so pynput keybinds only capture XWayland apps. Bind compositor shortcuts to the CLI instead - see [CLI](CLI.MD) and [Global command](CLI.MD#global-install-for-compositor-shortcuts).
+> **Wayland**: whatewer wayland devs are thinking, but wayland don't have Global Shortcuts Protocol, so if you using wayland: Bind compositor shortcuts to the [CLI](CLI.MD#song-add) and [*install* playlistmanager](CLI.MD#global-install-for-compositor-shortcuts).
 ```
 python -m main
 
@@ -126,10 +127,10 @@ keybind add to the platform's *like* API. Things to test on each platform:
 * Keybind/`-a` add of the currently playing song: does the track actually
   get liked on the platform (check in the platform app)? Does a second
   add of the same song get blocked as a duplicate?
-* Card reload (right-click -> reload): expected to FAIL - the reload path
+* Card reload (right-click → reload): expected to FAIL - the reload path
   fetches playlist details/tracks by the sentinel id and the platform
   rejects it. Confirm the failure is a clean error, not a crash.
-* Song remove on the card (right-click -> remove a row): expected to FAIL
+* Song remove on the card (right-click → remove a row): expected to FAIL
   with a platform error (fake playlist id) and the row stays; the local
   entry is only deleted when the platform call succeeds. Report the exact
   error line.

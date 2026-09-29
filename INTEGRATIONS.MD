@@ -48,7 +48,7 @@ Extension getting songs every 5 seconds, so you CAN skip songs fast but it's NOT
 It doesn't matter when you load an extension.
 
 ### Lastfm
-Lastfm not supporting playlists through API anymore (likes&scrobble songs are available)
+Lastfm is not supporting playlists through API anymore (only likes & scrobble songs are available)
 
 1. Create an [API account](https://www.last.fm/api/account/create) (Callback URL is not needed)
 2. Copy-paste API Key and Client Secret

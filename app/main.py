@@ -50,13 +50,6 @@ def _require_network() -> None:
 def parse_args():
     p = argparse.ArgumentParser(
         prog="playlistmanager",
-        description=(
-            "  |-\\   |\\  /|  PlaylistManager -\n"
-            "  |d1|  |p\\/l|  add the\n"
-            "  |-/   |    |  currently-playing song\n"
-            "  |     |    |  to your playlists."
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
         "--verbose", "-v", action="count", default=0,
