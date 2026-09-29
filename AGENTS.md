@@ -58,7 +58,7 @@ Tests must stay headless-safe: `tests/conftest.py` redirects every profile-roote
 
 ## Filesystem
 
-File names use mixed casing on purpose (`README.MD`, `CLI.MD`, `TODO.MD`, `INTEGRATIONS.MD`, `AGENTS.md`) — always match existing filename casing when creating or referencing files. (On this machine's drive the variants collide; see `.agents/AGENTS.md`.)
+Gitignored paths — commits cannot carry them, and edits to them never show in `git status`: `opencode.jsonc`, `.agents/`, `integrations/*` (every plugin dir — only `integrations/__init__.py` is tracked).
 
 There is no `log/` directory: `utils/logging_config.py` installs a single stderr `StreamHandler` (`basicConfig` with no `filename`), so nothing is written to disk and there is nothing to rotate or retain. A log file would be a new feature, not a setting.
 

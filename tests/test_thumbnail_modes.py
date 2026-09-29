@@ -10,6 +10,7 @@ the cache tree is pinned under ``tmp_path`` per test (conftest keeps the
 module globals sandboxed process-wide as a backstop).
 """
 
+import hashlib
 import json
 from io import BytesIO
 from unittest.mock import Mock
@@ -30,7 +31,13 @@ def _fake_png(size=(16, 16), color=(120, 60, 30)) -> bytes:
     return buf.getvalue()
 
 
-def _fake_session(*, fail: bool = False):
+def _fake_jpeg(size=(64, 48), color=(120, 60, 30)) -> bytes:
+    buf = BytesIO()
+    Image.new("RGB", size, color).save(buf, format="JPEG", quality=95)
+    return buf.getvalue()
+
+
+def _fake_session(*, fail: bool = False, content: bytes | None = None):
     import requests
 
     session = Mock()
@@ -38,7 +45,7 @@ def _fake_session(*, fail: bool = False):
         session.get = Mock(side_effect=requests.RequestException("boom"))
     else:
         resp = Mock()
-        resp.content = _fake_png()
+        resp.content = content if content is not None else _fake_png()
         resp.raise_for_status = Mock()
         session.get = Mock(return_value=resp)
     return session
@@ -61,6 +68,10 @@ def _thumb_env(monkeypatch, tmp_path):
         ThumbnailService._cache.clear()
     monkeypatch.setattr(thumb, "_session", _fake_session())
     config.set_setting_value("thumbnails", "mode", "off")
+    # Written by earlier tests in the same session (the settings file lives
+    # in the throwaway profile root, which is shared), so pin the cap back
+    # to "no cap" the same way the mode is pinned.
+    config.set_setting_value("thumbnails", "max_size", "0")
     config.set_setting_value("duplicate_check", "is_true", "false")
     config.set_setting_value("duplicate_check", "title_threshold", "0.85")
     config.set_setting_value("duplicate_check", "duration_tolerance", "5")
@@ -69,6 +80,10 @@ def _thumb_env(monkeypatch, tmp_path):
 
 def _set_mode(mode: str) -> None:
     config.set_setting_value("thumbnails", "mode", mode)
+
+
+def _set_cap(cap: int | str) -> None:
+    config.set_setting_value("thumbnails", "max_size", str(cap))
 
 
 def _set_dupcheck(enabled: bool) -> None:
@@ -323,3 +338,161 @@ def test_prune_drops_orphaned_dedupe_rows(_thumb_env):
     _set_mode("cache")
     ThumbnailService.prune_song_cache(set())
     assert ThumbnailService._load_dedupe_index() == []
+
+
+# ---------------------------------------------------------------------------
+# [thumbnails] max_size: the longest-edge pixel cap
+# ---------------------------------------------------------------------------
+# The cap is invisible in a cover's *output* size (a cover is always
+# cover-fitted to the requested display size), so the observable
+# behaviour lives in the full-res path, the stored bytes, and the cache
+# keys -- that is what these assert.
+
+def test_uncapped_is_a_noop(_thumb_env, monkeypatch):
+    monkeypatch.setattr(thumb, "_session", _fake_session(content=_fake_png((640, 480))))
+    assert ThumbnailService._cap() == 0
+    img = ThumbnailService.fetch_full_image(IMG_URL)
+    assert img.size == (640, 480)
+
+
+def test_cap_bounds_the_longest_edge_and_keeps_aspect(_thumb_env, monkeypatch):
+    monkeypatch.setattr(thumb, "_session", _fake_session(content=_fake_png((640, 480))))
+    _set_cap(128)
+    img = ThumbnailService.fetch_full_image(IMG_URL)
+    assert img.size == (128, 96)  # 640/480 aspect preserved, width capped
+
+
+def test_cap_never_upscales(_thumb_env):
+    _set_cap(2048)
+    img = ThumbnailService.fetch_full_image(IMG_URL)  # 16x16 fixture source
+    assert img.size == (16, 16)
+
+
+def test_cap_below_display_size_still_returns_a_full_cover(_thumb_env, monkeypatch):
+    # The cap bounds the *source*; the cover is still cover-fitted to the
+    # requested size, so a small cap never yields a undersized card image.
+    monkeypatch.setattr(thumb, "_session", _fake_session(content=_fake_png((640, 480))))
+    _set_cap(128)
+    img = ThumbnailService.fetch_image(IMG_URL, (64, 64))
+    assert img is not None
+    assert img.size == (64, 64)
+
+
+def _spy_on_draft(monkeypatch) -> list:
+    """Record every JPEG draft() call (the cheap DCT-scale decode).
+
+    Spied on JpegImageFile, not Image.Image: the plugin subclass owns
+    draft(), so a base-class patch would never be reached.
+    """
+    from PIL import JpegImagePlugin
+
+    calls = []
+    real_draft = JpegImagePlugin.JpegImageFile.draft
+
+    def spy(self, mode, size):
+        calls.append(size)
+        return real_draft(self, mode, size)
+
+    monkeypatch.setattr(JpegImagePlugin.JpegImageFile, "draft", spy, raising=True)
+    return calls
+
+
+def test_jpeg_source_is_capped_via_draft(_thumb_env, monkeypatch):
+    # JPEG is what every platform serves; draft() asks libjpeg for an
+    # already-downscaled decode, which is what makes the cap bound the
+    # working set instead of only the result.
+    monkeypatch.setattr(thumb, "_session", _fake_session(content=_fake_jpeg((800, 600))))
+    calls = _spy_on_draft(monkeypatch)
+    _set_cap(128)
+    img = ThumbnailService.fetch_full_image(IMG_URL)
+    assert calls == [(128, 128)]
+    assert max(img.size) <= 128
+
+
+def test_png_source_skips_draft(_thumb_env, monkeypatch):
+    # No DCT scaling outside JPEG, so the cap is purely a resize there.
+    monkeypatch.setattr(thumb, "_session", _fake_session(content=_fake_png((640, 480))))
+    calls = _spy_on_draft(monkeypatch)
+    _set_cap(128)
+    assert ThumbnailService.fetch_full_image(IMG_URL).size == (128, 96)
+    assert calls == []
+
+
+def test_stored_full_entry_is_capped(_thumb_env, monkeypatch):
+    _set_mode("download")
+    monkeypatch.setattr(thumb, "_session", _fake_session(content=_fake_png((640, 480))))
+    _set_cap(128)
+    assert ThumbnailService.fetch_full_image(IMG_URL) is not None
+    stored = list((_thumb_env / "full").glob("*.png"))
+    assert len(stored) == 1
+    with Image.open(stored[0]) as on_disk:
+        assert max(on_disk.size) == 128
+
+
+def test_invalid_cap_falls_back_to_no_cap(_thumb_env, monkeypatch):
+    monkeypatch.setattr(thumb, "_session", _fake_session(content=_fake_png((640, 480))))
+    for bogus in ("999", "-5", "abc", "", "  ", "12.5"):
+        _clear_memory_cache()
+        _set_cap(bogus)
+        assert ThumbnailService._cap() == 0, bogus
+        assert ThumbnailService.fetch_full_image(IMG_URL).size == (640, 480), bogus
+
+
+def test_cap_is_part_of_both_cache_keys(_thumb_env):
+    # Uncapped digests stay byte-identical to the historical ones, so an
+    # existing cache is not invalidated by upgrading.
+    assert ThumbnailService._disk_key(IMG_URL, (64, 64)) == hashlib.md5(
+        f"{IMG_URL}|64x64".encode("utf-8")
+    ).hexdigest()
+    assert ThumbnailService._disk_key(IMG_URL, None) == hashlib.md5(
+        IMG_URL.encode("utf-8")
+    ).hexdigest()
+
+    _set_cap(128)
+    capped = ThumbnailService._disk_key(IMG_URL, (64, 64))
+    assert capped != hashlib.md5(f"{IMG_URL}|64x64".encode("utf-8")).hexdigest()
+    _set_cap(256)
+    assert ThumbnailService._disk_key(IMG_URL, (64, 64)) != capped
+    # Full-image keys move too, so the multi-MB entries are not reused.
+    assert ThumbnailService._disk_key(IMG_URL, None) != hashlib.md5(
+        IMG_URL.encode("utf-8")
+    ).hexdigest()
+
+
+def test_changing_the_cap_refetches_instead_of_serving_the_memo(_thumb_env):
+    _set_mode("off")
+    assert ThumbnailService.fetch_full_image(IMG_URL) is not None
+    assert thumb._session.get.call_count == 1
+    _set_cap(256)
+    assert ThumbnailService.fetch_full_image(IMG_URL) is not None
+    assert thumb._session.get.call_count == 2  # not the memoized entry
+
+
+def test_max_mode_ignores_the_cap(_thumb_env):
+    _set_mode("max")
+    _set_cap(128)
+    assert ThumbnailService.fetch_image(IMG_URL, (64, 64)) is None
+    assert ThumbnailService.fetch_full_image(IMG_URL) is None
+    thumb._session.get.assert_not_called()
+
+
+def test_clear_cache_for_matches_the_normalized_url(_thumb_env, monkeypatch):
+    # Fetches cache under the normalized (https) URL, so clearing by the
+    # raw http:// spelling has to normalize too or it misses the entry.
+    _set_mode("off")
+    assert ThumbnailService.fetch_full_image("http://" + IMG_URL[8:]) is not None
+    ThumbnailService.clear_cache_for("http://" + IMG_URL[8:], None)
+    assert not ThumbnailService._cache
+
+
+def test_prune_keeps_entries_written_under_the_current_cap(_thumb_env, monkeypatch):
+    _set_mode("cache")
+    _set_cap(128)
+    monkeypatch.setattr(thumb, "_session", _fake_session(content=_fake_png((640, 480))))
+    ThumbnailService.fetch_song_image(SONG_A)
+    ThumbnailService.fetch_song_image(SONG_FAR)
+    assert len(_song_files(_thumb_env)) == 2
+    ThumbnailService.prune_song_cache({SONG_A["thumbnail_url"]})
+    assert [p.name for p in _song_files(_thumb_env)] == [
+        ThumbnailService._disk_key(SONG_A["thumbnail_url"], thumb.SONG_THUMB_SIZE) + ".png"
+    ]

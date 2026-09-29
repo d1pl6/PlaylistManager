@@ -25,6 +25,7 @@ from utils.config import (
     REMOVE_PLAYLIST_DEFAULT_MODE,
     REMOVE_PLAYLIST_MODE_LABELS,
     THUMBNAIL_MODES,
+    THUMBNAIL_SIZE_CAPS,
     UPDATE_CHECK_DEFAULT_INTERVAL,
     UPDATE_CHECK_INTERVALS,
     UPDATE_CHECK_INTERVAL_LABELS,
@@ -32,6 +33,8 @@ from utils.config import (
     get_setting_value,
     resolve_notification_align,
     resolve_notification_position,
+    resolve_thumbnail_size_cap,
+    SCROBBLES_OPTION,
     set_setting,
     set_setting_value,
 )
@@ -986,6 +989,58 @@ def show_settings_dialog(
         font=ui_font(9),
     ).pack(side="left", pady=(0,5), padx=(6, 0))
     _refresh_cache_size_label()
+
+    # --- Thumbnails: max image size (pixel cap) ---
+    # Same shape as the mode combo above: keys match
+    # utils.config.THUMBNAIL_SIZE_CAPS, the combo shows translated
+    # labels, and a value outside the tuple resolves to 0 (no cap) so a
+    # corrupt file cannot shrink the art.  The cap is read per fetch, so
+    # a change applies live - and because it is part of both cache keys,
+    # images stored under the previous cap are simply re-fetched.
+    _THUMB_SIZE_LABELS = tuple(
+        (str(cap), tr(f"settings.thumbnail_size_{cap}"))
+        for cap in THUMBNAIL_SIZE_CAPS
+    )
+
+    def _on_thumbnail_size_change(value: str) -> None:
+        key = value
+        for k, label in _THUMB_SIZE_LABELS:
+            if label == value:
+                key = k
+                break
+        try:
+            set_setting_value("thumbnails", "max_size", key)
+        except Exception as e:
+            logger.error("Failed to write thumbnail size setting: %s", e)
+
+    thumb_size_row = tk.Frame(appearance_section, background=theme_check_bg)
+    thumb_size_row.pack(fill="both", pady=(0, 5), padx=16)
+    tk.Label(
+        thumb_size_row,
+        text=tr("settings.thumbnail_size"),
+        background=theme_check_bg,
+        foreground=theme_check_fg,
+        font=ui_font(12),
+    ).pack(side="left", pady=(0, 5))
+
+    _thumb_size_key_to_label = dict(_THUMB_SIZE_LABELS)
+    thumb_size_var = tk.StringVar(
+        value=_thumb_size_key_to_label[str(resolve_thumbnail_size_cap())]
+    )
+    thumb_size_combo = ttk.Combobox(
+        thumb_size_row,
+        textvariable=thumb_size_var,
+        cursor="hand2",
+        values=tuple(_thumb_size_key_to_label.values()),
+        state="readonly",
+        width=22,
+        font=ui_font(12),
+    )
+    thumb_size_combo.pack(side="left", pady=(0, 5))
+    thumb_size_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: _on_thumbnail_size_change(thumb_size_var.get()),
+    )
 
     tk.Label(
         appearance_section,

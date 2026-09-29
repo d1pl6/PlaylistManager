@@ -11,7 +11,7 @@ Everything except `theme.txt` lives under the platformdirs root
 | App settings (INI) | `<root>/cfg/settings.ini` |
 | Theme settings (INI) | `<root>/cfg/theme.ini` |
 | i18n catalogs (user) | `<root>/cfg/i18n/<lang>.ini` (self-healing; overlaid on bundled `app/i18n/<lang>.ini`; code-side English `DEFAULT_STRINGS` in `utils/i18n.py`) |
-| Thumbnail cache | `platformdirs.user_cache_dir("playlistmanager")` — `~/.cache/playlistmanager/` on Linux (NOT the config root; **not profile-aware** — a thumbnail is the same bytes whichever profile fetched it): `playlists/` (URL-keyed covers, `md5(url|WxH).png`), `songs/` (URL-keyed or — in `dedupe` mode — identity-keyed song thumbs plus `index.json`), `full/` (original images, cleared on image-view close) |
+| Thumbnail cache | `platformdirs.user_cache_dir("playlistmanager")` — `~/.cache/playlistmanager/` on Linux (NOT the config root; **not profile-aware** — a thumbnail is the same bytes whichever profile fetched it): `playlists/` (URL-keyed covers, `md5(url|WxH).png` — with `[thumbnails] max_size` set, the digest also folds the cap in as `md5(url|WxH|c256).png`, so entries from a different cap are never served and cache-mode pruning drops them as unreferenced; the uncapped digest is unchanged, so an existing cache survives the upgrade), `songs/` (URL-keyed or — in `dedupe` mode — identity-keyed song thumbs plus `index.json`), `full/` (original images, cleared on image-view close) |
 | Palette spec (docs) | `theme.txt` |
 | Auth credentials | `<root>/auth/` |
 | Active profile + metadata | `<root>/cfg/profile.json` (name), `<root>/db/profiles.json` (bucket capture per profile) |
@@ -25,3 +25,5 @@ Never hardcode the shared dirs or build paths around them — always go through 
 ## On-demand creation
 
 The repo's `auth/`, `db/`, `cfg/`, and `log/` directories are gone — everything is under the platformdirs root. **`<root>/db/` and `<root>/cfg/` do not exist on a fresh install** — they are created on demand: `App.__init__` calls `ensure_settings_file()`/`ensure_theme_file()` (cfg/) and `PlaylistStore.ensure_playlists_file()` (creates `db/playlists.json`); `PlaylistStore._write()`, `DatabaseManager.get_playlist_db_path()`, and the store writers mkdir their parents defensively. Any new path under `db/` or `cfg/` must create its parent directory.
+
+**No log path exists** — the old repo-root `log/` was dropped rather than relocated: `utils/logging_config.py` configures a single stderr `StreamHandler` (`basicConfig` with no `filename`), so the app writes no log file anywhere, under the config root or otherwise. Nothing rotates and nothing is retained; diagnostics live in the terminal (or the compositor shortcut's terminal) for the lifetime of the process. Adding a persisted log would be a new feature, and it would need a path decision here plus a retention policy.

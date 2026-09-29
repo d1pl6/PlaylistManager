@@ -31,6 +31,14 @@ Thumbnail modes (``[thumbnails] mode`` in settings.ini, see
   each showcase refresh.
 - ``max``: no thumbnails at all - every fetch returns None and nothing
   is written.  ``--data-saver`` forces this for the run.
+
+The mode decides *whether* images are kept; ``[thumbnails] max_size``
+(``utils.config.THUMBNAIL_SIZE_CAPS``) decides *how large* they may be.
+The cap is applied in :meth:`ThumbnailService._fit_within` on the single
+fetch path every caller funnels through, so it bounds the decode working
+set and the cached bytes alike, and it is part of both cache keys -
+switching it takes effect on the next fetch instead of serving entries
+written under the previous cap.
 """
 
 import hashlib
@@ -49,7 +57,7 @@ import platformdirs
 import requests
 from PIL import Image, ImageTk
 
-from utils.config import THUMBNAIL_MODES, get_setting_value
+from utils.config import THUMBNAIL_MODES, get_setting_value, resolve_thumbnail_size_cap
 from utils.logging_config import network_log
 
 logger = logging.getLogger(__name__)
@@ -163,7 +171,7 @@ class ThumbnailService:
         ThumbnailService._pool.submit(fn)
 
     _cache_lock = threading.Lock()
-    _cache: dict[tuple[str, tuple[int, int] | None], tuple[float, Image.Image]] = {}
+    _cache: dict[tuple[str, tuple[int, int] | None, int], tuple[float, Image.Image]] = {}
     _CACHE_TTL_SECONDS = 600
     # Sized entries (covers / song thumbs, 40-64 px) share one budget;
     # full-res (url, None) images are multi-MB and get their own small
@@ -201,6 +209,54 @@ class ThumbnailService:
         except Exception:
             return "off"
         return mode if mode in THUMBNAIL_MODES else "off"
+
+    @staticmethod
+    def _cap() -> int:
+        """Effective longest-edge pixel cap for this run (0 = no cap).
+
+        Read per fetch like :meth:`_mode`, so a Settings change applies
+        live.  Validation lives in ``config.resolve_thumbnail_size_cap``;
+        an unreadable settings file degrades to no cap (never to a cap
+        that would silently shrink the art).
+        """
+        try:
+            return resolve_thumbnail_size_cap()
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _fit_within(img: Image.Image, cap: int) -> Image.Image:
+        """Downscale *img* so its longest edge is at most *cap* pixels.
+
+        A no-op when *cap* is 0 (the default) or the image already fits -
+        so an uncapped run produces byte-identical files to the previous
+        behaviour and existing caches stay valid.  Aspect ratio is
+        preserved and only the longest edge is compared, so a 16:9 cover
+        is capped by its width.  Never upscales: a cap below the display
+        size yields a smaller source, not a blurred enlargement.
+
+        ``draft()`` first for JPEG sources (what every platform serves):
+        it asks libjpeg for a 1/2, 1/4 or 1/8-scale decode, which is
+        exactly the downscale we were going to throw away - without it
+        PIL still materialises the full-resolution bitmap before
+        :meth:`_cover_fit` shrinks it.  No-op for formats without DCT
+        scaling (PNG, WebP), hence the cheap try/except.
+        """
+        if cap <= 0:
+            return img
+        if img.format == "JPEG":
+            try:
+                img.draft(None, (cap, cap))
+            except Exception as e:
+                logger.debug("JPEG draft() failed, decoding at full size: %s", e)
+        w, h = img.size
+        if w <= 0 or h <= 0 or max(w, h) <= cap:
+            return img
+        scale = cap / max(w, h)
+        return img.resize(
+            (max(1, round(w * scale)), max(1, round(h * scale))),
+            Image.Resampling.LANCZOS,
+        )
 
     # ------------------------------------------------------------------
     # In-memory cache helpers
@@ -261,12 +317,35 @@ class ThumbnailService:
 
     @staticmethod
     def _disk_key(url: str, size: tuple[int, int] | None) -> str:
-        """Deterministic filename component for a (url, size) entry."""
+        """Deterministic filename component for a (url, size) entry.
+
+        The size cap is folded into the digest so entries written under a
+        different cap are never served, and cache-mode pruning treats
+        them as unreferenced (it builds its active set from this same
+        helper).  Uncapped, the digest is byte-identical to the
+        historical one, so existing caches keep working.
+        """
+        cap = ThumbnailService._cap()
+        cap_part = f"|c{cap}" if cap else ""
         if size is None:
-            return hashlib.md5(url.encode("utf-8")).hexdigest()
+            return hashlib.md5(f"{url}{cap_part}".encode("utf-8")).hexdigest()
         return hashlib.md5(
-            f"{url}|{size[0]}x{size[1]}".encode("utf-8")
+            f"{url}|{size[0]}x{size[1]}{cap_part}".encode("utf-8")
         ).hexdigest()
+
+    @staticmethod
+    def _mem_key(
+        url: str, size: tuple[int, int] | None
+    ) -> tuple[str, tuple[int, int] | None, int]:
+        """In-memory cache key: (url, size, cap).
+
+        *size* keeps its ``None``-means-full-image meaning at index 1
+        (the eviction split in :meth:`_cache_put` reads ``key[1]``).
+        Folding the cap in makes a Settings change apply on the next
+        fetch instead of after the entry TTL - the disk key would
+        already have moved on.
+        """
+        return (url, size, ThumbnailService._cap())
 
     @staticmethod
     def _disk_load(path: Path) -> Image.Image | None:
@@ -404,12 +483,21 @@ class ThumbnailService:
     def _fetch(
         thumb_url: str, size: tuple[int, int] | None
     ) -> Image.Image | None:
-        """Semaphore-bounded GET; cover-fits to *size* (None = full image)."""
+        """Semaphore-bounded GET; cover-fits to *size* (None = full image).
+
+        The one funnel every fetch goes through, so the size cap applies
+        uniformly - to covers, to song thumbs and to the image viewer's
+        originals alike.
+        """
         with ThumbnailService._fetch_semaphore:
             try:
                 resp = _session.get(thumb_url, timeout=10)
                 resp.raise_for_status()
                 img = Image.open(io.BytesIO(resp.content))
+                # Cap the decoded source *before* anything else touches it:
+                # PIL loads the full bitmap on first access, so this is
+                # the last point where the cap can bound the working set.
+                img = ThumbnailService._fit_within(img, ThumbnailService._cap())
                 if size is None:
                     img = img.convert("RGBA")
                 else:
@@ -512,7 +600,7 @@ class ThumbnailService:
         if mode == "max":
             return None
 
-        key = (normalized, size)
+        key = ThumbnailService._mem_key(normalized, size)
         cached = ThumbnailService._cache_get(key)
         if cached is not None:
             return cached
@@ -558,7 +646,7 @@ class ThumbnailService:
         if mode == "max":
             return None
 
-        key = (normalized, size)
+        key = ThumbnailService._mem_key(normalized, size)
         cached = ThumbnailService._cache_get(key)
         if cached is not None:
             return cached
@@ -628,7 +716,7 @@ class ThumbnailService:
         if ThumbnailService._mode() == "max":
             return None
 
-        key = (normalized, None)
+        key = ThumbnailService._mem_key(normalized, None)
         cached = ThumbnailService._cache_get(key)
         if cached is not None:
             return cached
@@ -654,15 +742,21 @@ class ThumbnailService:
         """Remove a specific cached entry (url, size) - memory and disk.
 
         If *size* is None, removes the full-image entry keyed by (url, None).
+
+        The entry is the one for the cap that is in effect right now (both
+        keys are cap-scoped); entries left behind by an earlier cap are
+        orphans for :meth:`prune_song_cache` / :meth:`clear_disk_cache`.
+        The URL is normalised first, because that is how every fetch
+        caches it - popping the raw spelling missed every entry.
         """
         if not thumb_url:
             return
-        key = (thumb_url, size)
-        with ThumbnailService._cache_lock:
-            ThumbnailService._cache.pop(key, None)
         normalized = _normalize_url(thumb_url)
         if normalized is None:
             return
+        key = ThumbnailService._mem_key(normalized, size)
+        with ThumbnailService._cache_lock:
+            ThumbnailService._cache.pop(key, None)
         try:
             if size is None:
                 candidates = (_FULL_DIR,)

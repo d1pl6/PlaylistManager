@@ -102,7 +102,11 @@ DEFAULT_SETTINGS = {
     #   "cache"    - persist covers + only currently visible song thumbs,
     #                pruned after each showcase refresh
     #   "max"      - no thumbnails at all (--data-saver forces this per run)
-    "thumbnails": {"mode": "off"},
+    # plus "max_size": longest-edge pixel cap applied to every fetched
+    # image before it is cover-fitted/cached ("0" = no cap, the default
+    # and the historical behavior).  Bounds the decode working set and
+    # what lands in the cache/ the image viewer; see THUMBNAIL_SIZE_CAPS.
+    "thumbnails": {"mode": "off", "max_size": "0"},
     # Grid sort / pin controls (see services/playlist_sort.py and
     # app/ui/main_window.py).  The header combobox writes these live;
     # "pinned" flags live per-playlist in the registry, not here.
@@ -137,6 +141,35 @@ DEFAULT_SETTINGS = {
 
 # Valid [thumbnails] mode values; anything else falls back to "off".
 THUMBNAIL_MODES = ("off", "download", "dedupe", "cache", "max")
+
+# Valid [thumbnails] max_size values: the longest-edge cap, in pixels,
+# applied to every fetched image before it is cover-fitted and cached
+# (utils/thumbnail.py).  "0" = no cap - the default and the historical
+# behavior, so an upgrade changes nothing until the user opts in.  The
+# presets are the useful battery/space tradeoffs: the showcase renders
+# covers at px(64) and song thumbs at 40 px, so 128 already covers a 2x
+# UI scale 1:1 and anything below that would only look blurry.  Any
+# other stored value (hand edit, legacy, corrupt file) falls back to 0.
+THUMBNAIL_SIZE_CAPS = (0, 128, 256, 512, 1024, 2048)
+THUMBNAIL_DEFAULT_SIZE_CAP = 0
+
+
+def resolve_thumbnail_size_cap() -> int:
+    """Read ``[thumbnails] max_size`` as a pixel cap, falling back to 0.
+
+    Same discipline as :func:`resolve_notification_position`: a stored
+    value outside :data:`THUMBNAIL_SIZE_CAPS` (hand edit, legacy, corrupt
+    file) is discarded rather than trusted, because an arbitrary cap is
+    either a no-op or a silent quality loss.
+    """
+    raw = get_setting_value(
+        "thumbnails", "max_size", str(THUMBNAIL_DEFAULT_SIZE_CAP)
+    )
+    try:
+        cap = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return THUMBNAIL_DEFAULT_SIZE_CAP
+    return cap if cap in THUMBNAIL_SIZE_CAPS else THUMBNAIL_DEFAULT_SIZE_CAP
 
 # [update_check] interval values (read by utils/updater.py).  "off" never
 # checks (the archived is_true=no behavior), "launch" checks on every
@@ -260,6 +293,23 @@ REMOVE_PLAYLIST_DEFAULT_MODE = "remove"
 # "all installed music platforms" (the historical behavior).
 SCROBBLE_PLATFORMS_SECTION = "scrobble"
 SCROBBLE_PLATFORMS_OPTION = "platforms"
+# Per-platform scrobble switch, stored in the platform's OWN section:
+#
+#     [lastfm]
+#     scrobbles = true
+#     [listenbrainz]
+#     scrobbles = false
+#
+# i.e. ``[<platform id>] scrobbles``.  The section name is a plugin id, so
+# this is the one DYNAMIC settings section: ``DEFAULT_SETTINGS`` cannot
+# enumerate sections for plugins that are not installed (and must not, or
+# uninstalling one would leave its section behind).  Same shape as the
+# plugin-owned ``[soundcloud] capture_mode``; the difference is that the
+# core reads this one, because "which services should my listens go to" is
+# core policy rather than a platform capability.  Absent means enabled, so a
+# fresh install scrobbles to every installed backend and turning one off is
+# always an explicit act.
+SCROBBLES_OPTION = "scrobbles"
 
 THEME_PATH = _profile_store.cfg_dir() / "theme.ini"
 
