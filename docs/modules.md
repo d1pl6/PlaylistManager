@@ -73,7 +73,7 @@ app/
     platform.py            # get_terminal_command (per-OS shell command for ytmusicapi browser), is_wayland_session()
     window.py              # pure geometry: center_window, resize_window, fit_window_to_screen, window-geometry persistence (save/restore + validation)
     updater.py             # GitHub release version check
-    logging_config.py      # root logger setup, --verbose/--debug/--trace levels
+    logging_config.py      # root logger setup, --verbose/--debug/--trace levels; credential redaction (register_secret / redact + handler filter)
 
 integrations/              # platform plugins — each dir is a separate repo (gitignored), declared by plugin.json; the working tree ships deezer/, lastfm/, soundcloud/, spotify/, youtube_music/ (the two below show the full layout)
   youtube_music/

@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Tuple
 from services import profile_store as _profile_store
 
 from utils.i18n import tr
-from utils.logging_config import user_log
+from utils.logging_config import register_secret, user_log
 from utils.platform import get_terminal_command, open_directory
 
 logger = logging.getLogger(__name__)
@@ -136,6 +136,9 @@ def save_and_verify_ytmusic_auth(
     """
     authorization = (authorization or "").strip()
     cookie = (cookie or "").strip()
+    # Mask these values in every log line from here on - even the failure
+    # path below (a network error echo) must never print them.
+    register_secret(authorization, cookie)
     if not authorization or not cookie:
         return {"ok": False, "error": tr("login.all_fields_required")}
     headers = {
@@ -196,6 +199,7 @@ def save_spotify_credentials(
 
     Raises ``OSError`` on write failure.
     """
+    register_secret(client_secret, refresh_token)
     try:
         from integrations.spotify.spotify import (
             save_spotify_credentials_file,
@@ -217,7 +221,12 @@ def load_spotify_credentials() -> Dict[str, str]:
     if not SPOTIFY_FILE.exists():
         return {}
     try:
-        return json.loads(SPOTIFY_FILE.read_text(encoding="utf-8"))
+        data = json.loads(SPOTIFY_FILE.read_text(encoding="utf-8"))
+        register_secret(
+            data.get("client_secret", ""),
+            data.get("refresh_token", ""),
+        )
+        return data
     except Exception as e:
         logger.warning("Failed to load Spotify credentials: %s", e)
         return {}
@@ -291,6 +300,7 @@ def save_and_verify_spotify_credentials(
 
     Returns the same dict as :func:`verify_spotify_credentials`.
     """
+    register_secret(client_secret, refresh_token)
     result = verify_spotify_credentials(client_id, client_secret, refresh_token)
     if result.get("ok"):
         try:
@@ -408,6 +418,7 @@ def save_and_verify_lastfm_credentials(api_key: str, api_secret: str) -> Dict[st
 
     Returns the same dict as :func:`verify_lastfm_credentials`.
     """
+    register_secret(api_key, api_secret)
     result = verify_lastfm_credentials(api_key, api_secret)
     if result.get("ok"):
         try:
@@ -512,6 +523,7 @@ def save_and_verify_soundcloud_credentials(
 
     Returns the same dict as :func:`verify_soundcloud_credentials`.
     """
+    register_secret(client_secret, refresh_token)
     try:
         from integrations.soundcloud.soundcloud import (
             save_and_verify_soundcloud_credentials as save_impl,
@@ -537,6 +549,7 @@ def verify_deezer_credentials(arl: str) -> tuple:
     is a temporary :class:`DeezerAPI` whose state carried through the
     check.
     """
+    register_secret(arl)
     try:
         from integrations.deezer.deezer import (
             verify_deezer_credentials as verify_impl,
@@ -556,6 +569,7 @@ def save_and_verify_deezer_credentials(arl: str) -> dict:
     so this is the CLI entrypoint that calls into the plugin's own
     verify-first helper.
     """
+    register_secret(arl)
     try:
         from integrations.deezer.deezer import (
             save_and_verify_deezer_credentials as save_impl,
