@@ -137,7 +137,7 @@ join the pynput thread; [threading.md](threading.md)), tray stop,
 `MainWindow.cleanup`, `root.destroy`. Worker threads holding pending
 `root.after` calls swallow the resulting TclError/RuntimeError.
 
-## 8. Scrobble / like (Last.fm service)
+## 8. Scrobble / like (service backends: Last.fm, ListenBrainz)
 
 A scrobble backend is a *service* plugin (no add-flow); the shared actions
 reach it through the duck-typed `ScrobbleCapable` capability

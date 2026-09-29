@@ -1026,7 +1026,83 @@ def _run_deezer_login() -> int:
         return 0
 
     print(
-        tr("cli.login_failed_deezer", reason=result.get("error")),
+        tr("cli.login_failed_deezer", reason=redact(str(result.get("error") or ""))),
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _run_listenbrainz_login() -> int:
+    """CLI ListenBrainz login: gets the user token, verifies FIRST.
+
+    The token is copied from https://listenbrainz.org/settings/ and is a
+    live credential with no expiry and no second factor, so - like the
+    Deezer ARL - it is read from ``PLAYLISTMANAGER_LISTENBRAINZ_TOKEN`` or
+    the hidden prompt, with no flag: argv is world-readable through
+    ``/proc/<pid>/cmdline`` and kept in the shell history.
+    """
+    token = _resolve_credential("listenbrainz", "token", None, hidden=True)
+    if not token:
+        print(
+            tr("cli.listenbrainz_token_required"),
+            file=sys.stderr,
+        )
+        return 2
+    register_secret(token)
+
+    result = auth_setup.save_and_verify_listenbrainz_credentials(token.strip())
+    if result.get("ok"):
+        print(
+            tr("cli.login_ok_listenbrainz", display_name=result.get("display_name")),
+            flush=True,
+        )
+        return 0
+
+    print(
+        tr("cli.login_failed_listenbrainz", reason=redact(str(result.get("error") or ""))),
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _run_tidal_login() -> int:
+    """CLI Tidal login: the app credentials, then the PKCE browser dance.
+
+    Only the client id and secret are read here (flag >
+    ``PLAYLISTMANAGER_TIDAL_{CLIENT_ID,CLIENT_SECRET}`` > hidden prompt).
+    There is deliberately no refresh-token source: the plugin's loopback
+    flow *mints* it, so a third credential would only invite a hand-pasted
+    token that nothing can obtain.
+    """
+    client_id = _resolve_credential("tidal", "client_id", None)
+    client_secret = _resolve_credential(
+        "tidal", "client_secret", None, hidden=True
+    )
+    if not client_id or not client_secret:
+        print(
+            tr("cli.tidal_credentials_required"),
+            file=sys.stderr,
+        )
+        return 2
+
+    print(tr("cli.tidal_login_waiting"), flush=True)
+
+    def _show_url(url: str) -> None:
+        # Runs on the login's worker thread; print is thread-safe.
+        print(tr("cli.tidal_login_url", url=url), flush=True)
+
+    result = auth_setup.tidal_browser_login(
+        client_id.strip(), client_secret.strip(), on_url=_show_url
+    )
+    if result.get("ok"):
+        print(
+            tr("cli.login_ok_tidal", display_name=result.get("display_name")),
+            flush=True,
+        )
+        return 0
+
+    print(
+        tr("cli.login_failed_tidal", reason=redact(str(result.get("error") or ""))),
         file=sys.stderr,
     )
     return 1
@@ -1108,6 +1184,9 @@ def run_login(
             file=sys.stderr,
         )
         return 2
+
+    if platform == "listenbrainz":
+        return _run_listenbrainz_login()
 
     if platform == "deezer":
         return _run_deezer_login()

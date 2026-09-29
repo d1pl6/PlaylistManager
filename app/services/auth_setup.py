@@ -466,6 +466,102 @@ def save_and_verify_lastfm_credentials(api_key: str, api_secret: str) -> Dict[st
 
 
 # ---------------------------------------------------------------------------
+# ListenBrainz
+# ---------------------------------------------------------------------------
+
+
+def load_listenbrainz_credentials() -> Dict[str, str]:
+    """Load existing ListenBrainz credentials from disk.
+
+    Delegates to :func:`integrations.listenbrainz.listenbrainz
+    .load_listenbrainz_credentials` so the plugin owns the read contract
+    (single-writer lives in the plugin; the app keeps only the static
+    delete path here).  Returns an empty dict when the plugin is missing or
+    the file does not exist.
+    """
+    try:
+        from integrations.listenbrainz.listenbrainz import (
+            load_listenbrainz_credentials as load_impl,
+        )
+        return load_impl()
+    except ImportError:
+        logger.warning(
+            "ListenBrainz plugin not found - cannot load credentials"
+        )
+        return {}
+
+
+def verify_listenbrainz_credentials(token: str) -> Dict[str, Any]:
+    """Test a ListenBrainz user token against ``/1/validate-token``.
+
+    Delegates to the plugin so the client logic lives there.  Returns
+    ``{"ok": True, "username": ..., "display_name": ...}`` or
+    ``{"ok": False, "error": ...}`` - the same shape as the other
+    platforms' verify helpers.
+    """
+    register_secret(token)
+    try:
+        from integrations.listenbrainz.listenbrainz import (
+            verify_listenbrainz_credentials as verify_impl,
+        )
+        return verify_impl(token)
+    except ImportError:
+        return {
+            "ok": False,
+            "error": "ListenBrainz plugin not found",
+        }
+    except Exception as e:
+        logger.error("ListenBrainz verification failed: %s", e, exc_info=True)
+        return {"ok": False, "error": str(e)}
+
+
+def save_and_verify_listenbrainz_credentials(token: str) -> Dict[str, Any]:
+    """Verify a ListenBrainz user token and persist it if it is valid.
+
+    Verification runs FIRST: only a successful ``/1/validate-token`` round
+    trip persists the credentials (verify-first pattern, repo rule #69) -
+    and that round trip is also what yields the username the token belongs
+    to, which the plugin's listens/delete calls are addressed by.  A file
+    without it would look logged in and silently fail every later delete.
+
+    Returns the same dict as :func:`verify_listenbrainz_credentials`.
+    """
+    register_secret(token)
+    result = verify_listenbrainz_credentials(token)
+    if result.get("ok"):
+        try:
+            from integrations.listenbrainz.listenbrainz import (
+                save_listenbrainz_credentials_file,
+            )
+
+            save_listenbrainz_credentials_file(token, result.get("username", ""))
+            credential_store.mirror("listenbrainz.json")
+        except ImportError:
+            logger.error("ListenBrainz plugin not found; credentials not saved")
+            return {
+                "ok": False,
+                "error": "ListenBrainz plugin not found",
+            }
+        except Exception as e:
+            logger.error("Failed to save ListenBrainz credentials: %s", e, exc_info=True)
+            return {
+                "ok": False,
+                "error": f"Failed to save: {e}",
+            }
+    return result
+
+
+def delete_listenbrainz_credentials() -> bool:
+    """Remove the ListenBrainz credential file.
+
+    Delegates to :func:`delete_platform_credentials` (which also clears the
+    OS-keyring mirror) so the delete path stays a single source of truth.
+    """
+    deleted, _ = delete_platform_credentials("listenbrainz")
+    return bool(deleted)
+
+
+# ---------------------------------------------------------------------------
 # SoundCloud
 # ---------------------------------------------------------------------------
 
@@ -612,6 +708,75 @@ def save_and_verify_deezer_credentials(arl: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Tidal
+# ---------------------------------------------------------------------------
+
+TIDAL_FILE = AUTH_DIR / "tidal.json"
+
+
+def load_tidal_credentials() -> Dict[str, str]:
+    """Load existing Tidal credentials from disk.
+
+    Delegates to ``integrations.tidal.tidal.load_tidal_credentials`` so
+    the plugin owns the read contract (the single writer lives in the
+    plugin).  A missing file is first re-materialized from the OS keyring
+    mirror, so a lost/copied auth dir can be rebuilt.  Returns an empty
+    dict when the plugin is missing, the file does not exist, or it fails
+    to parse.
+    """
+    if not TIDAL_FILE.exists():
+        credential_store.restore("tidal.json")
+        if not TIDAL_FILE.exists():
+            return {}
+    try:
+        from integrations.tidal.tidal import (
+            load_tidal_credentials as load_impl,
+        )
+    except ImportError:
+        logger.warning("Tidal plugin not found - cannot load credentials")
+        return {}
+    return load_impl() or {}
+
+
+def tidal_browser_login(
+    client_id: str,
+    client_secret: str,
+    on_url: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    """Run the plugin's Tidal browser login and persist it on success.
+
+    Tidal auth is an OAuth authorization-code flow with PKCE: the plugin
+    serves the loopback redirect, opens the browser and exchanges the code
+    for a refresh token, which is then verified against ``/v1/sessions``
+    before anything is written (verify-first, repo rule #69).  This is the
+    CLI ``--login tidal`` entry point; the GUI path is the plugin's own
+    dialog, which calls the same plugin function through
+    :func:`integrations.tidal.tidal.login_with_browser`.
+
+    *on_url* receives the authorize URL, so a headless caller can print it
+    (the URL also carries the loopback redirect URI the Tidal app must have
+    registered).  It is invoked from the login's worker thread.
+
+    The credential file is mirrored into the OS keyring on success, so a
+    logout/uninstall sweep can clear both copies.
+    """
+    register_secret(client_secret)
+    try:
+        from integrations.tidal.tidal import (
+            login_with_browser as login_impl,
+        )
+        result = login_impl(client_id, client_secret, on_url=on_url)
+        if result.get("ok"):
+            credential_store.mirror("tidal.json")
+        return result
+    except ImportError:
+        return {"ok": False, "error": "Tidal plugin not found"}
+    except Exception as e:
+        logger.error("Tidal login failed: %s", e, exc_info=True)
+        return {"ok": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
 # Multi-platform credential deletion (CLI --logout)
 # ---------------------------------------------------------------------------
 
@@ -624,6 +789,7 @@ PLATFORM_CREDENTIAL_FILES = {
     "youtube_music": [YT_MUSIC_FILE, BROWSER_FILE],
     "spotify": [SPOTIFY_FILE],
     "lastfm": [AUTH_DIR / "lastfm.json"],
+    "listenbrainz": [AUTH_DIR / "listenbrainz.json"],
     "soundcloud": [AUTH_DIR / "soundcloud.json"],
     "deezer": [DEEZER_FILE],
 }

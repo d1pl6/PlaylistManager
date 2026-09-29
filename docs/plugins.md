@@ -207,9 +207,9 @@ launched from is the trust boundary for local edits.
 A plugin may be a *service* rather than a playlist-add platform: it
 declares **no** `flow_type` / `flow_module` / `flow_class`, so the core
 never builds it as an add-flow target. It contributes a capability the
-core duck-types. The only current example is `integrations/lastfm/`
-(Last.fm), which implements the `ScrobbleCapable` interface
-(`services/integration.py`):
+core duck-types. Two exist: `integrations/lastfm/` (Last.fm) and
+`integrations/listenbrainz/` (ListenBrainz), which implement the
+`ScrobbleCapable` interface (`services/integration.py`):
 
 | Method | Used by | Purpose |
 |---|---|---|

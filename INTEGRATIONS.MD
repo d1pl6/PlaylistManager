@@ -3,6 +3,7 @@
 - [Spotify](#spotify)
 - [YouTube Music](#youtube-music)
 - [Last.fm](#lastfm)
+- [ListenBrainz](#listenbrainz)
 - [SoundCloud](#soundcloud)
 - [Deezer](#deezer)
 ### [Planned](#planned-1)
@@ -51,7 +52,27 @@ Lastfm not supporting playlists through API anymore (likes&scrobble songs are av
 1. Create an [API account](https://www.last.fm/api/account/create) (Callback URL is not needed)
 2. Copy-paste API Key and Client Secret
 
-- I wasn't able to to find API Key and Client Secret anywhere after creating account so save them in password manager or something
+- NOTE: I wasn't able to to find API Key and Client Secret anywhere after creating account so save them in password manager or something
+
+### ListenBrainz
+No playlists (only scrobbles) - the same deal as Last.fm.
+
+1. Log into [listenbrainz.org](https://listenbrainz.org/)
+2. Open [Settings](https://listenbrainz.org/settings/) and copy the **User token**
+3. Paste it in:
+    - GUI `Login -> ListenBrainz`
+    - CLI `PLAYLISTMANAGER_LISTENBRAINZ_TOKEN=<token> python -m app --login listenbrainz`
+
+Notes:
+- A logged-in ListenBrainz starts receiving listens immediately, same as Last.fm. Both are switched on
+  and off on their own in `settings.ini`, in their own section - `[listenbrainz] scrobbles = false`
+  stops ListenBrainz while Last.fm keeps working, and Settings -> Integrations -> Scrobbling does the
+  same with a checkbox per service plus Select all / Deselect all. With both on, every listen goes to
+  both services.
+- Removing a song from a playlist deletes the matching listen from every service that received it, but
+  only when ListenBrainz can match the listen back to a recording (it assigns the id the delete needs
+  on submit). If it can't, the listen stays and so does the app's record of it - it never guesses and
+  deletes a different listen.
 
 ### [SoundCloud](https://soundcloud.com/you/apps/new)
 **Requires Artist Pro**

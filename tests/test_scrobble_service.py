@@ -254,6 +254,54 @@ class TestScrobbleCurrentSong:
         assert result is None
         assert len(scrobbler.calls) == 2
 
+    def test_every_backend_gets_the_song(self):
+        # Two services switched on, one captured song, both scrobbled - the
+        # whole point of the per-platform switch.
+        flows = {"spotify": _FakeFlow(song_data=SONG)}
+        lastfm, listenbrainz = _FakeScrobbler(ts=111), _FakeScrobbler(ts=222)
+        result = scrobble_service.scrobble_current_song(
+            _FakeIntegrations({"spotify": _FakeIntegration()}),
+            _FakeRegistry(ids=("spotify",)),
+            _flow_provider(flows),
+            [lastfm, listenbrainz],
+        )
+        assert result == (SONG, 111)  # first accepted timestamp
+        assert lastfm.calls == [SONG]
+        assert listenbrainz.calls == [SONG]
+
+    def test_one_backend_failing_keeps_the_other_scrobble(self):
+        flows = {"spotify": _FakeFlow(song_data=SONG)}
+        dead = _FakeScrobbler(exc=RuntimeError("token revoked"))
+        live = _FakeScrobbler(ts=222)
+        result = scrobble_service.scrobble_current_song(
+            _FakeIntegrations({"spotify": _FakeIntegration()}),
+            _FakeRegistry(ids=("spotify",)),
+            _flow_provider(flows),
+            [dead, live],
+        )
+        assert result == (SONG, 222)
+        assert live.calls == [SONG]
+
+    def test_every_backend_failing_tries_the_next_platform(self):
+        # Nothing accepted, so the pre-existing retry kicks in: the next
+        # source platform gets its own capture + its own attempt at each
+        # service.  Two platforms x two backends = four calls.
+        flows = {
+            "youtube_music": _FakeFlow(song_data={"title": "A"}),
+            "spotify": _FakeFlow(song_data={"title": "B"}),
+        }
+        dead = _FakeScrobbler(exc=RuntimeError("service down"))
+        result = scrobble_service.scrobble_current_song(
+            _FakeIntegrations(
+                {"youtube_music": _FakeIntegration(), "spotify": _FakeIntegration()}
+            ),
+            _FakeRegistry(ids=("youtube_music", "spotify")),
+            _flow_provider(flows),
+            [dead, dead],
+        )
+        assert result is None
+        assert len(dead.calls) == 4
+
     def test_capture_failure_tries_next_platform(self):
         broken = _FakeFlow(song_data=SONG, exc=RuntimeError("receiver down"))
         live = _FakeFlow(song_data=SONG)

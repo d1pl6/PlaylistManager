@@ -88,7 +88,7 @@ app/
     updater.py             # GitHub release version check
     logging_config.py      # root logger setup, --verbose/--debug/--trace levels; credential redaction (register_secret / redact + handler filter)
 
-integrations/              # platform plugins — each dir is a separate repo (gitignored), declared by plugin.json; the working tree ships deezer/, lastfm/, soundcloud/, spotify/, youtube_music/ (the two below show the full layout)
+integrations/              # platform plugins — each dir is a separate repo (gitignored), declared by plugin.json; the working tree ships deezer/, lastfm/, listenbrainz/, soundcloud/, spotify/, youtube_music/ (the two below show the full layout)
   youtube_music/
     plugin.json                 # id/display_name/auth_file/auth_file_fallbacks/url_hosts/flow_type/receiver_port/login_module/login_class/login_logo/url templates/class refs; logo.png in the dir root is the standard logo (PluginInfo.logo_path); imports use the DIR name
     youtube_music.py            # YouTubeAuthManager, ytmusicapi monkey-patch; profile-aware auth-dir resolver (`_resolve_auth_dir`/`_yt_music_file`/`_browser_file`) + one-time legacy-shared migration + `browser_file_candidates()` (the app's auth-ready poll mirrors it)

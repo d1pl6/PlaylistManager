@@ -236,6 +236,43 @@ def _probe_lastfm(integration) -> "tuple[bool | None, str | None]":
     return (True, None)
 
 
+def _probe_listenbrainz(integration) -> "tuple[bool | None, str | None]":
+    client = getattr(integration, "client", None)
+    # No client, or no username: the token was never validated, so the
+    # listens/delete endpoints cannot even be addressed.  "(None, None)"
+    # means "no probe possible", never a false "auth failed".
+    if client is None or not getattr(client, "username", ""):
+        return (None, None)
+    try:
+        # validate-token, NOT listen-count: ListenBrainz's listen-count and
+        # listens endpoints are PUBLIC and answer 200 with an empty payload
+        # for a dead token, so probing either one reports a revoked token as
+        # healthy - the exact false positive the Last.fm probe above
+        # guards against.  validate-token answers 200 for a bad token too,
+        # but the body's "valid" flag is definitive.
+        result = client.validate_token() or {}
+    except Exception as e:
+        return (False, str(e)[:160])
+    if not result.get("ok"):
+        return (False, (str(result.get("error") or "token rejected"))[:160])
+    return (True, None)
+
+
+def _probe_tidal(integration) -> "tuple[bool | None, str | None]":
+    api = getattr(integration, "tidal_api", None)
+    if api is None:
+        return (None, None)
+    try:
+        # /v1/sessions is the round trip the login verification itself
+        # uses: it exercises the refresh-token exchange (a dead refresh
+        # token raises TidalError, a RuntimeError subclass, from
+        # TidalAPI._headers) and returns the identity back.
+        me = api.get_me()
+    except Exception as e:
+        return (False, str(e)[:160])
+    return (True, None) if me else (False, None)
+
+
 _AUTH_PROBES: dict[
     str, Callable[[object], "tuple[bool | None, str | None]"]
 ] = {

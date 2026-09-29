@@ -20,7 +20,7 @@ python main.py --fullscreen   # launch GUI fullscreen for this run (overrides th
 python main.py --start-in-tray  # launch hidden in the system tray for this run (overrides the [start_in_tray] setting)
 ```
 
-Every `python main.py ...` above is equivalent under `python -m app ...` (CLI.MD and the cli.py docstring use the `-m app` form). Platform names in the CLI are the **directory** names: `youtube_music`, `spotify`, `lastfm`, `soundcloud`, `deezer`.
+Every `python main.py ...` above is equivalent under `python -m app ...` (CLI.MD and the cli.py docstring use the `-m app` form). Platform names in the CLI are the **directory** names: `youtube_music`, `spotify`, `lastfm`, `listenbrainz`, `soundcloud`, `deezer`, `tidal`.
 
 Run from the repo root. The `app/` package uses bare imports (`from services.X import ...`, `from utils.X import ...`), so `app/` must be on `sys.path`. The root `main.py` inserts the repo root and delegates to `app/main.py`, which inserts its own directory — either way `app/` lands on `sys.path`. Any standalone script you write needs `sys.path.insert(0, "app")` first.
 

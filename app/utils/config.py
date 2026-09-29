@@ -87,6 +87,14 @@ DEFAULT_SETTINGS = {
     # Empty/absent = ALL installed music platforms scrobble (matches the
     # historical global behavior; zero migration).  Read by
     # services/scrobble.py, written by the Last.fm section of Settings.
+    #
+    # "backend" is the OTHER scrobble face: which installed service
+    # backend (lastfm / listenbrainz / ...) receives the scrobbles when
+    # more than one is configured.  "auto" = let
+    # services/scrobble.py::resolve_scrobble_backend pick deterministically
+    # (first by platform id) and say so in the log.  Read there, written by
+    # the Settings backend selector and by a login (which upgrades "auto"
+    # to the platform just logged into, never overriding a real choice).
     "scrobble": {"platforms": ""},
     # SoundCloud capture mode: how the add-flow acquires the current song.
     # "api" reads /me/recently-played/tracks[0]; "hybrid" prefers the browser
