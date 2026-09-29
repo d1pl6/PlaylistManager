@@ -244,10 +244,18 @@ class PluginInfo:
         receiver module's own default applies (kwargs pass through
         untouched). Callers may still override any constructor kwarg,
         including port, for tests.
+
+        The bind host is pinned to the loopback interface from the core
+        side unless a caller passes one explicitly (tests may override).
+        A receiver that defaulted to ``0.0.0.0`` would expose the
+        token-authenticated local server to the LAN, and the Host-header
+        guard every receiver module applies only makes sense while the
+        server is loopback-bound.
         """
         cls = self.import_receiver_class()
         if self.receiver_port is not None:
             kwargs.setdefault("port", self.receiver_port)
+        kwargs.setdefault("host", "127.0.0.1")
         return cls(**kwargs)
 
     @property

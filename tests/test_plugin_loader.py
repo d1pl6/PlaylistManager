@@ -246,3 +246,48 @@ class TestTypedRegistryOps:
         reg = plugin_loader.PluginRegistry().discover(tmp_path)
         reg.unregister("testplatform")
         assert "testplatform" not in reg
+
+
+class TestBuildReceiver:
+    """build_receiver must pin the loopback bind address from the core
+    side (an unset host would let a receiver default to 0.0.0.0 and
+    expose the token-authenticated server to the LAN)."""
+
+    def _receiver_info(self, tmp_path, monkeypatch, **manifest_overrides):
+        _write_manifest(tmp_path, "p", _valid_manifest(
+            receiver_module="recv", receiver_class="Recv",
+            **manifest_overrides,
+        ))
+        info = plugin_loader.PluginRegistry().discover(tmp_path).get("testplatform")
+        captured = {}
+
+        class FakeReceiver:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        monkeypatch.setattr(info, "import_receiver_class", lambda: FakeReceiver)
+        return info, captured
+
+    def test_loopback_host_pinned_by_default(self, tmp_path, monkeypatch):
+        info, captured = self._receiver_info(tmp_path, monkeypatch)
+        info.build_receiver()
+        assert captured["host"] == "127.0.0.1"
+
+    def test_manifest_port_injected(self, tmp_path, monkeypatch):
+        info, captured = self._receiver_info(
+            tmp_path, monkeypatch, receiver_port=5000
+        )
+        info.build_receiver()
+        assert captured["port"] == 5000
+        assert captured["host"] == "127.0.0.1"
+
+    def test_explicit_host_kwarg_not_overridden(self, tmp_path, monkeypatch):
+        info, captured = self._receiver_info(tmp_path, monkeypatch)
+        info.build_receiver(host="0.0.0.0")  # tests may override
+        assert captured["host"] == "0.0.0.0"
+
+    def test_no_port_when_manifest_omits_it(self, tmp_path, monkeypatch):
+        info, captured = self._receiver_info(tmp_path, monkeypatch)
+        info.build_receiver()
+        assert "port" not in captured
+        assert captured["host"] == "127.0.0.1"
