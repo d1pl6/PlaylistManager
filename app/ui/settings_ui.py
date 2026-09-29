@@ -44,7 +44,13 @@ from utils.config import (
     set_setting_bool,
     set_setting_value,
 )
-from utils.i18n import available_languages, language_code_for, language_display, tr
+from utils.i18n import (
+    available_languages,
+    language_code_for,
+    language_display,
+    tr,
+    trn,
+)
 from utils.scaling import UI_SCALE_PRESETS, px, ui_font
 from utils.platform import is_wayland_session, open_directory
 from utils.theme import C, btn_colors, hover_bg
@@ -2120,6 +2126,24 @@ def show_settings_dialog(
     _section_header(cred_section, tr("settings.credentials_title"))
 
     auth_dir = profile_store.auth_dir()
+
+    # Aggregate permission audit (services/auth_setup.audit_credential_permissions,
+    # comparing against services/health_check.audit_path_modes).  The rows
+    # below already color each path individually; this is the single line
+    # that says "something here is wrong" without reading every mode.  Silent
+    # when clean, and on non-POSIX platforms (report.supported False), where
+    # the mode bits carry no meaning.
+    perm_report = auth_setup.audit_credential_permissions(plugin_registry)
+    if perm_report.findings:
+        tk.Label(
+            cred_section,
+            text=trn("settings.cred_perm_warning", len(perm_report.findings)),
+            background=theme_win_bg,
+            foreground=C["label_playlist_warn_fg"],
+            justify="left",
+            font=ui_font(9),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(4, 0))
 
     def _open_auth_dir() -> None:
         # The file manager needs the dir to exist; create it and enforce

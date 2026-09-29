@@ -870,3 +870,62 @@ def credential_path_status(path: Path) -> Dict[str, Any]:
         "mode": f"{mode:04o}",
         "private": (mode & 0o077) == 0,
     }
+
+
+# ---------------------------------------------------------------------------
+# Credential-permission audit (startup check + Settings panel warning)
+# ---------------------------------------------------------------------------
+
+
+def audit_credential_permissions(
+    plugin_registry=None,
+) -> health_check.PermissionReport:
+    """Audit the auth dir and every known credential file's permissions.
+
+    Returns a :class:`services.health_check.PermissionReport` whose
+    ``findings`` name each path that is more accessible than the write
+    paths write it (auth dir 0700, credential files 0600) and whose
+    ``ok`` is the single yes/no verdict the callers want:
+    :mod:`app.app` logs it once at startup, the Settings credentials panel
+    shows it as a one-line warning.
+
+    The paths audited are exactly the ones logout/uninstall delete - the
+    profile-aware auth dir, each platform's files from
+    :data:`PLATFORM_CREDENTIAL_FILES` (via :func:`_credential_paths`, so
+    the manifest-declared ``auth_file`` and its ``auth_file_fallbacks``
+    are covered), plus the ``auth_paths`` of any other installed plugin,
+    so a third-party platform's credentials are audited too.
+
+    The mode comparison itself lives in
+    :func:`services.health_check.audit_path_modes`; this wrapper only
+    resolves the profile-aware paths.  A plugin whose manifest cannot be
+    read is skipped instead of failing the whole audit, and on non-POSIX
+    platforms the report comes back ``supported=False`` with no findings.
+    """
+    specs: List[Tuple[Path, int]] = [
+        (_profile_store.auth_dir(), health_check.AUTH_DIR_MODE)
+    ]
+    for platform in PLATFORM_CREDENTIAL_FILES:
+        try:
+            paths = _credential_paths(plugin_registry, platform)
+        except Exception as e:  # a broken manifest must not void the audit
+            logger.debug("Skipping %s credentials in the audit: %s", platform, e)
+            continue
+        specs.extend((path, health_check.CREDENTIAL_FILE_MODE) for path in paths)
+    if plugin_registry is not None:
+        try:
+            plugins = plugin_registry.get_all().values()
+        except Exception as e:
+            logger.debug("Credential audit could not read the plugin registry: %s", e)
+            plugins = ()
+        for plugin in plugins:
+            try:
+                declared = plugin.auth_paths
+            except Exception as e:
+                logger.debug("Credential audit skipped a plugin: %s", e)
+                continue
+            specs.extend(
+                (path, health_check.CREDENTIAL_FILE_MODE)
+                for path in (declared or ())
+            )
+    return health_check.audit_path_modes(specs)

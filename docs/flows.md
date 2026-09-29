@@ -12,15 +12,25 @@ and are not repeated per step here.
 1. `tk.Tk()`, then `utils.scaling.init(root)` before any widget exists,
    then the option-database default font.
 2. `PluginRegistry().discover()` (JSON scan only).
-3. Per plugin: `import_integration()` + `import_auth_attr()` ->
+3. `credential_store.restore_all()` re-materializes any credential file
+   the OS keyring still holds, **before** the integrations read the files.
+4. `auth_setup.audit_credential_permissions(plugin_registry)` - the
+   read-only permission audit (a `stat()` per credential path, no network,
+   so it runs inline). It lands *after* `restore_all()` so the verdict
+   describes the files actually in use, and the report is kept on
+   `self.credential_perm_report`. A non-`ok` report logs one
+   `service.credential_perm_loose` `user_log` line plus a per-path
+   `WARNING`; the same report is what the Settings credentials panel
+   shows (flow #11). Nothing is chmod-ed.
+5. Per plugin: `import_integration()` + `import_auth_attr()` ->
    `IntegrationRegistry.register`. ImportError disables that platform.
-4. `_bootstrap_auth()`: YouTube Music authenticates synchronously (local
+6. `_bootstrap_auth()`: YouTube Music authenticates synchronously (local
    file read). Spotify runs on a daemon worker and swaps its API object
    in via `root.after(0, ...)`; whichever of login/refresh lands first
    wins.
-5. `KeybindController(plugin_registry, integrations)`,
+7. `KeybindController(plugin_registry, integrations)`,
    `AppController(self)`, background `_migrate_playlist_schema` thread.
-6. `MainWindow(root, integrations, keybind_controller, app_controller)`,
+8. `MainWindow(root, integrations, keybind_controller, app_controller)`,
    `PlaylistStore.ensure_playlists_file()`, optional `center_window`.
 
 ## 2. Hotkey add-song (GUI)
@@ -325,10 +335,20 @@ map).  The section renders, at dialog build time:
      shared copy) -> "{mode} - open permissions" in warning color;
    - missing -> "missing" in the default label color.
 
+Above those rows the section runs the same aggregate check as the startup
+audit, `services.auth_setup.audit_credential_permissions(plugin_registry)`
+-> `services.health_check.audit_path_modes`, and renders **one** warning
+line (`settings.cred_perm_warning`, pluralized on the finding count) when
+any path grants bits beyond its 0600/0700 contract.  It re-runs per dialog
+build rather than reusing the startup report, so a mode fixed since launch
+no longer warns.  Silent when clean, and on platforms where
+`health_check.supports_posix_modes()` is False (Windows) it reports
+nothing at all.
+
 The panel is a read-only view - login/logout/uninstall remain the
-mutating paths.  Credential *writes* still go through the per-platform
-0600 writers / 0700 dir enforcement (see modules.md); this section only
-surfaces what is actually on disk.
+mutating paths, and nothing here repairs a mode.  Credential *writes*
+still go through the per-platform 0600 writers / 0700 dir enforcement
+(see modules.md); this section only surfaces what is actually on disk.
 
 ## 12. Notification bar (status row + duplicate prompts)
 

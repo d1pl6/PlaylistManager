@@ -7,6 +7,7 @@ from tkinter import messagebox
 from controllers.app_controller import AppController
 from controllers.keybind_controller import KeybindController
 from plugin_loader import PluginInfo, PluginRegistry
+from services import auth_setup
 from services.integration import IntegrationRegistry
 from services.credential_store import restore_all
 from services.playlist_store import PlaylistStore
@@ -53,6 +54,40 @@ class App:
         # optional dependency) cannot take down startup or the other
         # platforms.
         self.plugin_registry = PluginRegistry().discover()
+
+        # Re-materialize any credential files the OS keyring still holds
+        # BEFORE integrations build their auth managers (they read the
+        # files directly).  Best-effort: no-op when mirroring is off,
+        # the backend is unavailable, or every file already exists.
+        restore_all()
+
+        # Startup credential-permission audit: the 0600/0700 bits are set
+        # once, when a credential is written, and never re-checked - a
+        # tree restored onto a filesystem that ignores POSIX modes would
+        # otherwise leave world-readable tokens with no symptom.  Local
+        # metadata only (a stat() per credential path, no network), so it
+        # runs inline; AFTER restore_all() because that re-materializes
+        # files and would make the pre-restore state look stale.  Reports
+        # only - the Settings credentials panel shows the one-line warning
+        # with the per-path modes.
+        self.credential_perm_report = auth_setup.audit_credential_permissions(
+            self.plugin_registry
+        )
+        if not self.credential_perm_report.ok:
+            user_log(
+                logger,
+                i18n.trn(
+                    "service.credential_perm_loose",
+                    len(self.credential_perm_report.findings),
+                ),
+            )
+            for finding in self.credential_perm_report.findings:
+                logger.warning(
+                    "Credential permissions too open: %s is %s, expected %s",
+                    finding.path,
+                    finding.actual_str,
+                    finding.expected_str,
+                )
 
         self.integrations = IntegrationRegistry()
         for pid, plugin in self.plugin_registry.get_all().items():

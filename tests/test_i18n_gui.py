@@ -10,6 +10,7 @@ headless suite is unaffected; run it under a virtual display with:
 conftest.py has already redirected cfg/db paths to a temp tree.
 """
 import os
+import sys
 import tkinter as tk
 
 import pytest
@@ -78,3 +79,38 @@ def test_all_catalog_rows_are_formattable():
         if placeholders:
             rendered = tr(key, **{name: "x" for name in placeholders})
             assert "{" not in rendered, f"{key} left a placeholder: {rendered}"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_credentials_panel_warns_about_open_permissions():
+    """A regressed credential mode must surface as one panel warning line."""
+    from services import auth_setup
+
+    auth_dir = auth_setup.AUTH_DIR
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(auth_dir, 0o700)
+    try:
+        os.chmod(auth_dir, 0o755)
+        root, dialog = _build_dialog("en")
+        try:
+            texts = [w.cget("text") for w in _walk(dialog) if isinstance(w, tk.Label)]
+            assert any("open permissions" in t for t in texts), texts
+        finally:
+            root.destroy()
+    finally:
+        os.chmod(auth_dir, 0o700)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_credentials_panel_quiet_when_modes_are_tight():
+    from services import auth_setup
+
+    auth_dir = auth_setup.AUTH_DIR
+    auth_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(auth_dir, 0o700)
+    root, dialog = _build_dialog("en")
+    try:
+        texts = [w.cget("text") for w in _walk(dialog) if isinstance(w, tk.Label)]
+        assert not any(t.startswith("1 path below") for t in texts), texts
+    finally:
+        root.destroy()

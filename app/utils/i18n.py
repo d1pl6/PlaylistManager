@@ -111,6 +111,8 @@ DEFAULT_STRINGS: dict[str, str] = {
     "settings.auth_dir_name": "Auth dir",
     "settings.cred_missing": "missing",
     "settings.cred_open": "{mode} - open permissions",
+    "settings.cred_perm_warning.one": "1 path below has open permissions (the app writes files 0600, the auth dir 0700)",
+    "settings.cred_perm_warning.other": "{count} paths below have open permissions (the app writes files 0600, the auth dir 0700)",
     "settings.credentials_dir": "Credentials live in: {path}",
     "settings.credentials_none": "No platforms declare credential files.",
     "settings.credentials_title": "Stored credentials",
@@ -415,6 +417,8 @@ DEFAULT_STRINGS: dict[str, str] = {
     # user_log terminal lines (plain or %-style calls converted to tr()).
     "service.integration_unavailable": "{name} integration unavailable ({error})",
     "service.integration_loaded": "{name} integration loaded",
+    "service.credential_perm_loose.one": "1 credential path has open permissions - see Settings > Stored credentials",
+    "service.credential_perm_loose.other": "{count} credential paths have open permissions - see Settings > Stored credentials",
     "service.ytmusicapi_missing": "ytmusicapi not installed - YouTube Music integration disabled ({error})",
     "app.authenticated": "{name} authenticated",
     "app.reauthenticated": "{name} re-authenticated",

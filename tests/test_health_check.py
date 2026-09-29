@@ -8,6 +8,8 @@ the integration object's public handles (``spotify_api``, ``yt_client``,
 code, mirroring how the production callers hand over a live integration.
 """
 
+import os
+import sys
 import time
 from socket import timeout as SocketTimeout
 
@@ -419,3 +421,211 @@ def test_lastfm_session_key_dead():
     ok, detail = health_check.probe_authenticated(integration)
     assert ok is False
     assert "session" in detail
+
+
+# ---------------------------------------------------------------------------
+# ListenBrainz (service plugin, client + username)
+# ---------------------------------------------------------------------------
+
+
+def test_listenbrainz_missing_client_no_probe():
+    assert health_check.probe_authenticated(_integration("listenbrainz")) == (
+        None,
+        None,
+    )
+
+
+def test_listenbrainz_no_username_no_round_trip():
+    # Without a username the listens/delete endpoints cannot be addressed
+    # at all, so there is nothing to probe - and no round trip that could
+    # report a healthy-looking false positive.
+    client = _FakeClient(result={"ok": True}, username="")
+    integration = _integration("listenbrainz", client=client)
+    assert health_check.probe_authenticated(integration) == (None, None)
+    assert client.calls == 0
+
+
+def test_listenbrainz_auth_ok():
+    client = _FakeClient(result={"ok": True, "username": "listener"}, username="listener")
+    integration = _integration("listenbrainz", client=client)
+    assert health_check.probe_authenticated(integration) == (True, None)
+    assert client.calls == 1
+
+
+def test_listenbrainz_rejected_token_is_reported_as_a_failure():
+    # validate-token answers 200 for an invalid token, so the probe has to
+    # read the body's "valid" flag.  Probing listen-count instead (a PUBLIC
+    # endpoint) would report a revoked token as healthy - see the probe's
+    # comment.
+    client = _FakeClient(
+        result={"ok": False, "username": "", "error": "Token invalid."},
+        username="listener",
+    )
+    integration = _integration("listenbrainz", client=client)
+    ok, detail = health_check.probe_authenticated(integration)
+    assert ok is False
+    assert "invalid" in detail.lower()
+
+
+def test_listenbrainz_probe_error_is_reported_as_a_failure():
+    client = _FakeClient(exc=RuntimeError("connection reset"), username="listener")
+    integration = _integration("listenbrainz", client=client)
+    ok, detail = health_check.probe_authenticated(integration)
+    assert ok is False
+    assert "connection reset" in detail
+
+
+# ---------------------------------------------------------------------------
+# Credential-permission audit
+#
+# POSIX-only: on Windows st_mode is synthesized from the read-only
+# attribute, so the audit deliberately no-ops there (a test covers that
+# by monkeypatching supports_posix_modes instead of the platform).
+# ---------------------------------------------------------------------------
+
+_nt = pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+
+
+def _file(tmp_path, name, mode):
+    p = tmp_path / name
+    p.write_text("{}")
+    os.chmod(p, mode)
+    return p
+
+
+@_nt
+def test_audit_clean_paths_ok(tmp_path):
+    d = tmp_path / "auth"
+    d.mkdir(mode=0o700)
+    f = _file(tmp_path, "spotify.json", 0o600)
+    report = health_check.audit_path_modes(
+        [(d, health_check.AUTH_DIR_MODE), (f, health_check.CREDENTIAL_FILE_MODE)]
+    )
+    assert report.ok is True
+    assert report.findings == ()
+    assert report.checked == 2
+    assert report.first_path is None
+
+
+@_nt
+def test_audit_flags_group_readable_file(tmp_path):
+    f = _file(tmp_path, "spotify.json", 0o644)
+    report = health_check.audit_path_modes(
+        [(f, health_check.CREDENTIAL_FILE_MODE)]
+    )
+    assert report.ok is False
+    assert report.checked == 1
+    (finding,) = report.findings
+    assert finding.path == f
+    assert finding.actual == 0o644
+    assert finding.actual_str == "0644"
+    assert finding.expected_str == "0600"
+    assert report.first_path == f
+
+
+@_nt
+def test_audit_flags_loose_dir(tmp_path):
+    # A world-traversable auth dir defeats the 0600 files inside it.
+    d = tmp_path / "auth"
+    d.mkdir()
+    os.chmod(d, 0o755)
+    report = health_check.audit_path_modes([(d, health_check.AUTH_DIR_MODE)])
+    assert [(f.actual, f.expected) for f in report.findings] == [(0o755, 0o700)]
+
+
+@_nt
+def test_audit_flags_unexpected_owner_execute(tmp_path):
+    # "Different" is not the test - an extra owner execute bit is a
+    # deviation from the contract even with no group/other access.
+    f = _file(tmp_path, "lastfm.json", 0o700)
+    report = health_check.audit_path_modes(
+        [(f, health_check.CREDENTIAL_FILE_MODE)]
+    )
+    assert [f.actual for f in report.findings] == [0o700]
+
+
+@_nt
+def test_audit_accepts_more_private_modes(tmp_path):
+    # Tightening is not the regression being looked for: 0400 and 0500
+    # must both pass.
+    f = _file(tmp_path, "deezer.json", 0o400)
+    d = tmp_path / "auth"
+    d.mkdir()
+    os.chmod(d, 0o500)
+    report = health_check.audit_path_modes(
+        [
+            (f, health_check.CREDENTIAL_FILE_MODE),
+            (d, health_check.AUTH_DIR_MODE),
+        ]
+    )
+    assert report.ok is True
+    assert report.checked == 2
+
+
+@_nt
+def test_audit_skips_missing_paths(tmp_path):
+    # Nothing to verify: the app creates credential files on demand, and
+    # the Settings panel already labels a missing path "missing".
+    report = health_check.audit_path_modes(
+        [(tmp_path / "nope.json", health_check.CREDENTIAL_FILE_MODE)]
+    )
+    assert report.ok is True
+    assert report.checked == 0
+    assert report.findings == ()
+
+
+@_nt
+def test_audit_unreadable_path_is_skipped_not_a_finding():
+    # A stat failure (permissions, stale mount) must not raise and must
+    # not turn into a scary "open permissions" finding.  A duck-typed
+    # path keeps the real filesystem (and its teardown) untouched.
+    class _Unstatable:
+        def __str__(self):
+            return "<unstatable>"
+
+        def stat(self):
+            raise PermissionError("nope")
+
+    report = health_check.audit_path_modes(
+        [(_Unstatable(), health_check.CREDENTIAL_FILE_MODE)]
+    )
+    assert report.ok is True
+    assert report.checked == 0
+    assert report.findings == ()
+
+
+@_nt
+def test_audit_deduplicates_repeated_paths(tmp_path):
+    # Callers assemble the spec list from several sources (hardcoded map
+    # + manifest); a doubled finding would double the user-facing count.
+    f = _file(tmp_path, "yt_music.json", 0o666)
+    report = health_check.audit_path_modes(
+        [
+            (f, health_check.CREDENTIAL_FILE_MODE),
+            (f, health_check.CREDENTIAL_FILE_MODE),
+        ]
+    )
+    assert report.checked == 1
+    assert len(report.findings) == 1
+
+
+def test_audit_no_op_when_posix_modes_unsupported(monkeypatch, tmp_path):
+    # Windows synthesizes st_mode from the read-only attribute, so the
+    # audit reports nothing at all there instead of a permanent warning.
+    monkeypatch.setattr(health_check, "supports_posix_modes", lambda: False)
+    f = tmp_path / "spotify.json"
+    f.write_text("{}")
+    report = health_check.audit_path_modes(
+        [(f, health_check.CREDENTIAL_FILE_MODE)]
+    )
+    assert report.supported is False
+    assert report.ok is True
+    assert report.findings == ()
+    assert report.checked == 0
+
+
+def test_audit_empty_specs_ok():
+    report = health_check.audit_path_modes([])
+    assert report.ok is True
+    assert report.checked == 0
+    assert report.findings == ()
