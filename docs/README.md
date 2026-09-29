@@ -19,6 +19,7 @@ live in docstrings.
 | What are the threading / root.after / pynput rules? | [threading.md](threading.md) |
 | How does Wayland / the system tray behave? | [environment.md](environment.md) |
 | How do I translate the app / add a language? | [i18n.md](i18n.md) |
+| Which invariants are machine-checked, and how do I run them? | [invariants.md](invariants.md) |
 
 Other documentation lives elsewhere on purpose:
 
@@ -53,8 +54,18 @@ plugin_loader.py ---- integrations/<platform>/    plugins (separate repos)
 
 Import direction goes downward: `ui` and `controllers` import `services`
 and `utils`; `services` imports `utils`; `utils` imports nothing from the
-app packages. The known exceptions are function-level lazy imports, listed
-at the bottom of [modules.md](modules.md).
+app packages. `controllers` and `ui` are siblings, so an import between them
+is lateral and legal; anything reaching from `services` up into `ui` or
+`controllers` is not. Two top-level modules are shared leaves rather than
+layers — `plugin_loader.py` and `_version.py`, which the diagram draws at or
+below `utils/` — so importing them from a layer is downward; the four
+composition roots (`__main__.py`, `main.py`, `app.py`, `cli.py`) may reach
+every layer.
+
+The exceptions are three upward `utils` → `services` edges, two of them
+static, listed at the bottom of [modules.md](modules.md). The rule is
+machine-checked: `tools/invariants.py`'s `layer.import` (see
+[invariants.md](invariants.md)).
 
 ## Maintenance
 

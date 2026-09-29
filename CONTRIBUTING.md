@@ -18,40 +18,26 @@ rules for working inside the repo live in `AGENTS.md`. See
 
 ## Development workflow
 
-1. Fork [d1pl6/PlaylistManager](https://github.com/d1pl6/PlaylistManager)
-   on GitHub.
+1. Fork [d1pl6/PlaylistManager](https://github.com/d1pl6/PlaylistManager) on GitHub.
 2. Clone your fork and add the upstream remote:
-
    ```bash
    git clone https://github.com/<your-username>/PlaylistManager.git
    cd PlaylistManager
    git remote add upstream https://github.com/d1pl6/PlaylistManager.git
    ```
-
 3. Create a branch off `master` (the default branch):
-
    ```bash
    git checkout -b <your-change> origin/master
    ```
-
-   Branch off `upstream/dev` instead when you need in-progress
-   unreleased work as a starting point (see below).
-
-4. Commit your changes. The repo has no commit-message convention -
-   messages are terse and lowercase (`bug fixes`, `soundcloud
-   integration`), with no `feat:`/`fix:` prefixes.
+4. Commit your changes.
 5. Push the branch to your fork:
-
    ```bash
    git push -u origin <your-change>
    ```
-
 6. Open a pull request on GitHub from `<your-change>` to
    `d1pl6/PlaylistManager:master` - or to `:dev` when your change
-   builds on unreleased work. In the description state what the change
-   does and how you tested it (see [Testing](#testing)).
+   builds on unreleased work.
 7. While the PR is open, keep the branch current with upstream:
-
    ```bash
    git fetch upstream
    git merge upstream/master
@@ -85,15 +71,26 @@ your change builds on work that has not been released yet - pick
 
 ## Project conventions
 
-Rules your change must respect. The full operational details and
-reasoning live in `AGENTS.md`; these are the ones most likely to bite
-a contribution.
-
 - **Python 3.10+.** The code uses `X | Y` union type syntax; don't
   introduce constructs older interpreters can't parse.
 - **No linter or typechecker is configured** - match the surrounding
   style and verify with the [Testing](#testing) checks instead. There
   is a pytest suite for the service layer; the GUI layer has no tests.
+- **The invariant checker is `tools/invariants.py`.** It checks the
+  rules this project states in prose but nothing executes. Tier A:
+  `C["..."]` against `THEME_MAP`, `tr()` against `DEFAULT_STRINGS`,
+  settings sections against `DEFAULT_SETTINGS`, the `plugin.json` schema
+  and the class names it references, `receiver_port` against the browser
+  extension's `host_permissions`, and plugin classes against the
+  `BaseIntegration`/`ScrobbleCapable`/`BaseFlowController` signatures.
+  Tier B: no `app/` module imports from a layer above it, `modules.md`
+  documents every app module and every module it imports, and a
+  `Thread(target=...)` function never calls `.after()` outside a
+  `try`/`except`. Tier C: no import in `app/` binds a name nothing
+  reads. Run it before a PR. Add an exemption only for a file that
+  cannot satisfy a rule, and write the reason (a `layer.import` reason
+  must also name the module it covers). Catalogue:
+  [docs/invariants.md](docs/invariants.md).
 - **Dependency changes go in `pyproject.toml`**.
 - **A theme color touches four places**: `THEME_MAP`
   (`app/utils/theme.py`), `DEFAULT_THEME` (`app/utils/config.py`),
@@ -112,7 +109,8 @@ a contribution.
   `modules.md` (who imports whom, where file X lives), `plugins.md`
   (plugin contract and `plugin.json` schema), `flows.md` (end-to-end
   call chains), plus the per-topic guides `data-paths.md`, `theming.md`,
-  `config.md`, `threading.md`, `environment.md`, `i18n.md`. Use it as
+  `config.md`, `threading.md`, `environment.md`, `i18n.md`,
+  `invariants.md` (which prose rules are machine-checked). Use it as
   the source of truth for how the code is wired together - this file
   and AGENTS.md link to it instead of repeating it.
 - **`AGENTS.md`** (repo root) holds the condensed operational rules:
@@ -121,9 +119,6 @@ a contribution.
   Machine-specific lines for this dev machine live in `.agents/AGENTS.md`
   (not committed). Don't republish AGENTS.md's summaries here or in
   `docs/`.
-- **`README.MD`** is the user guide, **`CLI.MD`** the CLI reference,
-  **`INTEGRATIONS.MD`** the per-platform user setup. A change with
-  user-visible effects should update the matching one.
 
 ## Adding an integration
 
@@ -141,11 +136,7 @@ field-by-field examples.
 
 ## Testing
 
-The service layer (URL parsing, registry, song DB, profiles, duplicate
-checking, plugin manifests, config files) has a **pytest suite** in
-`tests/`. It runs headless - no display, no network, no real `db/`,
-`cfg/`, or `auth/` (the conftest redirects every file-backed module to
-a per-run temp tree). Run it from the repo root:
+Install `pytest`
 
 ```bash
 python -m pytest            # everything
@@ -153,18 +144,24 @@ python -m pytest -q         # quiet
 python -m pytest tests/test_database.py   # one file
 ```
 
-`pytest` is an optional dependency (`pip install .[test]` or
-`pip install pytest`); it is not needed to run the app.
-
 The automatic sanity checks are:
 
 ```bash
 python -m compileall -q app/   # byte-compile everything
 python -m app --list           # headless smoke test (needs no display)
+python tools/invariants.py     # invariant checker (exit 1 on findings)
 ```
 
 Run these plus the suite before opening a PR. `compileall` walks every
 module under `app/`, so a new module is covered automatically.
+`tools/invariants.py` is the project's own typechecker: it checks that
+theme keys, translation keys, settings sections, the `plugin.json`
+schema and the plugin class signatures all match what the core actually
+reads. It imports nothing from `app/` (the catalogs are read with
+`ast.literal_eval`), so it runs before `pip install` and touches no user
+data. `--list-rules` prints what it enforces; a new rule needs a
+violating-case test in `tests/test_invariants.py`. Details:
+[docs/invariants.md](docs/invariants.md).
 
 To verify a plugin loads without launching the GUI:
 

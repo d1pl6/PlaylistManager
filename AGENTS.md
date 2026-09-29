@@ -39,14 +39,20 @@ Optional: `ytmusicapi` (for YouTube Music integration), `pystray` (for the syste
 
 `all` must list **every** extra: the nightly `pip-audit` job installs `.[all,test]` and scans only what is installed, so an extra missing from `all` silently escapes the audit. `test` needs `keyring` itself — `tests/conftest.py`'s autouse `_hermetic_keyring` fixture does `from keyring.backends.fail import Keyring`, so without the package the *entire* suite errors at fixture setup.
 
-There is no linter or type checker configured. There **is** a pytest suite (service layer, headless — see `tests/` and CONTRIBUTING.md "Testing"):
+## Invariant checker; pytest suite
+
+There is no linter or type checker configured, but `tools/invariants.py` machine-checks the rules this repo states in prose. Tier A: `C["..."]` keys against `THEME_MAP`, `tr()` keys against `DEFAULT_STRINGS`, settings sections against `DEFAULT_SETTINGS`, the `plugin.json` schema (and the class names it references), `receiver_port` against the extension's `host_permissions`, and the plugin classes against the `BaseIntegration`/`ScrobbleCapable`/`BaseFlowController` signatures. Tier B: no `app/` module imports from a layer above it (static or lazy), `docs/modules.md` documents every app module and every module it imports, and a `Thread(target=...)` function never calls `.after()` outside a `try`/`except`. Tier C: no import binds a name nothing reads (a deliberate re-export takes `# noqa`). It imports no app module (the catalogs are read with `ast.literal_eval`), so it is headless, dependency-free and safe to run anywhere. Run it before a PR, next to the suite (service layer, headless — see `tests/` and CONTRIBUTING.md "Testing"):
 
 ```bash
-python -m pytest            # full suite (fast, ~4 s)
-python -m pytest -q         # quiet
-python -m compileall -q app/   # byte-compile everything
-python -m app --list        # headless smoke test (CLI shares the GUI's service layer, needs no display)
+python -m pytest                 # full suite (fast, ~4 s)
+python -m pytest -q              # quiet
+python tools/invariants.py       # invariant checker (exit 1 on findings)
+python tools/invariants.py --list-rules   # what it enforces
+python -m compileall -q app/     # byte-compile everything
+python -m app --list             # headless smoke test (CLI shares the GUI's service layer, needs no display)
 ```
+
+Exemptions live in the tool's `EXEMPTIONS` table, each `{path: reason}` with a mandatory reason, and an exemption no rule consumes is itself reported. A `layer.import` reason must additionally **name the module it covers**, since a path-keyed entry would otherwise hide any second upward edge in that file. Adding a rule means a `@rule(...)` function plus a violating-case test in `tests/test_invariants.py`. Full rule catalogue, capability exemptions, and the limits: docs/invariants.md.
 
 Tests must stay headless-safe: `tests/conftest.py` redirects every profile-rooted path (`db/`, `cfg/`, `auth/`) to a throwaway temp tree and disables `profile_store._MIGRATE_LEGACY` before any app module import, so a test run never reads/writes/migrates the real data. The GUI requires a display; headless verification of services is possible by importing modules with `sys.path.insert(0, "app")` (avoid instantiating `tkinter.Tk` without one — but note `root.after(...)` from a worker thread raises `RuntimeError: main thread is not in main loop` unless the mainloop is actually running).
 
@@ -75,6 +81,7 @@ Cross-file relationships (who imports whom), the repository layout, the plugin.j
 | end-to-end flows | docs/flows.md |
 | plugin.json contract, adding a platform, integration quirks | docs/plugins.md |
 | translations / adding a language | docs/i18n.md |
+| machine-checked invariants, the pre-PR checker | docs/invariants.md |
 | key data paths + profile-aware path resolution | docs/data-paths.md |
 | theme system | docs/theming.md |
 | settings surface (`cfg/settings.ini`) | docs/config.md |

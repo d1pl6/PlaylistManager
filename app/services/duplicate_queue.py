@@ -42,7 +42,6 @@ card; this module never swallows silently.
 
 import json
 import logging
-import tempfile
 import threading
 import uuid
 from datetime import datetime
