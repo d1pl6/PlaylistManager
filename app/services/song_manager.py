@@ -15,6 +15,7 @@ PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 PLATFORM_SPOTIFY = "spotify"
 PLATFORM_SOUNDCLOUD = "soundcloud"
 PLATFORM_DEEZER = "deezer"
+PLATFORM_TIDAL = "tidal"
 from services.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -237,6 +238,41 @@ def _extract_deezer_track(track: dict) -> tuple | None:
     return (title, artists, duration, track_id, thumbnail_url)
 
 
+def _extract_tidal_track(track: dict) -> tuple | None:
+    """Extract fields from a Tidal v1 track dict.
+
+    Returns (title, artists, duration_seconds, track_id, thumbnail_url)
+    or None if the entry carries no usable id.  Playlist *items* nest the
+    track under an "item" key ({"type": "TRACK", "item": {...}}), while a
+    favourite-track page returns the track object itself, so both shapes
+    are unwrapped here.  Tidal durations are already in seconds.
+    """
+    node = track.get("item") if isinstance(track.get("item"), dict) else track
+    track_id = node.get("id")
+    if not track_id:
+        return None
+    track_id = str(track_id)
+
+    title = node.get("title", "Unknown")
+
+    artists = [
+        a.get("name")
+        for a in node.get("artists") or []
+        if isinstance(a, dict) and a.get("name")
+    ]
+    if not artists:
+        artists = ["Unknown Artist"]
+
+    duration = node.get("duration", 0)
+
+    # The API only serves the 80 px cover variant; bump the size segment so
+    # a 64 px card stays crisp on a HiDPI screen (see the plugin client).
+    album = node.get("album") or {}
+    thumbnail_url = _upgrade_tidal_cover(album.get("cover"))
+
+    return (title, artists, duration, track_id, thumbnail_url)
+
+
 # Maps platform name → extractor callable.  Extractor signature:
 #   (track: dict) -> (title, artists, duration, track_id, thumbnail_url) | None
 _TRACK_EXTRACTORS: dict[str, Callable[[dict], tuple | None]] = {
@@ -244,6 +280,7 @@ _TRACK_EXTRACTORS: dict[str, Callable[[dict], tuple | None]] = {
     PLATFORM_SPOTIFY: _extract_spotify_track,
     PLATFORM_SOUNDCLOUD: _extract_soundcloud_track,
     PLATFORM_DEEZER: _extract_deezer_track,
+    PLATFORM_TIDAL: _extract_tidal_track,
 }
 
 # ------------------------------------------------------------------
@@ -254,6 +291,21 @@ _TRACK_EXTRACTORS: dict[str, Callable[[dict], tuple | None]] = {
 # ".../0/500x500-000000-80-0-0.jpg".  The hash part is hex-only, so the
 # first (\d+)x\d+ match is the cover size.
 _COVER_SIZE_RE = re.compile(r"(\d+)x\d+")
+
+# Tidal embeds the cover size as a path segment with a file extension
+# (80x80.jpg), unlike Deezer's hash-then-size URLs.
+_TIDAL_COVER_SIZE_RE = re.compile(r"/\d+x\d+(\.\w+)$")
+
+
+def _upgrade_tidal_cover(url: object) -> str | None:
+    """Bump a Tidal cover URL to the 320 px variant.
+
+    Tidal serves covers as ".../images/<uuid>/<W>x<H>.jpg" and only ever
+    hands out 80 px; a URL without that segment is returned unchanged.
+    """
+    if not url or not isinstance(url, str):
+        return None
+    return _TIDAL_COVER_SIZE_RE.sub(lambda m: "/320x320" + m.group(1), url)
 
 
 def _pick_deezer_cover(urls: list) -> str | None:

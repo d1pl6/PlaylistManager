@@ -37,6 +37,7 @@ PLATFORM_API_TARGETS: dict[str, tuple[str, int]] = {
     "spotify": ("api.spotify.com", 443),
     "soundcloud": ("api.soundcloud.com", 443),
     "deezer": ("pipe.deezer.com", 443),
+    "tidal": ("api.tidal.com", 443),
 }
 
 # Coarse "is there internet at all" probe: a public DNS-over-UDP endpoint

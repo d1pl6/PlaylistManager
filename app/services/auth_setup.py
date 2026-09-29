@@ -9,7 +9,7 @@ import json
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from services import credential_store
 from services import health_check
@@ -792,6 +792,7 @@ PLATFORM_CREDENTIAL_FILES = {
     "listenbrainz": [AUTH_DIR / "listenbrainz.json"],
     "soundcloud": [AUTH_DIR / "soundcloud.json"],
     "deezer": [DEEZER_FILE],
+    "tidal": [TIDAL_FILE],
 }
 
 

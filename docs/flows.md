@@ -52,6 +52,10 @@ and are not repeated per step here.
 4. `flow.execute_flow(...)`: the platform API add runs FIRST. A False
    return or missing playlist id raises, fires `on_error`, and nothing is
    written locally (invariant in [plugins.md](plugins.md) "Integration quirks").
+   Tidal adds one more way to be refused: `POST /playlists/{uuid}/items`
+   answers **2xx with an empty `addedItemIds`** when the track is not
+   available in the account's country, so the flow reads the empty list as a
+   failure and aborts the same way - a 2xx is not proof the song was added.
 5. Success writes through `SongManager` into
    `db/platform/<sanitized>_<hash8>.db`, then callbacks reach the UI via
    `root.after(0, ...)`.
@@ -78,6 +82,17 @@ Flows with a receiver (extension-type, or hybrid SoundCloud) insert a
 wait between steps 3 and 4: the receiver holds until the browser extension
 POSTs the current URL, or the flow falls back / times out per its
 capture-mode policy.
+
+Tidal's capture (extension-type, port 5003) is the one that has to *resolve*
+what the extension sent: Tidal has no now-playing endpoint in either API
+version, so `TidalFlow._resolve_track` uses the numeric `track_id` when the
+extension caught the song starting, and otherwise falls back to a catalogue
+search on `title` + `artist` with the album as a tiebreaker. The extension
+itself degrades in the same spirit (Media Session -> playback-info traffic ->
+player DOM -> `<audio>` state), because none of those is guaranteed to be
+readable on every page. A search candidate whose title neither equals nor
+contains the reported one is refused (`score_track`): the wrong song landing
+in a playlist is worse than "could not identify the track".
 
 ## 3. Headless add-song (`-a 1,2,3`)
 
@@ -273,7 +288,7 @@ at most once):
 2. The probe runs on an internal watchdog thread (bounded by
    `_AUTH_PROBE_TIMEOUT_S`, because the plugin HTTP layers do not all set
    socket timeouts) and makes a cheap authenticated API call:
-   `get_me()` for Spotify / SoundCloud / Deezer,
+   `get_me()` for Spotify / SoundCloud / Deezer / Tidal,
    `get_library_playlists(limit=1)` for YouTube Music (the same call the
    login verification uses), one page of `user.getLovedTracks` for
    Last.fm.  A plugin may supply its own `probe_authenticated()` method

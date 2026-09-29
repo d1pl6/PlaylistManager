@@ -120,6 +120,8 @@ python -m app -p refresh all                # refresh every playlist
   database, refreshing the thumbnail too.
 - Spotify URLs: `https://open.spotify.com/playlist/<id>[...]` or `spotify:playlist:<id>`.
   YouTube/YouTube Music URLs: `.../playlist?list=<id>` on music.youtube.com or youtube.com.
+  Tidal URLs: `https://tidal.com/browse/playlist/<id>` (a plain `https://tidal.com/playlist/<id>`
+  resolves to the same thing).
   Song URLs (`.../watch?v=...`) are rejected with a hint - use `-a` for the current song.
 - A playlist name that is pure digits (e.g. `"123"`) is always read as an order number,
   and names containing commas cannot be addressed by name - use `--list` numbers or the

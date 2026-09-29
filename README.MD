@@ -116,7 +116,7 @@ Everyone here needs a real account on the platform. Report what worked,
 what failed, and paste the exact error from the log/status row.
 
 **Liked-songs virtual playlists** (Spotify "Liked Songs", SoundCloud
-"Liked Tracks", Deezer "Loved Tracks"): none of these is a real playlist
+"Liked Tracks", Deezer "Loved Tracks", Tidal "Favorites"): none of these is a real playlist
 - the app shows them in the add dialog as a regular entry and routes the
 keybind add to the platform's *like* API. Things to test on each platform:
 
@@ -159,6 +159,42 @@ Specific per platform:
   find the Pipe GraphQL favorite mutation instead - report the status code
   and response body. Also confirm no non-owned playlists appear
   (`me.playlists` is own-only, but verify nothing unexpected shows).
+
+- **Tidal (real account + a browser extension)** - the least-tested
+  platform here, and the one that needs the most setup. Register an app at
+  https://developer.tidal.com/apps with the redirect URI
+  `http://127.0.0.1:47831/callback` (exact string), then
+  `python main.py --login tidal` (GUI `Login -> Tidal`, or the env vars from
+  CLI.MD). Nothing is baked in - your own client id + secret.
+  - **The login itself** is the first test: does the authorize page open, does
+    it come back to the loopback address (a blank page saying the login
+    succeeded is correct), and does the CLI/GUI print the username? A
+    `redirect_uri mismatch` means the string registered in the dashboard is
+    not byte-for-byte the one above.
+  - **The extension is required** - Tidal has no now-playing endpoint and no
+    Linux desktop app, so the web player is the only capture source. Load it
+    from `integrations/tidal/tidal-extension/` (`about:debugging#/runtime/this-firefox`,
+    "Load Temporary Add-on" -> pick `manifest.json`) and keep a
+    listen.tidal.com tab open. Press a keybind with a song playing and
+    confirm the song is added. If it reports that it could not identify the
+    track, that is the search fallback failing to find your song - report the
+    status line verbatim, the title/artist it saw would be the useful part.
+  - Press the keybind **twice on the same song** and confirm the second one
+    is reported as already present rather than adding a duplicate.
+  - **"Favorites"** routes to Tidal's favourites API instead of a playlist
+    add. Confirm the song shows up as a favourite in the Tidal web player.
+  - **Removal** is the interesting write: Tidal deletes playlist items by
+    position, so the app has to look the id up first. Right-click a row ->
+    remove and confirm exactly that row disappeared from the playlist in the
+    web player (a wrong row going missing would mean an off-by-one - report
+    it with the playlist's contents).
+  - A playlist you **follow but do not own** must not appear in the add
+    dialog. Tidal also refuses writes to such a playlist; if one shows up
+    anyway, report what the status line says.
+  - Worth reporting even when everything works: whether a *paused* player
+    still adds (the extension sends the loaded track either way), and
+    whether a track that is unavailable in your country reports a failure
+    instead of a silent success.
 
 # License
 PlaylistManager is licensed under the GNU-GPL-2.0-or-later. If you did not get a copy, please see <https://www.gnu.org/licenses/>.

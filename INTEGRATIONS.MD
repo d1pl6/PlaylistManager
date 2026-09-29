@@ -6,6 +6,7 @@
 - [ListenBrainz](#listenbrainz)
 - [SoundCloud](#soundcloud)
 - [Deezer](#deezer)
+- [Tidal](#tidal)
 ### [Planned](#planned-1)
 - [Apple Music](#apple-music)
 - [Amazon Music](#amazon-music-blocked)
@@ -99,6 +100,38 @@ Extension updates new song every 5 seconds, so you CAN skip songs fast but it's 
 4. Filter 'arl' and copy clean value (not `arl="xyz"`, only `xyz`)
 
 **Load an extension first**, then update your token.
+
+### Tidal
+Nothing is baked in - you register the app yourself, and the login is a normal
+OAuth page in your browser.
+
+1. Register an app at [developer.tidal.com/apps](https://developer.tidal.com/apps)
+2. Add this **redirect URI**, exactly as written: `http://127.0.0.1:47831/callback`
+3. Add the extension [here](about:debugging#/runtime/this-firefox) (i won't sign extension)
+4. Paste the client id + secret in:
+    - GUI `Login -> Tidal`
+    - CLI `PLAYLISTMANAGER_TIDAL_CLIENT_ID=<id> PLAYLISTMANAGER_TIDAL_CLIENT_SECRET=<secret> python -m app --login tidal`
+      (no secret flags for Tidal, same as the Deezer ARL - argv is world-readable
+      through `/proc` and ends up in your shell history; unset the variables and the
+      CLI asks instead, with the secret hidden)
+5. Approve the authorize page that opens, then press a keybind
+
+Notes:
+- **The extension is required, not optional.** Tidal has no now-playing or
+  recently-played endpoint in either API version, and there is no Linux desktop
+  app to read - the web player is the only capture source. When a capture comes
+  up short (the numeric id is only readable when the page was open as the song
+  started), the flow resolves the song by title + artist through catalogue
+  search instead of failing, with the album breaking ties.
+- Tidal's **v1** API is what the plugin talks; the v2 endpoints sit behind
+  developer access tiers an app you register yourself is not granted.
+- A playlist write carries that playlist's ETag, so an add cannot land on a
+  playlist that changed underneath it. If Tidal reports a conflict the add is
+  reported as a failure, and the next keybind press re-reads the playlist and
+  goes through.
+- A track that is not available in your subscription's country comes back as a
+  2xx with nothing added; the app reports that as a failure instead of
+  pretending the song landed.
 ---
 ## Planned
 ### [Apple Music](https://developer.apple.com/documentation/applemusicapi/generating-developer-tokens)

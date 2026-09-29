@@ -1191,6 +1191,9 @@ def run_login(
     if platform == "deezer":
         return _run_deezer_login()
 
+    if platform == "tidal":
+        return _run_tidal_login()
+
     if platform == "soundcloud":
         return _run_soundcloud_login(client_id, client_secret, refresh_token)
 
