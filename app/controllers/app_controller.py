@@ -14,6 +14,26 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 
+def should_confirm_quit(
+    confirm_on_quit: bool, hide_to_tray: bool, tray_available: bool
+) -> bool:
+    """Whether a quit request must be confirmed with the user first.
+
+    Pure decision function (headless-testable): the prompt only appears
+    when all three hold —
+
+    - ``confirm_on_quit``: the setting is on,
+    - ``hide_to_tray``: the user opted into hide-to-tray, so a full exit
+      while the icon sits in the tray is plausibly accidental,
+    - ``tray_available``: a tray backend actually started, so the dialog
+      can offer "Hide to tray" as a real alternative to quitting.
+
+    With hide-to-tray off (the default) or unavailable, quitting stays a
+    single action and a Cancel/Quit-only prompt would be pure friction.
+    """
+    return bool(confirm_on_quit and hide_to_tray and tray_available)
+
+
 class AppController:
     def __init__(self, app):
         self.app = app
@@ -24,10 +44,18 @@ class AppController:
         # (wait_window re-enters the mainloop).  Without the guard the
         # second call re-runs teardown and root.destroy() on an already
         # destroyed window raises TclError that escapes the dialog.
+        # The quit-CONFIRMATION dialog is openable too, so the guard is
+        # taken before it and released again if the user cancels or hides
+        # to tray - otherwise a second request (or a tray click landing
+        # while the modal is up) would stack a second dialog.
         self._quitting = False
 
     def quit_app(self):
         """Run cleanup and teardown, handling errors gracefully.
+
+        When hide-to-tray is available and ``[confirm_on_quit]`` is on,
+        the user first gets a Cancel / Hide to tray / Quit dialog; "Hide
+        to tray" aborts the quit (the window is withdrawn) and returns.
 
         If cleanup or closing raises, an error dialog with "Force-quit"
         and "Cancel" buttons is shown.  "Force-quit" skips the remaining
@@ -39,6 +67,10 @@ class AppController:
             logger.debug("Quit already in progress, ignoring duplicate request")
             return
         self._quitting = True
+
+        if not self._confirm_quit():
+            self._quitting = False
+            return
 
         try:
             self.app.cleanup()
@@ -63,6 +95,47 @@ class AppController:
                 self.app.root.destroy()
             except Exception:
                 logger.exception("Failed to force-destroy the root window")
+
+    def _confirm_quit(self) -> bool:
+        """Ask the user how to quit; return True to proceed with the quit.
+
+        Returns True immediately when the prompt does not apply (see
+        :func:`should_confirm_quit`) so the no-tray / setting-off paths
+        behave exactly as before.  "Cancel" and "Hide to tray" both abort
+        the quit; the hide path withdraws the window through the UI layer
+        (``MainWindow.hide_to_tray``) and falls back to a real quit if
+        that fails - the user asked to keep the app running, but a window
+        withdrawn with no tray icon would be unreachable.
+        """
+        from utils.config import get_setting
+
+        tray = getattr(getattr(self.app, "main_window", None), "tray_service", None)
+        tray_available = bool(getattr(tray, "available", False))
+        if not should_confirm_quit(
+            get_setting("confirm_on_quit", True),
+            get_setting("hide_to_tray", False),
+            tray_available,
+        ):
+            return True
+
+        from ui.dialogs import (
+            QUIT_CANCELLED,
+            QUIT_CONFIRMED,
+            QUIT_HIDE,
+            confirm_quit,
+        )
+
+        choice = confirm_quit(self.app.root)
+        if choice == QUIT_CANCELLED:
+            logger.info("Quit cancelled by user")
+            return False
+        if choice == QUIT_HIDE:
+            if self.app.main_window.hide_to_tray():
+                logger.info("Quit cancelled - window hidden to the tray")
+                return False
+            logger.warning("Hide-to-tray failed - quitting instead")
+            return True
+        return choice == QUIT_CONFIRMED
 
     def check_updates(self, *, force: bool = True, on_done=None) -> None:
         """Check for application updates and show a dialog when one is found."""

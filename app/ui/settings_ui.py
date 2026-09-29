@@ -530,6 +530,26 @@ def show_settings_dialog(
     if not getattr(tray_available, "available", False):
         start_tray_ck.configure(state="disabled", cursor="arrow")
 
+    # Ask before quitting (Cancel / Hide to tray / Quit).  Only consulted
+    # while hide-to-tray is on AND a tray backend actually started, so the
+    # row is disabled without one - there is nothing to hide into.
+    confirm_quit_var = tk.IntVar(
+        value=1 if get_setting("confirm_on_quit", fallback=True) else 0
+    )
+    confirm_quit_ck = tk.Checkbutton(
+        app_section,
+        text=tr("settings.confirm_on_quit"),
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=lambda: _toggle_setting("confirm_on_quit", confirm_quit_var),
+        variable=confirm_quit_var,
+    )
+    confirm_quit_ck.pack(fill="both", pady=(0,5), padx=16)
+    if not getattr(tray_available, "available", False):
+        confirm_quit_ck.configure(state="disabled", cursor="arrow")
+
     # --- Song removal: ask before the showcase ✕ deletes a song.  The
     # removal is always a full one (platform + local row + scrobble).
     confirm_song_remove_var = tk.IntVar(

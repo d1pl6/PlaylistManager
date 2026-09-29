@@ -1600,6 +1600,41 @@ on_like_button_change=self._apply_like_button_visibility,
         """Live-apply the hide-to-tray setting (called from Settings)."""
         self._hide_to_tray = enabled
 
+    def hide_to_tray(self) -> bool:
+        """Withdraw the window to the tray; return True when it hid.
+
+        The user-initiated counterpart of the minimize path in
+        :meth:`_on_unmap` (which gates on ``state() == "iconic"`` and the
+        virtual-desktop heuristics) - here the intent is explicit, so no
+        such gating applies.  Used by the quit confirmation's "Hide to
+        tray" button.
+
+        Returns False without touching the window when no tray is
+        running: a withdrawn window with no icon to restore it from
+        would make the app unreachable, so the caller must fall back to a
+        real quit.
+        """
+        if self.tray_service is None or not getattr(
+            self.tray_service, "available", False
+        ):
+            return False
+        # A pending minimize-hide (from <Unmap>) must not fire against the
+        # window we are about to withdraw, nor re-enter after the restore.
+        if self._hide_after_id is not None:
+            try:
+                self.root.after_cancel(self._hide_after_id)
+            except tk.TclError:
+                pass
+            self._hide_after_id = None
+        try:
+            if not self.root.winfo_exists():
+                return False
+            self.root.withdraw()
+        except tk.TclError:
+            logger.debug("hide_to_tray: window already destroyed")
+            return False
+        return True
+
     def set_auto_resize(self, enabled: bool) -> None:
         """Live-apply the auto-resize setting (called from Settings).
 

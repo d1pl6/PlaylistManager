@@ -67,6 +67,14 @@ DEFAULT_SETTINGS = {
     "confirm_on_song_remove": {"is_true": "yes"},
     "confirm_on_playlist_remove": {"is_true": "yes"},
     "remove_playlist": {"default": "remove"},
+    # Ask before quitting while hide-to-tray is available: the dialog
+    # offers Cancel / Hide to tray / Quit, so closing the window (or the
+    # tray "Quit" item) while an icon sits in the tray cannot be an
+    # accidental full exit.  Only consulted when hide_to_tray is on AND a
+    # tray backend actually started - there is nothing to hide into
+    # otherwise, so a Cancel/Quit-only prompt would be pure friction
+    # (see controllers.app_controller.should_confirm_quit).
+    "confirm_on_quit": {"is_true": "yes"},
     # Last.fm integration settings (service plugin, optional)
     "like_button": {"is_true": "no"},  # show the ♥/♡ button under "remove from playlist"
     # Scrobble a song when an add-flow succeeds.  Defaults to no like the

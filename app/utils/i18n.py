@@ -148,6 +148,7 @@ DEFAULT_STRINGS: dict[str, str] = {
     "settings.show_playlist_stats": "Show playlist stats (songs / duration / followers)",
     "settings.ask_before_song_remove": "Ask before removing a song",
     "settings.ask_before_playlist_remove": "Ask before removing the playlist",
+    "settings.confirm_on_quit": "Ask before quitting (Cancel / Hide to tray / Quit)",
     "settings.default_playlist_removal": "Default playlist removal:",
     "settings.show_last_n_added": "Show last N added songs:",
     "settings.zero_off_hint": "(0 = off)",
@@ -409,6 +410,12 @@ DEFAULT_STRINGS: dict[str, str] = {
     "auth.deleted_credential_path": "Deleted credentials: {path}",
     "quit.force_quit": "Force-quit",
     "quit.error_while_closing": "An error occurred while closing PlaylistManager:",
+    # Quit confirmation (shown while hide-to-tray is available - see
+    # controllers.app_controller.should_confirm_quit).
+    "quit.confirm_title": "Quit PlaylistManager",
+    "quit.confirm_message": "PlaylistManager is still running in the system tray.",
+    "quit.confirm_hide_to_tray": "Hide to tray",
+    "quit.confirm_quit": "Quit",
     # --- main window toolbar + header (app/ui/main_window.py) ----------------------
     "main.tooltip_login": "Log in to music services",
     "main.tooltip_add_playlist": "Add a playlist",
