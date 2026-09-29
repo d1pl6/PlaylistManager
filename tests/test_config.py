@@ -163,6 +163,107 @@ class TestSettingValues:
         )
 
 
+class TestSectionScopedBool:
+    """``[<platform>] scrobbles`` and friends: a boolean under a section.
+
+    The section name is dynamic (a plugin id), so DEFAULT_SETTINGS cannot
+    ship one - the reader therefore has to be right about a *missing* key
+    and about a hand-edited one, since neither can be caught in review.
+    """
+
+    def test_missing_key_reads_as_the_fallback(self, paths):
+        assert config.get_setting_bool("lastfm", "scrobbles", fallback=True) is True
+        assert config.get_setting_bool("lastfm", "scrobbles") is False
+
+    def test_round_trip(self, paths):
+        config.set_setting_bool("lastfm", "scrobbles", False)
+        assert config.get_setting_bool("lastfm", "scrobbles", fallback=True) is False
+        config.set_setting_bool("lastfm", "scrobbles", True)
+        assert config.get_setting_bool("lastfm", "scrobbles", fallback=False) is True
+
+    @pytest.mark.parametrize(
+        "stored,expected",
+        [
+            ("false", False), ("no", False), ("off", False), ("0", False),
+            ("true", True), ("yes", True), ("on", True), ("1", True),
+        ],
+    )
+    def test_every_spelling_configparser_accepts_is_understood(
+        self, paths, stored, expected
+    ):
+        # A user hand-editing settings.ini writes whichever spelling they
+        # know; only the documented one may be honored.
+        settings, _ = paths
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(f"[lastfm]\nscrobbles = {stored}\n", encoding="utf-8")
+        config._invalidate_settings_cache()
+        assert config.get_setting_bool("lastfm", "scrobbles", fallback=True) is expected
+
+    def test_an_unreadable_value_falls_back_instead_of_raising(self, paths):
+        # The whole module's contract on a user file: never raise, and hand
+        # the decision to the caller's fallback.
+        settings, _ = paths
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text("[lastfm]\nscrobbles = perhaps\n", encoding="utf-8")
+        config._invalidate_settings_cache()
+        assert config.get_setting_bool("lastfm", "scrobbles", fallback=True) is True
+        assert config.get_setting_bool("lastfm", "scrobbles", fallback=False) is False
+
+    def test_writing_creates_the_section_and_keeps_the_rest(self, paths):
+        settings, _ = paths
+        settings.write_text(
+            "[legacy_section]\nfoo = bar\n[soundcloud]\ncapture_mode = hybrid\n",
+            encoding="utf-8",
+        )
+        config.set_setting_bool("listenbrainz", "scrobbles", False)
+        cp = _read(settings)
+        assert cp.get("legacy_section", "foo") == "bar"
+        assert cp.get("soundcloud", "capture_mode") == "hybrid"
+        assert cp.getboolean("listenbrainz", "scrobbles") is False
+
+    def test_the_option_name_is_the_documented_one(self):
+        assert config.SCROBBLES_OPTION == "scrobbles"
+
+
+class TestThumbnailSizeCap:
+    def test_default_is_no_cap(self, paths):
+        assert config.resolve_thumbnail_size_cap() == 0
+
+    @pytest.mark.parametrize("cap", config.THUMBNAIL_SIZE_CAPS)
+    def test_every_preset_resolves(self, paths, cap):
+        config.set_setting_value("thumbnails", "max_size", str(cap))
+        assert config.resolve_thumbnail_size_cap() == cap
+
+    @pytest.mark.parametrize(
+        "stored", ["999", "-5", "0.5", "abc", "", "  ", None, "12.5", "128.0"]
+    )
+    def test_unknown_values_fall_back_to_no_cap(self, paths, stored):
+        # An arbitrary cap is either a no-op or a silent quality loss, so
+        # anything outside the tuple is discarded rather than trusted.
+        config.set_setting_value("thumbnails", "max_size", str(stored))
+        assert config.resolve_thumbnail_size_cap() == 0
+
+    def test_whitespace_is_tolerated(self, paths):
+        config.set_setting_value("thumbnails", "max_size", " 256 ")
+        assert config.resolve_thumbnail_size_cap() == 256
+
+    def test_default_lands_in_a_fresh_settings_file(self, paths):
+        # ensure_settings_file must ship the key, or the resolver would read
+        # the fallback on every fetch until the user first touches Settings.
+        settings, _ = paths
+        config.ensure_settings_file()
+        assert _read(settings).get("thumbnails", "max_size") == "0"
+
+    def test_added_key_survives_the_merge_into_a_user_file(self, paths):
+        # An existing user config keeps its own cap across an upgrade.
+        settings, _ = paths
+        settings.write_text("[thumbnails]\nmode = cache\nmax_size = 512\n", encoding="utf-8")
+        config.ensure_settings_file()
+        cp = _read(settings)
+        assert cp.get("thumbnails", "mode") == "cache"
+        assert cp.get("thumbnails", "max_size") == "512"
+
+
 class TestEnsureThemeFile:
     def test_creates_with_default_palette(self, paths):
         _, theme = paths

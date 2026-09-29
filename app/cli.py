@@ -51,7 +51,11 @@ from services.playlist_store import PlaylistStore
 from services.playlist_sync import PlaylistSyncService
 from services.playlist_url import parse_playlist_url
 from services import scrobble_log
-from services.scrobble import scrobble_enabled_for
+from services.scrobble import (
+    SCROBBLE_WRITE,
+    scrobble_backends,
+    scrobble_enabled_for,
+)
 from services.scrobble_service import scrobble_current_song
 from services.song_manager import SongManager
 from utils.config import get_setting
@@ -334,24 +338,22 @@ def _build_integrations(auth_platforms=None):
     return registry
 
 
-def _scrobble_backend(integrations=None):
-    """Return the single ScrobbleCapable integration, or ``None``.
+def _scrobble_backends(integrations=None):
+    """Return the scrobble backends to write to (possibly several).
 
     Built lazily (and only on demand - the caller gates on auto-scrobble
     being enabled) so an add that is not going to scrobble never pays the
     full-registry authenticate() cost of every installed platform.
-    ``None`` when no scrobble-capable backend is installed/configured.
+    Empty when no scrobble-capable backend is installed and enabled.
+
+    Delegates to :func:`services.scrobble.scrobble_backends` so the CLI and
+    the GUI always scrobble to the same set of services - a user decision
+    (one ``[<platform>] scrobbles`` switch per backend), not a
+    registry-order accident.
     """
     if integrations is None:
         integrations = _build_integrations()
-    return next(
-        (
-            integ
-            for integ in integrations.get_all().values()
-            if getattr(integ, "scrobble", None) is not None
-        ),
-        None,
-    )
+    return scrobble_backends(integrations, SCROBBLE_WRITE)
 
 
 # ---------------------------------------------------------------------------
@@ -409,20 +411,25 @@ def run_add(spec: str) -> int:
         entry.get("platform") or "youtube_music" for _, entry in targets
     }
     registry = _build_integrations(auth_platforms=target_platforms)
-    scrobble_integ = None
+    scrobble_integ = []
     if auto_scrobble and any(
         scrobble_enabled_for(p) for p in target_platforms
     ):
-        scrobble_integ = _scrobble_backend(registry)
-        if scrobble_integ is not None and scrobble_integ.id not in target_platforms:
-            try:
-                scrobble_integ.authenticate()
-            except Exception as e:
-                logger.error(
-                    "%s auth failed: %s",
-                    scrobble_integ.display_name, e, exc_info=True,
-                )
-                scrobble_integ = None
+        for backend in _scrobble_backends(registry):
+            if backend.id not in target_platforms:
+                # A backend that is also a target authenticates itself
+                # below; only the others need it here.  Skipping the
+                # duplicate round trip is the point - authenticating
+                # every installed platform was what this gate avoids.
+                try:
+                    backend.authenticate()
+                except Exception as e:
+                    logger.error(
+                        "%s auth failed: %s",
+                        backend.display_name, e, exc_info=True,
+                    )
+                    continue
+            scrobble_integ.append(backend)
 
     # Legacy registry entries predate the "platform" field - default them
     # to YouTube Music, matching PlaylistStore.
@@ -697,16 +704,25 @@ def run_scrobble() -> int:
     # authenticated live registry and pays nothing per action.
     integrations = _build_integrations(auth_platforms=set())
 
-    # Authenticate the scrobble backend (Last.fm) up front - it is
-    # always needed regardless of which platform produces the song.
-    scrobble_integ = _scrobble_backend(integrations)
-    if scrobble_integ is None:
+    # Authenticate every enabled scrobble backend up front - they are all
+    # needed regardless of which platform produces the song.  One failing
+    # (revoked token, service down) is reported and dropped rather than
+    # aborting: the user asked for a scrobble, and the services that do work
+    # should still get one.
+    backends = _scrobble_backends(integrations)
+    if not backends:
         print(tr("cli.no_scrobble_backend"), file=sys.stderr)
         return 1
-    scrobble_integ = _init_platform(
-        plugin_registry, scrobble_integ.id, integration=scrobble_integ
-    )
-    if scrobble_integ is None:
+    scrobble_integ = []
+    for backend in backends:
+        authenticated = _init_platform(
+            plugin_registry, backend.id, integration=backend
+        )
+        if authenticated is None:
+            user_log("Could not authenticate scrobble backend %s", backend.id)
+            continue
+        scrobble_integ.append(authenticated)
+    if not scrobble_integ:
         print(tr("cli.no_scrobble_backend"), file=sys.stderr)
         return 1
 
@@ -1313,8 +1329,9 @@ def _run_flow(
 ) -> tuple[bool, str]:
     """Run one add-flow; returns (ok, message) - message is the line tail.
 
-    *scrobble_integ* is the pre-resolved ScrobbleCapable backend (or
-    ``None``), resolved once by the caller when auto-scrobble is enabled.
+    *scrobble_integ* is the pre-resolved list of ScrobbleCapable backends
+    (possibly empty), resolved once by the caller when auto-scrobble is
+    enabled.  Every one of them gets the listen.
     """
     # Flows declare their platform id (PLATFORM class attr); the caller
     # passes it where the platform is already resolved to be explicit.
@@ -1348,25 +1365,33 @@ def _run_flow(
             PlaylistStore.mark_used(playlist_name, platform, playlist_id)
 
         # Scrobble the song if auto-scrobble is enabled and a ScrobbleCapable
-        # integration was resolved.  An accepted scrobble is recorded in
-        # the scrobble ledger so the remove-song path can later delete
-        # THIS exact scrobble (not the track's most recent one).
-        if (
-            status == "added"
-            and scrobble_integ is not None
-            and scrobble_enabled_for(platform)
-        ):
+        # integration was resolved.  EVERY resolved backend gets the listen,
+        # and the ones that accepted it are recorded in the scrobble ledger
+        # so the remove-song path can later delete THIS exact scrobble on
+        # each of them (not the track's most recent one).  One backend
+        # rejecting must not cost the others their scrobble, so each call
+        # is isolated and its record written immediately.
+        if status == "added" and scrobble_integ and scrobble_enabled_for(platform):
             result_song = result.get("song", {})
             if result_song:
-                try:
-                    ts = scrobble_integ.scrobble(result_song)
+                for backend in scrobble_integ:
+                    try:
+                        ts = backend.scrobble(result_song)
+                    except Exception as e:
+                        logger.debug("Failed to scrobble song: %s", e)
+                        continue
                     song_id = result.get("song_id")
                     if ts is not None and song_id is not None:
-                        scrobble_log.record_scrobble(
-                            platform, playlist_id or "", song_id, ts
-                        )
-                except Exception as e:
-                    logger.debug("Failed to scrobble song: %s", e)
+                        try:
+                            scrobble_log.record_scrobble(
+                                platform,
+                                playlist_id or "",
+                                song_id,
+                                ts,
+                                [getattr(backend, "id", "")],
+                            )
+                        except Exception as e:
+                            logger.debug("Recording the scrobble failed: %s", e)
 
     try:
         flow.execute_flow(

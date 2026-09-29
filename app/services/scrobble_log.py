@@ -2,10 +2,15 @@
 Auto-scrobble ledger (``db/scrobbles.json``).
 
 Records, for every add-flow that auto-scrobbled a song, the exact Unix
-timestamp Last.fm accepted.  The showcase "remove song" action then
-deletes THAT scrobble (``library.removeScrobble`` with the timestamp)
-instead of the track's most recent one - deleting a guess would silently
-erase a legitimate earlier scrobble the user actually listened to.
+timestamp the backends accepted AND which ones accepted it (Last.fm,
+ListenBrainz, ... - every platform with ``[<platform>] scrobbles = true``
+receives the same listen).  The showcase "remove song" action then deletes
+THAT scrobble on EACH of those services (Last.fm's
+``library.removeScrobble`` with the timestamp, ListenBrainz's
+``/1/delete-listen``) instead of the track's most recent one - deleting a
+guess would silently erase a legitimate earlier scrobble the user actually
+listened to, and asking a service that never got the listen would not
+delete anything while leaving the real one behind.
 
 The file sits under the gitignored ``db/`` and is created on demand,
 mirroring :mod:`services.duplicate_queue`'s discipline: module-level
@@ -27,6 +32,7 @@ cannot grow without bound.
 import json
 import logging
 import threading
+from collections.abc import Iterable
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -46,7 +52,36 @@ _lock = threading.RLock()
 # removed via reloads, playlists uninstalled) must not grow forever.
 MAX_ENTRIES = 4096
 
-_SCHEMA_VERSION = 1
+# v2 added the per-record ``backend`` field (which service backend accepted
+# the scrobble); v3 turned it into ``backends``, a LIST, because every
+# backend switched on with ``[<platform>] scrobbles = true`` now receives the
+# same listen and all of them have to be told apart on the way back out.
+#
+# Older records are read as a single-element list, so a v1 record (no
+# backend field at all) becomes ``[]`` - "unknown", which the remove path
+# reports rather than guessing a service.
+_SCHEMA_VERSION = 3
+
+
+def _backends_of(record) -> list:
+    """The service ids a stored record says accepted the scrobble.
+
+    Tolerates every schema version: v3 ``backends`` (list), v2 ``backend``
+    (one id), v1 (neither -> unknown).
+    """
+    if not isinstance(record, dict):
+        return []
+    stored = record.get("backends")
+    if isinstance(stored, str):
+        stored = [stored]
+    if not isinstance(stored, list):
+        stored = []
+    ids = [str(b).strip() for b in stored if str(b or "").strip()]
+    if not ids:
+        legacy = record.get("backend")
+        if isinstance(legacy, str) and legacy.strip():
+            ids = [legacy.strip()]
+    return ids
 
 
 def _now_iso() -> str:
@@ -159,9 +194,24 @@ def _prune(data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def record_scrobble(platform: str, playlist_id: str, song_id, timestamp: int) -> None:
+def record_scrobble(
+    platform: str,
+    playlist_id: str,
+    song_id,
+    timestamp: int,
+    backends: Iterable[str] = (),
+) -> None:
     """Remember that *song_id* (a row in a local playlist DB) was
     auto-scrobbled and accepted at *timestamp* (epoch seconds).
+
+    *backends* are the ids of the service backends that accepted it
+    (``lastfm``, ``listenbrainz``, ... - one per platform enabled with
+    ``[<platform>] scrobbles = true``).  It is what makes the later delete
+    land on the services the scrobble actually went to: a user can switch
+    backends off between the add and the remove, and resolving the target at
+    delete time would then address the wrong service (or, worse, delete a
+    listen this app never made).  A single id is accepted for convenience;
+    it is stored as a one-element list.
 
     Without a *song_id* (the row never landed - e.g. the playlist was
     removed mid-flow) there is nothing to pin a future unscrobble on, so
@@ -180,19 +230,26 @@ def record_scrobble(platform: str, playlist_id: str, song_id, timestamp: int) ->
         songs = playlists.get(str(playlist_id))
         if not isinstance(songs, dict):
             songs = playlists[str(playlist_id)] = {}
+        if isinstance(backends, str):
+            backends = [backends]
+        accepted = [str(b).strip() for b in (backends or ()) if str(b or "").strip()]
         songs[str(song_id)] = {
             "timestamp": int(timestamp),
             "at": _now_iso(),
+            "backends": accepted,
         }
         _prune(data)
         _write(data)
 
 
-def lookup_scrobble(platform: str, playlist_id: str, song_id) -> int | None:
-    """Return the recorded accepted scrobble timestamp for a local DB row,
-    or ``None`` when no auto-scrobble was recorded for that row (the
-    add's auto-scrobble was off, the row was re-imported by a reload
-    swapping its song_id, or the entry was pruned)."""
+def lookup_scrobble_record(platform: str, playlist_id: str, song_id) -> dict | None:
+    """The whole ledger record for a local DB row, or ``None``.
+
+    ``{"timestamp": int, "at": str, "backends": [str, ...]}``.  ``backends``
+    is ``[]`` for records written before it was tracked (schema v1) and for
+    an integration that reports no id - the remove path treats that as
+    "unknown service" and leaves the scrobble alone.
+    """
     if not song_id:
         return None
     with _lock:
@@ -206,14 +263,35 @@ def lookup_scrobble(platform: str, playlist_id: str, song_id) -> int | None:
         if not isinstance(rec, dict):
             return None
         try:
-            return int(rec.get("timestamp"))
+            timestamp = int(rec.get("timestamp"))
         except (TypeError, ValueError):
             return None
+        return {
+            "timestamp": timestamp,
+            "at": str(rec.get("at") or ""),
+            "backends": _backends_of(rec),
+        }
+
+
+def lookup_scrobble(platform: str, playlist_id: str, song_id) -> int | None:
+    """Return the recorded accepted scrobble timestamp for a local DB row,
+    or ``None`` when no auto-scrobble was recorded for that row (the
+    add's auto-scrobble was off, the row was re-imported by a reload
+    swapping its song_id, or the entry was pruned)."""
+    record = lookup_scrobble_record(platform, playlist_id, song_id)
+    return record["timestamp"] if record else None
 
 
 def clear_scrobble(platform: str, playlist_id: str, song_id) -> None:
-    """Forget a recorded scrobble - call after the platform confirmed the
-    delete, so a failed delete keeps its record for a later retry."""
+    """Forget a recorded scrobble, called once the local row it is keyed by
+    is going away - whether or not every service confirmed its delete.
+
+    The record is deliberately dropped even when a delete failed: it is keyed
+    by the local DB row, and that row is removed in the same operation, so
+    nothing could ever retry against it again and it would only occupy the
+    FIFO cap.  A service that could not be reached is reported by the caller
+    (see ``ui.showcase_manager._delete_scrobbles``), which is where the user
+    learns the listen is still there."""
     if not song_id:
         return
     with _lock:

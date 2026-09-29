@@ -5,8 +5,9 @@ Used by the scrobble keybind action
 (``controllers/keybind_controller._scrobble_current_action``) and the
 CLI ``-s`` batch command (``cli.run_scrobble``).  Both callers iterate
 authenticated platform plugins, capture through the first platform that
-reports a song, and scrobble it via Last.fm — the only difference is
-how they build a flow for a platform and what they do with the result.
+reports a song, and scrobble it to every enabled service backend — the
+only difference is how they build a flow for a platform and what they do
+with the result.
 """
 
 import logging
@@ -39,9 +40,20 @@ def scrobble_current_song(
     attempt, so a scrobble never pays ``authenticate()`` for a
     platform that is not the current song source.
 
+    *scrobble_integ* is the scrobble target: one integration, or an
+    iterable of them (every backend enabled with
+    ``[<platform>] scrobbles = true``).  All of them receive the same
+    captured song with the same timestamp — the backends are
+    independent services, so one refusing must not stop the others, and a
+    listener recorded once with a single timestamp can be deleted from
+    each of them by the remove path.
+
     Returns ``(song_data, ts)`` — the captured song and the accepted
-    scrobble timestamp (``None`` when the backend refused the scrobble)
-    — or ``None`` when no platform produced a song.
+    scrobble timestamp (``None`` when no backend accepted the scrobble) —
+    or ``None`` when no platform produced a song.  *ts* is the first
+    backend's timestamp; the capture loop is what callers report, and
+    every backend here was handed the same song and derived the same
+    ``played_at`` from it.
     """
     for platform_id in plugin_registry.get_platform_ids():
         if integration_provider is not None:
@@ -66,7 +78,33 @@ def scrobble_current_song(
             if not song_data:
                 continue
 
-            return song_data, scrobble_integ.scrobble(song_data)
+            backends = (
+                [scrobble_integ]
+                if not isinstance(scrobble_integ, (list, tuple, set))
+                else list(scrobble_integ)
+            )
+            accepted_ts = None
+            any_failed = False
+            for backend in backends:
+                try:
+                    ts = backend.scrobble(song_data)
+                except Exception as e:
+                    # One service refusing must not cost the others their
+                    # listen; keep going down the list.
+                    any_failed = True
+                    logger.info(
+                        "Scrobble to %s failed: %s",
+                        getattr(backend, "id", "?"), e,
+                    )
+                    continue
+                if ts is not None and accepted_ts is None:
+                    accepted_ts = ts
+            if accepted_ts is None and any_failed:
+                # Nothing took the listen, so fall through to the next source
+                # platform - a different player may report a song that
+                # scrobbles (the pre-existing retry, unchanged).
+                continue
+            return song_data, accepted_ts
         except Exception as e:
             # One platform's capture/scrobble failure must not sink the
             # whole action — try the next.  The user triggered this, so

@@ -825,6 +825,44 @@ def get_setting_value(section: str, option: str, fallback: str = "") -> str:
         return fallback
 
 
+def get_setting_bool(section: str, option: str, fallback: bool = False) -> bool:
+    """Read one boolean option from an arbitrary section.
+
+    :func:`get_setting` reads the flat ``is_true`` form; this is the
+    section-scoped equivalent (e.g. ``get_setting_bool("lastfm", "scrobbles")``)
+    for settings that live under their own key rather than under a section
+    name.  Returns *fallback* on any error, including a hand-edited value
+    that is not a boolean - the same "never raise on a user file" contract
+    the rest of this module keeps.  Accepts every spelling
+    :class:`configparser.ConfigParser` accepts (``true``/``yes``/``1``...).
+
+    The *section* is dynamic for the current caller (``[<platform id>]``),
+    which is why this is not part of the ``settings.key`` invariant: the
+    checker only validates literal section names, since it could not know
+    which plugins are installed.  See ``SCROBBLES_OPTION``.
+    """
+    cfg = _cached_config()
+    try:
+        return cfg.getboolean(section, option, fallback=fallback)
+    except Exception:
+        return fallback
+
+
+def set_setting_bool(section: str, option: str, enabled: bool) -> None:
+    """Write a boolean option into an arbitrary section.
+
+    The section-scoped counterpart of :func:`set_setting`, for the same
+    settings :func:`get_setting_bool` reads.  Writes ``true``/``false``
+    (both are what :class:`configparser.ConfigParser` parses, as are the
+    ``yes``/``no`` form :func:`set_setting` writes, so a hand-edited file
+    reads back correctly either way).
+
+    Serialized under ``_settings_lock`` like :func:`set_setting` - see
+    there for the lost-update rationale.
+    """
+    set_setting_value(section, option, "true" if enabled else "false")
+
+
 def set_setting_value(section: str, option: str, value: str) -> None:
     """Write one arbitrary setting option, preserving every other section.
 

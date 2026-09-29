@@ -28,8 +28,12 @@ from controllers.keybind_registry import (
     KeybindRegistry,
     PLATFORM_YOUTUBE_MUSIC,
 )
-from services import duplicate_queue, scrobble_log
-from services.scrobble import scrobble_enabled_for
+from services import duplicate_queue, receiver_port, scrobble_log
+from services.scrobble import (
+    SCROBBLE_WRITE,
+    scrobble_backends,
+    scrobble_enabled_for,
+)
 from services.scrobble_service import scrobble_current_song
 from services.playlist_store import PlaylistStore
 from services.song_manager import SongManager
@@ -509,6 +513,32 @@ class KeybindController:
             self._flow_busy.release()
             return
 
+        # Pre-flight the URL receiver's pinned port.  A collision is
+        # invisible from the flow's side: _start_receiver swallows the
+        # EADDRINUSE and the capture then times out, so the user is told
+        # "the extension never sent anything" about a port that was never
+        # free.  Abort here instead, with the port and its holder named.
+        conflict = receiver_port.conflict_for(
+            self.plugin_registry.get(platform),
+            self._receivers.get(platform),
+        )
+        if conflict:
+            logger.warning("Aborting add: %s", conflict)
+            # Same persistence the on_error path uses, so the actionable
+            # text reaches the activity window's Errors tab (the status
+            # row only has room for the short code).
+            try:
+                duplicate_queue.record_error(playlist_name, platform, conflict)
+            except Exception:
+                logger.debug("Could not log port conflict to extra.json", exc_info=True)
+            # reset before status: on_reset clears the card's status
+            # label, so setting the status first would wipe it (the same
+            # order on_error uses).
+            callbacks.on_reset("readonly")
+            callbacks.on_status("receiver_port_busy", C["status_error_bg"])
+            self._flow_busy.release()
+            return
+
         def _schedule_ui(fn):
             """Marshal *fn* to the main thread; drop it if the app is gone.
 
@@ -595,11 +625,13 @@ class KeybindController:
                 # skipped above: the song data did not change.
                 if status == "added":
                     callbacks.on_song_added()
-                    # Scrobble the song if auto-scrobble is enabled and a ScrobbleCapable
-                    # integration is available.  An accepted scrobble is
+                    # Scrobble the song if auto-scrobble is enabled and a
+                    # ScrobbleCapable integration is available.  EVERY
+                    # backend switched on ([<platform>] scrobbles = true)
+                    # gets the listen, and the ones that accepted it are
                     # recorded in the scrobble ledger so the remove-song
-                    # path can later delete THIS exact scrobble (not the
-                    # track's most recent one).
+                    # path can later delete THIS exact scrobble on each
+                    # (not the track's most recent one).
                     if get_setting("scrobble_on_add") and scrobble_enabled_for(platform):
                         if song_data and self.integrations:
                             song_id = result.get("song_id")
@@ -607,17 +639,19 @@ class KeybindController:
 
                             def scrobble_async():
                                 try:
-                                    scrobble_integ = self._scrobble_integration()
-                                    if scrobble_integ is not None:
-                                        ts = scrobble_integ.scrobble(song_data)
-                                        if ts is not None and song_id is not None:
-                                            scrobble_log.record_scrobble(
-                                                platform, scrobble_playlist_id, song_id, ts
-                                            )
+                                    self._scrobble_all(song_data, lambda integ, ts: (
+                                        scrobble_log.record_scrobble(
+                                            platform,
+                                            scrobble_playlist_id,
+                                            song_id,
+                                            ts,
+                                            [getattr(integ, "id", "")],
+                                        )
+                                    ))
                                 except Exception as e:
                                     logger.debug("Failed to scrobble song: %s", e)
 
-                            threading.Thread(target=scrobble_async, daemon=True).start()
+                            threading.Thread(target=scrobble_async, daemon=True)
 
             if self._root is not None:
                 _schedule_ui(_apply)
@@ -674,14 +708,48 @@ class KeybindController:
         return self._flow_busy
 
     def _scrobble_integration(self):
-        """The single ScrobbleCapable integration, or ``None``."""
-        if not self.integrations:
-            return None
-        return next(
-            (integ for integ in self.integrations.get_all().values()
-             if getattr(integ, "scrobble", None) is not None),
-            None,
-        )
+        """The scrobble backends to write to (possibly several), or ``[]``.
+
+        Delegates to :func:`services.scrobble.scrobble_backends` so every
+        scrobble path (this controller, the CLI) agrees on the set -
+        deterministic platform-id order, the user's per-platform switches
+        applied, never "whichever the registry happened to yield first".
+        The scrobble *action* keybind still has to pick one (see
+        :func:`_scrobble_current_action`).
+        """
+        return scrobble_backends(self.integrations, SCROBBLE_WRITE)
+
+    def _scrobble_all(self, song_data: dict, on_accepted=None) -> list:
+        """Scrobble *song_data* to every enabled backend.
+
+        *on_accepted* is called once per backend that accepted the listen,
+        with ``(integration, timestamp)`` - the scrobble ledger records that
+        so the remove path can delete exactly those scrobbles later.  A
+        backend that rejects (or fails) the listen is logged and skipped: it
+        must not stop the others, or one dead service would silently cost
+        the user their Last.fm listens.
+
+        Returns the backends that accepted.
+        """
+        accepted = []
+        for integration in self._scrobble_integration():
+            try:
+                ts = integration.scrobble(song_data)
+            except Exception as e:
+                logger.debug(
+                    "Scrobble via %s failed: %s",
+                    getattr(integration, "id", "?"), e,
+                )
+                continue
+            if ts is None:
+                continue
+            accepted.append(integration)
+            if on_accepted is not None:
+                try:
+                    on_accepted(integration, ts)
+                except Exception as e:
+                    logger.debug("Recording the scrobble failed: %s", e)
+        return accepted
 
     def _handle_action_keybind(self, info: dict) -> None:
         """Dispatch an action-type keybind (e.g., scrobble).
@@ -717,8 +785,12 @@ class KeybindController:
                 return
             try:
                 scrobble_integ = self._scrobble_integration()
-                if scrobble_integ is None:
-                    logger.info("Last.fm integration not available for scrobble")
+                if not scrobble_integ:
+                    logger.info(
+                        "No scrobble backend available (no scrobble-capable "
+                        "integration, or every one has "
+                        "`[<platform>] scrobbles = false`)"
+                    )
                     return
 
                 def flow_provider(platform_id: str):
@@ -734,7 +806,7 @@ class KeybindController:
                     self.integrations,
                     self.plugin_registry,
                     flow_provider,
-                    scrobble_integ,
+                    scrobble_integ,  # every enabled backend
                 )
                 if captured is None:
                     logger.info("No currently-playing song found")

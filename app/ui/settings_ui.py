@@ -14,6 +14,11 @@ from ui.profiles_ui import (
 )
 from ui.scrollable import ScrollableFrame
 from ui.settings_theme_ui import show_theme_dialog
+from services.scrobble import (
+    is_capture_platform,
+    scrobble_backend_enabled,
+)
+
 from utils.config import (
     GRID_SORT_DEFAULT_DIRECTION,
     GRID_SORT_DEFAULT_KEY,
@@ -36,6 +41,7 @@ from utils.config import (
     resolve_thumbnail_size_cap,
     SCROBBLES_OPTION,
     set_setting,
+    set_setting_bool,
     set_setting_value,
 )
 from utils.i18n import available_languages, language_code_for, language_display, tr
@@ -101,6 +107,7 @@ def show_settings_dialog(
     plugin_availability=None,
     platform_display_names=None,
     plugin_registry=None,
+    scrobble_backend_ids=None,
     ):
     """Show the settings dialog.
 
@@ -162,7 +169,14 @@ def show_settings_dialog(
             credentials section (paths & permissions) lists each installed
             platform's manifest-declared credential paths (auth-dir file
             + fallbacks) when given, else the hardcoded platform map.
-    """
+    
+        scrobble_backend_ids: optional iterable of platform ids that can
+            receive scrobbles (from the live integration registry, via
+            ``services.scrobble.scrobble_backends``).  Drives the
+            "Scrobble to" checkboxes - one per service, each writing that
+            platform's own ``[<platform>] scrobbles`` switch, so any
+            subset can be enabled.
+"""
     theme_win_bg = C["frame_main_bg"]
     theme_header_bg = C["frame_head_bg"]
     theme_label_fg = C["label_def_fg"]
@@ -260,6 +274,17 @@ def show_settings_dialog(
     installed = set(plugin_availability or ())
     has_lastfm = "lastfm" in installed
     has_soundcloud = "soundcloud" in installed
+    # The scrobbling section is shared by every scrobble-capable service
+    # backend (Last.fm, ListenBrainz), so it shows when ANY is installed -
+    # gating it on Last.fm alone left a ListenBrainz-only user with no
+    # auto-scrobble settings at all.  The ids come from the live
+    # IntegrationRegistry (a plugin that offers ``scrobble``), so a third
+    # backend needs no change here; without them the selector still works
+    # but can only offer "Automatic".
+    scrobble_backend_ids = [
+        pid for pid in (scrobble_backend_ids or ()) if pid in installed
+    ]
+    has_scrobble_backend = bool(scrobble_backend_ids) or has_lastfm
 
     update_interval_value = get_setting_value(
         "update_check", "interval", UPDATE_CHECK_DEFAULT_INTERVAL
@@ -1300,38 +1325,44 @@ def show_settings_dialog(
         lambda e: _on_position_change(position_var.get()),
     )
 
-    # -- Last.fm section -----------------------------------------------
-    if has_lastfm:
-        lastfm_section = tk.Frame(integrations_content, background=theme_win_bg)
-        lastfm_section.pack(fill="both", padx=8, pady=(0, 8))
-        _section_header(lastfm_section, "Last.fm")
+    # -- Scrobbling section ---------------------------------------------
+    # Shared by every scrobble-capable service backend (Last.fm,
+    # ListenBrainz), so it shows when any is installed.
+    if has_scrobble_backend:
+        scrobble_section = tk.Frame(integrations_content, background=theme_win_bg)
+        scrobble_section.pack(fill="both", padx=8, pady=(0, 8))
+        _section_header(scrobble_section, tr("settings.scrobble_section"))
 
-        like_button_var = tk.BooleanVar(value=get_setting("like_button"))
-        like_button_check = tk.Checkbutton(
-            lastfm_section,
-            text=tr("settings.like_button"),
-            variable=like_button_var,
-            cursor="hand2",
-            selectcolor=theme_check_select,
-            **checkbutton_style,
-            font=ui_font(11),
-        )
-        like_button_check.pack(anchor="w", padx=16, pady=4)
+        # The heart under a showcase row is a Last.fm love, and only a
+        # love-capable backend can resolve its state - so this row stays
+        # Last.fm-gated even though the rest of the section is not.
+        if has_lastfm:
+            like_button_var = tk.BooleanVar(value=get_setting("like_button"))
+            like_button_check = tk.Checkbutton(
+                scrobble_section,
+                text=tr("settings.like_button"),
+                variable=like_button_var,
+                cursor="hand2",
+                selectcolor=theme_check_select,
+                **checkbutton_style,
+                font=ui_font(11),
+            )
+            like_button_check.pack(anchor="w", padx=16, pady=4)
 
-        def on_like_button_toggle():
-            enabled = bool(like_button_var.get())
-            _toggle_setting("like_button", like_button_var)
-            if on_like_button_change:
-                try:
-                    on_like_button_change(enabled)
-                except Exception as e:
-                    logger.error("Failed to apply like_button change: %s", e)
+            def on_like_button_toggle():
+                enabled = bool(like_button_var.get())
+                _toggle_setting("like_button", like_button_var)
+                if on_like_button_change:
+                    try:
+                        on_like_button_change(enabled)
+                    except Exception as e:
+                        logger.error("Failed to apply like_button change: %s", e)
 
-        like_button_check.config(command=on_like_button_toggle)
+            like_button_check.config(command=on_like_button_toggle)
 
         scrobble_on_add_var = tk.BooleanVar(value=get_setting("scrobble_on_add"))
         scrobble_on_add_check = tk.Checkbutton(
-            lastfm_section,
+            scrobble_section,
             text=tr("settings.scrobble_added_songs"),
             variable=scrobble_on_add_var,
             cursor="hand2",
@@ -1341,18 +1372,119 @@ def show_settings_dialog(
         )
         scrobble_on_add_check.pack(anchor="w", padx=16, pady=4)
 
+        # -- Which services receive the scrobbles --------------------------
+        # One checkbox per installed scrobble-capable platform, each writing
+        # that platform's own `scrobbles` switch in settings.ini:
+        #
+        #     [lastfm]
+        #     scrobbles = true
+        #
+        # A LIST rather than one "the backend" setting, because the useful
+        # answer is a set - two of three services is a normal choice, and a
+        # third plugin must not need a new setting.  "Select/Deselect all"
+        # covers the single-backend and every-backend cases in one click.
+        # Every enabled service receives each listen; the ledger records
+        # which ones accepted so a later remove-song can delete exactly
+        # those (services/scrobble.py, services/scrobble_log.py).
+        scrobble_target_row = tk.Frame(scrobble_section, background=theme_check_bg)
+        scrobble_target_row.pack(fill="x", padx=16, pady=4)
+
+        tk.Label(
+            scrobble_target_row,
+            text=tr("settings.scrobble_to"),
+            background=theme_check_bg,
+            foreground=theme_check_fg,
+            font=ui_font(11),
+        ).pack(side="left")
+
+        def set_all_backends(enabled: bool) -> None:
+            for pid, var in scrobble_target_vars.items():
+                var.set(enabled)
+                set_setting_bool(pid, SCROBBLES_OPTION, enabled)
+            _sync_all_backends_button()
+
+        tk.Button(
+            scrobble_target_row,
+            text=tr("settings.scrobble_select_all"),
+            command=lambda: set_all_backends(True),
+            cursor="hand2",
+            background=theme_check_bg,
+            foreground=theme_check_fg,
+            activebackground=theme_check_select,
+            relief="flat",
+            font=ui_font(11),
+        ).pack(side="right", padx=(4, 0))
+        deselect_all_btn = tk.Button(
+            scrobble_target_row,
+            text=tr("settings.scrobble_deselect_all"),
+            command=lambda: set_all_backends(False),
+            cursor="hand2",
+            background=theme_check_bg,
+            foreground=theme_check_fg,
+            activebackground=theme_check_select,
+            relief="flat",
+            font=ui_font(11),
+        )
+        deselect_all_btn.pack(side="right")
+
+        scrobble_target_vars: dict = {}
+        for pid in scrobble_backend_ids:
+            var = tk.BooleanVar(value=scrobble_backend_enabled(pid))
+            scrobble_target_vars[pid] = var
+
+            def on_target_toggle(pid=pid, var=var):
+                # Written live: the resolver reads settings.ini per
+                # scrobble, so switching a service off takes effect on the
+                # next song without a restart.
+                set_setting_bool(pid, SCROBBLES_OPTION, bool(var.get()))
+                _sync_all_backends_button()
+
+            check = tk.Checkbutton(
+                scrobble_section,
+                text=(platform_display_names or {}).get(pid, pid),
+                variable=var,
+                command=on_target_toggle,
+                cursor="hand2",
+                selectcolor=theme_check_select,
+                **checkbutton_style,
+                font=ui_font(11),
+            )
+            check.pack(anchor="w", padx=32, pady=2)
+
+        def _sync_all_backends_button() -> None:
+            """Grey out "Deselect all" once nothing is selected."""
+            try:
+                deselect_all_btn.config(
+                    state="normal" if any(
+                        var.get() for var in scrobble_target_vars.values()
+                    ) else "disabled"
+                )
+            except tk.TclError:
+                pass
+
+        _sync_all_backends_button()
+
         # -- Per-platform scrobble sources ---------------------------------
         # Only visible when the master gate is on.  Only installed music
-        # platforms are listed (Last.fm is the scrobble TARGET, never a
-        # source).  Storage semantics: empty = all installed (historical
-        # default), "none" = nothing, otherwise an explicit comma list.
-        scrobble_plat_area = tk.Frame(lastfm_section, background=theme_check_bg)
+        # platforms are listed (a service backend is the scrobble TARGET,
+        # never a source): with a registry, that is exactly the set whose
+        # manifest declares a flow (services.scrobble.is_capture_platform),
+        # so a second service backend does not appear here.  Without one
+        # (headless/tests) fall back to the historical id check.
+        # Storage semantics: empty = all installed (historical default),
+        # "none" = nothing, otherwise an explicit comma list.
+        scrobble_plat_area = tk.Frame(scrobble_section, background=theme_check_bg)
         scrobble_plat_vars: dict = {}
         raw_plat = get_setting_value("scrobble", "platforms", "")
         _is_none = raw_plat.strip().lower() == SCROBBLE_NONE
         _stored_ids = set() if _is_none else set(split_platforms(raw_plat))
         _music_platforms = sorted(
-            (p for p in installed if p != "lastfm"),
+            (
+                p for p in installed
+                if p != "lastfm" and (
+                    plugin_registry is None or is_capture_platform(plugin_registry, p)
+                )
+            ),
             key=lambda pid: (platform_display_names or {}).get(pid, pid).lower(),
         )
 
@@ -1427,7 +1559,7 @@ def show_settings_dialog(
         _apply_scrobble_list_visibility()
 
         # Scrobble keybind capture row
-        scrobble_keybind_row = tk.Frame(lastfm_section, background=theme_check_bg)
+        scrobble_keybind_row = tk.Frame(scrobble_section, background=theme_check_bg)
         scrobble_keybind_row.pack(fill="x", padx=16, pady=4)
 
         tk.Label(

@@ -26,6 +26,7 @@ from services.duplicate_check import find_duplicate_pairs, read_settings
 from services.playlist_sort import sort_playlists
 from services.playlist_store import PlaylistStore
 from services.playlist_sync import PlaylistSyncService
+from services.scrobble import SCROBBLE_WRITE, scrobble_backends
 from services.song_manager import SongManager
 from utils.icons import IconService
 from utils.scaling import px, ui_font
@@ -482,6 +483,17 @@ on_like_button_change=self._apply_like_button_visibility,
                     pid: integ.display_name
                     for pid, integ in self.integrations.get_all().items()
                 },
+                # Which services a scrobble would go to, straight from the
+                # resolver the scrobble paths use, so the Settings checkboxes
+                # cannot drift from the real selection rules.
+                # only_enabled=False: a service the user switched OFF still
+                # has to appear (unchecked) to be switched back on.
+                scrobble_backend_ids=[
+                    getattr(integ, "id", pid)
+                    for integ in scrobble_backends(
+                        self.integrations, SCROBBLE_WRITE, only_enabled=False
+                    )
+                ],
                 plugin_registry=self.plugin_registry,
             ),
         )

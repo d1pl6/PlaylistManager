@@ -139,11 +139,27 @@ join the pynput thread; [threading.md](threading.md)), tray stop,
 
 ## 8. Scrobble / like (Last.fm service)
 
-Last.fm is a *service* plugin (no add-flow); the shared actions reach it
-through the duck-typed `ScrobbleCapable` capability
+A scrobble backend is a *service* plugin (no add-flow); the shared actions
+reach it through the duck-typed `ScrobbleCapable` capability
 (`services/integration.py`). Init: `App._bootstrap_auth` authenticates it
-synchronously by reading `lastfm.json` (no network); a login/refresh
-(`refresh_auth`) reloads the file and rebuilds the client.
+synchronously by reading its credentials (no network); a login/refresh
+(`refresh_auth`) reloads the file and rebuilds the client. Two exist -
+`integrations/lastfm/` and `integrations/listenbrainz/`.
+
+**Which services** is decided in one place,
+`services/scrobble.scrobble_backends(integrations, required)`, never by
+registry order: candidates are the installed integrations exposing every
+capability the call site needs and reporting themselves authenticated,
+ordered by platform id, and then filtered by that service's own switch in
+`settings.ini` - `[lastfm] scrobbles = true`, `[listenbrainz] scrobbles =
+false`, one boolean per platform in its **own** section (absent = enabled).
+**Every** survivor receives the listen, so two services out of three is an
+ordinary configuration and a third plugin needs no new setting; the
+resolver logs one info line naming the set when more than one is selected.
+A configured-but-unavailable service is skipped, not fatal: the switch is a
+filter, not an assertion. Because the capability is part of the query,
+ListenBrainz (scrobble + delete only - it has no love/hate feedback) is
+eligible for the scrobble paths and ineligible for the heart.
 
 - **Scrobble current song** - three triggers, one capture loop:
   GUI keybind (`kind="action"` -> `_handle_action_keybind` ->
@@ -153,26 +169,39 @@ synchronously by reading `lastfm.json` (no network); a login/refresh
   `scrobble_on_add` setting - defaults to **no**, like `like_button`).
   Each iterates the *playlist* platforms'
   capture paths (YT extension 30 s / Spotify API) off the main thread,
-  then hands `song_data` to `service.scrobble()`, which returns the
-  backend-ACCEPTED timestamp (an ignored/rejected scrobble returns
-  `None` and is a silent no-op). The add paths record that timestamp in
-  the scrobble ledger (`services/scrobble_log.py`,
-  `db/scrobbles.json`, keyed by platform + playlist_id + local song_id).
-  `-s` prints the outcome and returns 0/1; the keybind path logs only.
+  then hands `song_data` to every selected backend's `scrobble()`, each of
+  which returns the timestamp the service ACCEPTED (an ignored/rejected
+  scrobble returns `None` and is a silent no-op for that service only - one
+  dead service never costs the others their listen). The add paths record
+  that timestamp - plus the **ids of the services that accepted it** - in
+  the scrobble ledger (`services/scrobble_log.py`, `db/scrobbles.json`
+  schema v3, keyed by platform + playlist_id + local song_id). `-s` prints
+  the outcome and returns 0/1; the keybind path logs only.
 - **Like button** (`showcase_manager._on_like_toggle`, shown only when the
   `like_button` setting is on) toggles love/unlove in a worker thread;
   `love()` and `scrobble()` are distinct actions - scrobbling never loves.
+  The heart resolves with `resolve_scrobble_backend(integrations, required)`,
+  which ignores the scrobble switch on purpose, so the row keeps using
+  Last.fm while the scrobbles go to ListenBrainz (or to both).
   Heart glyphs are populated with ONE batched `get_loved_set()` fetch per
   showcase refresh (a single `user.getLovedTracks` call instead of one
   `track.getInfo` per row), which also warms `is_loved()`'s TTL'd cache.
 - **Remove song** deletes the EXACT scrobble the row's add-flow created:
   the showcase remove worker looks up the ledger record by
   (platform, playlist_id, song_id) and calls
-  `delete_scrobble(artist, title, timestamp)` - a timestamp-less delete
-  would remove the track's most recent scrobble, possibly a legitimate
-  listen, so it is never used. A missing record (auto-scrobble was off,
-  row re-imported by a reload, ledger pruned) means "leave the scrobble
-  alone". Deleting a playlist (`card_grid.close_main_frame`, `cli -p del`)
+  `delete_scrobble(artist, title, timestamp)` on **every service the record
+  names**, each addressed by id through
+  `services.scrobble.scrobble_backend_for(integrations, required, id)`.
+  That lookup deliberately ignores the scrobble switch: the switch governs
+  NEW scrobbles, and a listen recorded before the user switched a service
+  off is still sitting on it, so the cleanup has to be able to reach it
+  (and addressing a service that never got the listen would delete nothing
+  while stranding the real one). A schema-v1 record names no service at
+  all - that is genuinely unknown, and the scrobble is left alone rather
+  than guessed at. A missing record (auto-scrobble was off, row re-imported
+  by a reload, ledger pruned) means the same. A timestamp-less delete would
+  remove the track's most recent scrobble, possibly a legitimate listen, so
+  it is never used. Deleting a playlist (`card_grid.close_main_frame`, `cli -p del`)
   or uninstalling a platform (`integration_manager`)
   prunes the ledger's matching records. Playlist delete also runs
   `duplicate_queue.purge_playlist(platform, playlist_id, name)` so pending

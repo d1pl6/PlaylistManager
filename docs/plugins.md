@@ -223,15 +223,71 @@ core duck-types. The only current example is `integrations/lastfm/`
 A service plugin's `plugin.json` declares `id`, `display_name`,
 `auth_file`, and `integration_class` (optionally `auth_module`/`auth_attr`);
 `integration_class` subclasses `BaseIntegration` (`authenticate` /
-`is_authenticated` / `refresh_auth`) plus the capability methods. Core
-callers detect the capability with `getattr(integration, "<method>", None)`
-- absence degrades gracefully (no like button, no scrobbling).
+`is_authenticated` / `refresh_auth`) plus the capability methods.
+
+**A capability may be implemented partially.** `ScrobbleCapable` is a union
+of two independent halves - the scrobble half (`scrobble` +
+`delete_scrobble`) and the love half (`love` / `unlove` / `is_loved`, plus
+the optional `get_loved_set`) - and a backend implements what its service
+supports. `integrations/listenbrainz/` implements the scrobble half only:
+ListenBrainz's love/hate feedback is keyed on a MusicBrainz *recording
+MBID*, and a captured song carries no MusicBrainz metadata to resolve one
+from. The methods are **absent**, not stubbed: the core asks for the
+capabilities each call site needs, so an absent method makes the plugin
+ineligible for that call instead of failing at click time (the showcase
+heart keeps working on Last.fm). That absence is exactly what makes this
+safe, so do not return a fake "success" from an unsupported method.
+`tools/invariants.py`'s `contract.scrobble` rule exempts the ListenBrainz
+integration file for this reason.
+
+**Target selection is a per-platform switch, not a single winner.** Every
+core selection goes through `services.scrobble.scrobble_backends(
+integrations, required)`: candidates are the installed integrations exposing
+*all* of `required` and reporting themselves authenticated, ordered by
+platform id, and then filtered by that service's own switch in
+`settings.ini` - `[lastfm] scrobbles = true`, `[listenbrainz] scrobbles =
+false`, a boolean in each platform's **own** section, absent meaning
+enabled. A per-platform boolean rather than one "the backend" setting
+because the useful answer is a set: two of three services is a normal
+configuration, and a third plugin must not need a new setting. Settings
+exposes it as a checkbox per installed backend plus **Select all** /
+**Deselect all** (`ui/settings_ui.py`, ids fed from the same resolver call
+by `main_window` so the list cannot drift from the real rules), and the
+writes land live, so a switch takes effect on the next song.
+
+Every enabled service receives the listen; one failing (revoked token,
+service down) is logged and skipped, never fatal to the others.
+Unavailable (uninstalled, logged out) services are dropped rather than
+treated as an error - the switch is a filter, not an assertion. The
+resolver logs one info line per process naming the selected set when more
+than one service is on, because a listen appearing in two accounts is
+otherwise mysterious.
+
+Two paths deliberately ignore the switch: the remove-song delete (the
+ledger already knows which services took the listen, and the switch governs
+*new* scrobbles - a listen recorded before the user switched a service off
+is still there and has to be cleanable), and the love/heart paths (a loved
+list is a read plus a write, not a scrobble; a ListenBrainz-only user still
+wants the heart on Last.fm). Both use `only_enabled=False`, and the delete
+additionally addresses one service by id via
+`services.scrobble.scrobble_backend_for()`.
+
+`db/scrobbles.json` (schema v3) records **every** service that accepted each
+scrobble, and remove-song deletes the listen on each of them - so switching
+services between an add and a remove cannot address the wrong account, and
+one backend gaining the feature later does not erase the older record (a v2
+`backend` string is read as a one-element list). Adding a second service
+plugin needs no core change beyond its manifest; see [config.md](config.md)
+for the switch.
 
 Because it is a service (no flow), the keybind controller's
 `_scrobble_current_action` and `cli.run_scrobble` iterate the *playlist*
 platforms to capture the currently-playing song, then hand its
 `song_data` to the service's `scrobble()`. A service plugin itself is
-never a capture source.
+never a capture source - Settings' per-platform scrobble-source checklist
+uses `services.scrobble.is_capture_platform()` (a manifest `flow_class` is
+the test) rather than hardcoding "not lastfm", so a second service backend
+never shows up as something to capture from.
 
 A service integration must set `supports_playlists = False` on its
 `BaseIntegration` subclass (default is `True`). `IntegrationRegistry.
@@ -246,7 +302,13 @@ get_active()` filters on it, so the plugin is excluded from the
 2. Subclass `BaseIntegration` (`integration.py`) and
    `BaseFlowController` (`flow.py`). Extension-type platforms also need a
    receiver module and a `capture(timeout)` implementation for CLI batch
-   mode.
+   mode. A service-only plugin (scrobble/like) declares no flow at all,
+   sets `supports_playlists = False` and implements the
+   `ScrobbleCapable` capability it needs - no core registration, and no
+   core change, for a second backend: the resolver, its own
+   `[<platform id>] scrobbles` switch (absent = enabled, so it starts
+   scrobbling the moment it is logged in) and the ledger's `backends`
+   field already cover it.
 3. Declare the auth manager only if the platform needs credentials.
 4. If the platform needs a login-dialog tile, declare `login_module` /
    `login_class` (a callable `(parent, on_success)`) and optionally

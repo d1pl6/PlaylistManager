@@ -17,6 +17,13 @@ from PIL import Image
 
 from services.playlist_store import PlaylistStore
 from services.playlist_url import build_song_url
+from services.scrobble import (
+    SCROBBLE_DELETE,
+    SCROBBLE_LIKE,
+    SCROBBLE_LOVED_SET,
+    resolve_scrobble_backend,
+    scrobble_backend_for,
+)
 from services import scrobble_log
 from ui.tooltip import ToolTip
 from utils.i18n import tr, tr_status, trn
@@ -705,26 +712,27 @@ class ShowcaseManager:
                         # track's MOST RECENT scrobble, which may be a
                         # legitimate one the user actually listened to.
                         if title and artists:
-                            scrobble_integ = next(
-                                (integ for integ in (self.integrations.get_all().values() if self.integrations else [])
-                                 if getattr(integ, "delete_scrobble", None) is not None),
-                                None,
+                            record = scrobble_log.lookup_scrobble_record(
+                                platform, playlist_id, song_id
                             )
-                            if scrobble_integ is not None:
-                                artist = artists[0] if isinstance(artists, list) else str(artists)
-                                ts = scrobble_log.lookup_scrobble(
-                                    platform, playlist_id, song_id
+                            # The ledger names EVERY service that accepted
+                            # this scrobble (both, when the user has two
+                            # backends on), and the delete goes to each of
+                            # them - not to whichever is enabled now: a user
+                            # can switch a service off between the add and
+                            # the remove, and the listen is still sitting
+                            # there.  Note this deliberately ignores the
+                            # per-platform switch for the same reason.
+                            if record is not None:
+                                self._delete_scrobbles(
+                                    record["backends"],
+                                    artists[0] if isinstance(artists, list) else str(artists),
+                                    title,
+                                    record["timestamp"],
+                                    platform,
+                                    playlist_id,
+                                    song_id,
                                 )
-                                if ts is not None:
-                                    try:
-                                        if scrobble_integ.delete_scrobble(artist, title, ts):
-                                            scrobble_log.clear_scrobble(
-                                                platform, playlist_id, song_id
-                                            )
-                                    except Exception as e:
-                                        logger.debug(
-                                            "Failed to delete scrobble for %s: %s", title, e
-                                        )
             except Exception as e:
                 # A platform API failure (network, token, 5xx) must not
                 # leave the card wedged in "removing" with every button
@@ -848,6 +856,68 @@ class ShowcaseManager:
         self.root.wait_window(dialog)
         return result["ok"]
 
+    def _delete_scrobbles(
+        self,
+        backend_ids: list,
+        artist: str,
+        title: str,
+        timestamp: int,
+        platform: str,
+        playlist_id: str,
+        song_id,
+    ) -> None:
+        """Delete one recorded scrobble from every service that accepted it.
+
+        *backend_ids* is the ledger's ``backends`` list - the services the
+        add actually wrote to, which is not the same set as the currently
+        enabled ones (the user can switch a service off afterwards, and the
+        listen is still on it).  A backend that is no longer installed or
+        authenticated resolves to ``None`` here: its listen is unreachable,
+        which is worth a log line, and the other services still get cleaned.
+
+        Each call is isolated: one dead service must not keep the other
+        listen alive.  The ledger record is dropped afterwards unconditionally
+        - the local row is going away in the same operation, and the record
+        is keyed by that row, so a surviving record could never be retried
+        and would only occupy the FIFO cap.
+        """
+        pending = [b for b in (backend_ids or []) if b]
+        if not pending:
+            # A record with no backend (schema v1) says "some service, which
+            # one is unknown" - guessing would risk deleting a listen this
+            # app never made, so the scrobble is left alone.
+            logger.debug(
+                "Scrobble record for %s - %s names no backend; leaving it",
+                artist, title,
+            )
+            return
+
+        for backend_id in pending:
+            integration = scrobble_backend_for(
+                self.integrations, SCROBBLE_DELETE, backend_id
+            )
+            if integration is None:
+                logger.warning(
+                    "Cannot delete the scrobble for %s - %s: '%s' is not "
+                    "available (uninstalled, logged out, or it no longer "
+                    "offers delete_scrobble) - that listen stays on the "
+                    "service", artist, title, backend_id,
+                )
+                continue
+            try:
+                if not integration.delete_scrobble(artist, title, timestamp):
+                    logger.debug(
+                        "Service %s did not confirm deleting the scrobble "
+                        "for %s - %s", backend_id, artist, title,
+                    )
+            except Exception as e:
+                logger.debug(
+                    "Failed to delete the scrobble for %s on %s: %s",
+                    title, backend_id, e,
+                )
+
+        scrobble_log.clear_scrobble(platform, playlist_id, song_id)
+
     def _load_like_states(self, pending_likes: list) -> None:
         """Set the heart glyphs for a batch of showcase rows with ONE
         batched loved-list fetch instead of one ``track.getInfo`` network
@@ -857,13 +927,8 @@ class ShowcaseManager:
         glyph; only loved tracks flip to the full heart.  Runs on a worker
         thread and marshals the glyph updates to the tkinter main thread.
         """
-        scrobble_integ = next(
-            (
-                integ
-                for integ in (self.integrations.get_all().values() if self.integrations else [])
-                if getattr(integ, "get_loved_set", None) is not None
-            ),
-            None,
+        scrobble_integ = resolve_scrobble_backend(
+            self.integrations, SCROBBLE_LOVED_SET
         )
         if scrobble_integ is None:
             # Fallback for capability implementations without a batch
@@ -900,13 +965,15 @@ class ShowcaseManager:
         threading.Thread(target=fetch, daemon=True).start()
 
     def _load_like_state_one(self, like_btn: tk.Button, artist: str, title: str) -> None:
-        """Per-track fallback (no batched :meth:`get_loved_set` available)."""
-        scrobble_cap = next(
-            (
-                getattr(integ, "is_loved", None)
-                for integ in (self.integrations.get_all().values() if self.integrations else [])
-                if getattr(integ, "is_loved", None) is not None
-            ),
+        """Per-track fallback (no batched :meth:`get_loved_set` available).
+
+        Asks for ``is_loved`` alone rather than the whole ``SCROBBLE_LIKE``
+        triple: a read-only glyph needs only the read, and requiring the
+        write half too would skip a backend that can answer but not toggle.
+        """
+        scrobble_cap = getattr(
+            resolve_scrobble_backend(self.integrations, ("is_loved",)),
+            "is_loved",
             None,
         )
         if scrobble_cap is None:
@@ -931,12 +998,11 @@ class ShowcaseManager:
         if not artists or not title:
             return
 
-        # Find a ScrobbleCapable integration
-        scrobble_integ = next(
-            (integ for integ in (self.integrations.get_all().values() if self.integrations else [])
-             if getattr(integ, "unlove", None) is not None and getattr(integ, "is_loved", None) is not None),
-            None,
-        )
+        # Find a backend that can actually toggle love.  A scrobble-capable
+        # plugin without a love concept (ListenBrainz: its love/hate
+        # feedback is keyed on a MusicBrainz MBID) is not eligible, so the
+        # heart keeps working on whichever backend does support it.
+        scrobble_integ = resolve_scrobble_backend(self.integrations, SCROBBLE_LIKE)
         if scrobble_integ is None:
             return
 
