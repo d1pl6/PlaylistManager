@@ -429,6 +429,21 @@ def delete(name: str) -> None:
         owned_auth = _AUTH_ROOT / name
         if owned_auth.is_dir():
             shutil.rmtree(owned_auth, ignore_errors=True)
+    # ...and sweep the OS-keyring mirror of those files.  The mirror
+    # lives in the platform credential store, NOT under the auth dir, so
+    # the rmtree above cannot reach it - without this the dead profile's
+    # live tokens (refresh tokens, ARL cookies, YT cookies) stay in the
+    # keyring forever.  Imported lazily: this module is imported at
+    # module level by utils/config.py and must stay cheap and
+    # cycle-free (credential_store imports profile_store).
+    try:
+        from services import credential_store
+
+        credential_store.delete_profile(name)
+    except Exception:
+        logger.debug(
+            "OS-keyring cleanup for profile %s failed", name, exc_info=True
+        )
 
 
 def validate_rename(old: str, new: str) -> None:
@@ -498,6 +513,21 @@ def rename(old: str, new: str) -> None:
                 dst_auth = _AUTH_ROOT / new
                 dst_auth.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(src_auth), str(dst_auth))
+        # Keyring accounts are named "<profile>:<file>", so the mirror
+        # has to move with the profile too: left under <old> it would be
+        # unreachable from the renamed profile (whose prefix is now
+        # <new>) while still holding a live credential.  Runs even when
+        # the profile did not capture the Logins bucket - a mirror can
+        # predate the bucket toggle.  Lazy import: see delete().
+        try:
+            from services import credential_store
+
+            credential_store.rename_profile(old, new)
+        except Exception:
+            logger.debug(
+                "OS-keyring rename for profile %s -> %s failed",
+                old, new, exc_info=True,
+            )
         # If this was the active profile, update the pointer.
         global _active
         if old == active_profile():

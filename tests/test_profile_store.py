@@ -158,3 +158,80 @@ class TestRenameDelete:
         sandbox.create("work", logins=False, playlists=False, settings=False)
         sandbox.delete("work")
         assert sandbox.list_profiles() == ["default"]
+
+
+class TestKeyringMirrorFollowsProfile:
+    """The OS-keyring mirror (services/credential_store.py) is keyed
+    ``"<profile>:<file>"``, so the profile lifecycle has to carry it:
+
+    * deleting a profile purges its auth dir but NOT the keyring - a
+      sweep is the only thing standing between a deleted profile and
+      live credentials (refresh tokens, ARL cookies) that outlive it;
+    * renaming a profile moves the auth dir; without moving the mirror
+      too, the new profile resolves an empty prefix while the old one
+      keeps a reachable-if-you-know-the-name credential.
+    """
+
+    @pytest.fixture
+    def mirrored(self, sandbox, fake_keyring_backend):
+        """A 'work' profile with its spotify credential mirrored."""
+        from services import credential_store
+
+        sandbox.create("work", logins=True, playlists=True, settings=True)
+        cred = sandbox._AUTH_ROOT / "work" / "spotify.json"
+        cred.parent.mkdir(parents=True, exist_ok=True)
+        cred.write_text('{"refresh_token": "SECRET"}', encoding="utf-8")
+        fake_keyring_backend.set_password(
+            credential_store.KEYRING_SERVICE,
+            credential_store._account("spotify.json", "work"),
+            '{"refresh_token": "SECRET"}',
+        )
+        return fake_keyring_backend
+
+    def _peek(self, fake, profile, name="spotify.json"):
+        from services import credential_store
+
+        return fake.get_password(
+            credential_store.KEYRING_SERVICE,
+            credential_store._account(name, profile),
+        )
+
+    def test_delete_sweeps_keyring_mirror(self, sandbox, mirrored):
+        sandbox.set_active("default")
+        sandbox.delete("work")
+        assert not (sandbox._AUTH_ROOT / "work").exists()
+        assert self._peek(mirrored, "work") is None
+
+    def test_delete_leaves_other_profiles_alone(self, sandbox, mirrored):
+        from services import credential_store
+
+        mirrored.set_password(
+            credential_store.KEYRING_SERVICE,
+            credential_store._account("spotify.json", "default"),
+            '{"refresh_token": "OTHER"}',
+        )
+        sandbox.set_active("default")
+        sandbox.delete("work")
+        assert self._peek(mirrored, "default") == '{"refresh_token": "OTHER"}'
+
+    def test_rename_moves_keyring_mirror(self, sandbox, mirrored):
+        sandbox.set_active("default")
+        sandbox.rename("work", "office")
+        assert (sandbox._AUTH_ROOT / "office" / "spotify.json").exists()
+        assert self._peek(mirrored, "office") == '{"refresh_token": "SECRET"}'
+        # Old prefix emptied - a stranded entry is a lingering credential.
+        assert self._peek(mirrored, "work") is None
+
+    def test_renamed_profile_can_restore_from_its_mirror(self, sandbox, mirrored):
+        from services import credential_store
+
+        sandbox.set_active("default")
+        sandbox.rename("work", "office")
+        # The renamed profile loses its credential file ...
+        (sandbox._AUTH_ROOT / "office" / "spotify.json").unlink()
+        # ... and gets it back from the mirror, because the mirror moved.
+        sandbox.set_active("office")
+        credential_store.restore_all()
+        restored = sandbox._AUTH_ROOT / "office" / "spotify.json"
+        assert restored.exists()
+        assert '"refresh_token": "SECRET"' in restored.read_text(encoding="utf-8")

@@ -923,3 +923,80 @@ class TestUninstallRealData:
         assert not cred.exists()
         assert not plugin_dir.exists()
         assert [p["name"] for p in store.PlaylistStore.load_playlists()] == ["Keep"]
+
+
+class TestUninstallClearsKeyringMirror:
+    """Uninstall must clear the OS-keyring mirror (services/credential_store.py).
+
+    The Manage dialog's uninstall path unlinks credential files itself
+    instead of going through ``auth_setup.delete_platform_credentials``,
+    so it needs its own ``credential_store.delete()`` call - without it a
+    removed platform left live tokens in the OS keyring, contradicting the
+    documented "logout/uninstall clears the keyring copy" contract.
+    """
+
+    @pytest.fixture
+    def auth_dir(self, tmp_path, monkeypatch):
+        from services import credential_store
+
+        d = tmp_path / "auth"
+        d.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(credential_store._profile_store, "auth_dir", lambda: d)
+        return d
+
+    def test_auth_dir_credential_clears_mirror(
+        self, auth_dir, base_dir, monkeypatch, fake_keyring_backend
+    ):
+        from services import credential_store
+
+        _stub_downstream(monkeypatch)
+        cred = auth_dir / "yt_music.json"
+        cred.write_text('{"cookie": "SECRET"}', encoding="utf-8")
+        monkeypatch.setattr(
+            integration_manager.auth_setup,
+            "PLATFORM_CREDENTIAL_FILES",
+            {"youtube_music": [cred]},
+        )
+        fake_keyring_backend.set_password(
+            credential_store.KEYRING_SERVICE,
+            credential_store._account("yt_music.json"),
+            '{"cookie": "SECRET"}',
+        )
+
+        report = integration_manager.uninstall_platform_data("youtube_music")
+
+        assert report["credentials"] == 1
+        assert not cred.exists()
+        assert (
+            fake_keyring_backend.get_password(
+                credential_store.KEYRING_SERVICE,
+                credential_store._account("yt_music.json"),
+            )
+            is None
+        )
+
+    def test_repo_root_fallback_is_not_touched_in_keyring(
+        self, tmp_path, base_dir, monkeypatch, fake_keyring_backend
+    ):
+        # A manifest-declared ``auth_file_fallbacks`` entry is a repo-root
+        # copy: it is never mirrored, so uninstall must not reach for it.
+        from services import credential_store
+
+        _stub_downstream(monkeypatch)
+        fallback = tmp_path / "legacy_browser.json"
+        fallback.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(
+            integration_manager.auth_setup,
+            "PLATFORM_CREDENTIAL_FILES",
+            {"youtube_music": [fallback]},
+        )
+
+        deletes = []
+        monkeypatch.setattr(
+            integration_manager.credential_store, "delete", deletes.append
+        )
+        report = integration_manager.uninstall_platform_data("youtube_music")
+
+        assert report["credentials"] == 1
+        assert not fallback.exists()
+        assert deletes == []

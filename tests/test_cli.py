@@ -20,6 +20,8 @@ exist on this machine; the real plugin registry is only ever asked for
 platforms that cannot be installed under the test name.
 """
 
+import io
+import os
 import sys
 from types import SimpleNamespace
 
@@ -27,6 +29,59 @@ import pytest
 
 import cli
 import main as main_mod
+
+
+@pytest.fixture(autouse=True)
+def _no_credential_env(monkeypatch):
+    """No ``PLAYLISTMANAGER_*`` credential leaks in from the outside.
+
+    ``--login`` resolves each credential as flag > env > prompt (see
+    CLI.MD "Authentication"), so an export in the developer's shell - or
+    a CI job's secret store - would silently satisfy a test that expects
+    the prompt, or the "credentials required" exit.  Same hermetic
+    precedent as conftest.py's keyring fixtures.
+    """
+    for name in [k for k in os.environ if k.startswith("PLAYLISTMANAGER_")]:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def registry(monkeypatch):
+    """Stub plugin registry: the three CLI-login platforms + the two
+    branches that must stay reachable (``lastfm`` is GUI-only,
+    ``youtube_music`` opens a terminal).
+
+    Without this the login tests depend on which plugin directories
+    happen to be installed under ``integrations/`` on the machine -
+    they are separate repos and are gitignored, so a fresh CI checkout
+    has none.
+    """
+    plugins = {
+        pid: SimpleNamespace(auth_path=None)
+        for pid in ("spotify", "soundcloud", "deezer", "lastfm", "youtube_music")
+    }
+    reg = SimpleNamespace(
+        get_platform_ids=lambda: list(plugins),
+        get=lambda pid: plugins.get(pid),
+    )
+    monkeypatch.setattr(cli, "get_default_registry", lambda: reg)
+    return reg
+
+
+@pytest.fixture
+def _clean_secret_registry():
+    """Undo any register_secret() the test performed.
+
+    The redaction registry is process-global; a leaked test secret would
+    mask that same string in an unrelated later assertion.
+    """
+    from utils import logging_config
+
+    before = set(logging_config._REGISTERED_SECRETS)
+    yield
+    logging_config._REGISTERED_SECRETS.difference_update(
+        set(logging_config._REGISTERED_SECRETS) - before
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -670,17 +725,17 @@ class TestRunLoginValidation:
         assert cli.run_login("snarfle") == 2
         assert "snarfle" in capsys.readouterr().err
 
-    def test_lastfm_is_gui_only(self, monkeypatch, capsys):
+    def test_lastfm_is_gui_only(self, monkeypatch, capsys, registry):
         assert cli.run_login("lastfm") == 2
         assert capsys.readouterr().err
 
-    def test_spotify_missing_credentials(self, monkeypatch, capsys):
+    def test_spotify_missing_credentials(self, monkeypatch, capsys, registry):
         monkeypatch.setattr(cli, "_prompt", lambda *a, **k: "")
         monkeypatch.setattr(cli, "_stored_refresh_token", lambda: None)
         assert cli.run_login("spotify") == 2
         assert capsys.readouterr().err
 
-    def test_spotify_falls_back_to_stored_refresh_token(self, monkeypatch, capsys):
+    def test_spotify_falls_back_to_stored_refresh_token(self, monkeypatch, capsys, registry):
         # id/secret come from flags; the refresh-token prompt is left
         # empty and must fall back to the stored token.  A failed verify
         # must be reported without touching the network.
@@ -699,7 +754,7 @@ class TestRunLoginValidation:
         assert verify_calls == [("CID", "SEC", "STORED")]
         assert "verify boom" in capsys.readouterr().err
 
-    def test_spotify_flags_skip_prompts(self, monkeypatch):
+    def test_spotify_flags_skip_prompts(self, monkeypatch, registry):
         def _no_prompt(*a, **k):
             raise AssertionError("flag-supplied credentials must not prompt")
 
@@ -710,15 +765,262 @@ class TestRunLoginValidation:
         )
         assert cli.run_login("spotify", "A", "B", "C") == 0
 
-    def test_deezer_requires_arl(self, monkeypatch, capsys):
+    def test_deezer_requires_arl(self, monkeypatch, capsys, registry):
         monkeypatch.setattr(cli, "_prompt", lambda *a, **k: "")
         assert cli.run_login("deezer") == 2
         assert capsys.readouterr().err
 
-    def test_soundcloud_requires_all_credentials(self, monkeypatch, capsys):
+    def test_soundcloud_requires_all_credentials(self, monkeypatch, capsys, registry):
         monkeypatch.setattr(cli, "_prompt", lambda *a, **k: "")
         assert cli.run_login("soundcloud") == 2
         assert capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# --login credential sources: flag > env > hidden prompt
+# ---------------------------------------------------------------------------
+
+
+class TestLoginCredentialSources:
+    """The three ways a credential can reach ``--login``.
+
+    argv is the worst of them (``/proc/<pid>/cmdline`` is world-readable
+    and the value is kept in the shell history), so the environment tier
+    exists to keep a real secret off the command line while staying
+    scriptable.  Precedence is flag > env > prompt: an explicit flag is a
+    deliberate per-run override of an exported variable.
+    """
+
+    def test_env_credential_name_and_blank_handling(self, monkeypatch):
+        monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_CLIENT_SECRET", "  s3cret  ")
+        assert cli.env_credential("spotify", "client_secret") == "s3cret"
+        # Blank / whitespace-only counts as unset -> falls through to the
+        # prompt instead of verifying with an empty secret.
+        monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_REFRESH_TOKEN", "   ")
+        assert cli.env_credential("spotify", "refresh_token") is None
+        assert cli.env_credential("spotify", "client_id") is None
+
+    def test_spotify_env_supplies_all_three_without_prompting(
+        self, monkeypatch, registry
+    ):
+        def _no_prompt(*a, **k):
+            raise AssertionError("env-supplied credentials must not prompt")
+
+        monkeypatch.setattr(cli, "_prompt", _no_prompt)
+        monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_CLIENT_ID", "EnvCID")
+        monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_CLIENT_SECRET", "EnvSecret1")
+        monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_REFRESH_TOKEN", "EnvToken1")
+        seen = []
+        monkeypatch.setattr(
+            cli.auth_setup, "save_and_verify_spotify_credentials",
+            lambda cid, sec, tok: seen.append((cid, sec, tok))
+            or {"ok": True, "display_name": "d1pl"},
+        )
+        assert cli.run_login("spotify") == 0
+        assert seen == [("EnvCID", "EnvSecret1", "EnvToken1")]
+
+    def test_flag_overrides_env(self, monkeypatch, registry):
+        def _no_prompt(*a, **k):
+            raise AssertionError("nothing left to prompt for")
+
+        monkeypatch.setattr(cli, "_prompt", _no_prompt)
+        monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_CLIENT_SECRET", "EnvSecret1")
+        seen = []
+        monkeypatch.setattr(
+            cli.auth_setup, "save_and_verify_spotify_credentials",
+            lambda cid, sec, tok: seen.append((cid, sec, tok))
+            or {"ok": True},
+        )
+        assert cli.run_login("spotify", "FlagCID", "FlagSecret1", "FlagToken1") == 0
+        assert seen == [("FlagCID", "FlagSecret1", "FlagToken1")]
+
+    def test_env_token_beats_stored_token(self, monkeypatch, registry):
+        # The stored token is the LAST resort: an env-supplied token wins,
+        # because the user just handed us a newer one.
+        monkeypatch.setattr(cli, "_prompt", lambda *a, **k: "")
+        monkeypatch.setattr(cli, "_stored_refresh_token", lambda: "STORED")
+        monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_REFRESH_TOKEN", "EnvToken1")
+        seen = []
+        monkeypatch.setattr(
+            cli.auth_setup, "save_and_verify_spotify_credentials",
+            lambda cid, sec, tok: seen.append(tok) or {"ok": True},
+        )
+        assert cli.run_login("spotify", "CID", "SEC") == 0
+        assert seen == ["EnvToken1"]
+
+    def test_partial_env_still_prompts_for_the_rest(self, monkeypatch, registry):
+        asked = []
+
+        def _prompt(label, hidden=False):
+            asked.append(label)
+            return "PromptCID" if "id" in label.lower() else "Prompted"
+
+        monkeypatch.setattr(cli, "_prompt", _prompt)
+        monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_CLIENT_SECRET", "EnvSecret1")
+        seen = []
+        monkeypatch.setattr(
+            cli.auth_setup, "save_and_verify_spotify_credentials",
+            lambda cid, sec, tok: seen.append((cid, sec, tok)) or {"ok": True},
+        )
+        assert cli.run_login("spotify") == 0
+        # The secret came from the env, so its label is never asked; the
+        # client id and the token still are.
+        assert asked == ["Client id: ", "Refresh token (leave empty to reuse stored): "]
+        assert seen == [("PromptCID", "EnvSecret1", "Prompted")]
+
+    def test_soundcloud_env_is_platform_scoped(self, monkeypatch, registry):
+        # The Spotify export must not satisfy --login soundcloud: a
+        # wrong-platform secret is a confusing verify failure.
+        def _no_prompt(*a, **k):
+            raise AssertionError("only soundcloud env vars are valid here")
+
+        monkeypatch.setattr(cli, "_prompt", _no_prompt)
+        monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_CLIENT_ID", "SpotifyCID")
+        monkeypatch.setenv("PLAYLISTMANAGER_SOUNDCLOUD_CLIENT_ID", "ScCID")
+        monkeypatch.setenv("PLAYLISTMANAGER_SOUNDCLOUD_CLIENT_SECRET", "ScSecret1")
+        monkeypatch.setenv("PLAYLISTMANAGER_SOUNDCLOUD_REFRESH_TOKEN", "ScToken1")
+        seen = []
+        monkeypatch.setattr(
+            cli, "_soundcloud_save_and_verify",
+            lambda cid, sec, tok: seen.append((cid, sec, tok))
+            or {"ok": True, "display_name": "sc"},
+        )
+        assert cli.run_login("soundcloud") == 0
+        assert seen == [("ScCID", "ScSecret1", "ScToken1")]
+
+    def test_deezer_env_arl_skips_the_prompt(self, monkeypatch, registry):
+        def _no_prompt(*a, **k):
+            raise AssertionError("PLAYLISTMANAGER_DEEZER_ARL must skip the prompt")
+
+        monkeypatch.setattr(cli, "_prompt", _no_prompt)
+        monkeypatch.setenv("PLAYLISTMANAGER_DEEZER_ARL", "ArlFromEnv123")
+        seen = []
+        monkeypatch.setattr(
+            cli.auth_setup, "save_and_verify_deezer_credentials",
+            lambda arl: seen.append(arl) or {"ok": True, "display_name": "dz"},
+        )
+        assert cli.run_login("deezer") == 0
+        assert seen == ["ArlFromEnv123"]
+
+    def test_deezer_still_prompts_without_env(self, monkeypatch, registry):
+        monkeypatch.setattr(cli, "_prompt", lambda *a, **k: "ArlFromPrompt1")
+        seen = []
+        monkeypatch.setattr(
+            cli.auth_setup, "save_and_verify_deezer_credentials",
+            lambda arl: seen.append(arl) or {"ok": True, "display_name": "dz"},
+        )
+        assert cli.run_login("deezer") == 0
+        assert seen == ["ArlFromPrompt1"]
+
+
+class TestLoginSecretHygiene:
+    def test_resolved_secret_is_registered_for_masking(
+        self, monkeypatch, capsys, registry, _clean_secret_registry
+    ):
+        # An env-supplied secret reaches the verify call, but the failure
+        # reason is printed to the terminal - which redact() does not
+        # touch.  Registering at resolution time is what keeps it out of
+        # both the log and that message.
+        secret = "EnvSecretLeak1"
+        monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_CLIENT_ID", "CID")
+        monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_CLIENT_SECRET", secret)
+        monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_REFRESH_TOKEN", "TokenLeak1")
+        monkeypatch.setattr(
+            cli.auth_setup, "save_and_verify_spotify_credentials",
+            lambda cid, sec, tok: {"ok": False, "error": f"401 invalid {sec}"},
+        )
+        assert cli.run_login("spotify") == 1
+        err = capsys.readouterr().err
+        assert secret not in err
+        assert "401 invalid" in err  # the message survives, the value does not
+
+    def test_secret_value_is_never_logged(self, monkeypatch, registry, caplog, _clean_secret_registry):
+        # Source reporting is for troubleshooting ("why was my env var
+        # ignored?") and must name the source only.
+        import logging
+
+        secret = "EnvSecretLeak2"
+        with caplog.at_level(logging.DEBUG, logger="cli"):
+            monkeypatch.setenv("PLAYLISTMANAGER_SPOTIFY_CLIENT_SECRET", secret)
+            monkeypatch.setattr(
+                cli.auth_setup, "save_and_verify_spotify_credentials",
+                lambda cid, sec, tok: {"ok": True},
+            )
+            assert cli.run_login("spotify", "CID", None, "TOK") == 0
+        assert secret not in caplog.text
+        assert "PLAYLISTMANAGER_SPOTIFY_CLIENT_SECRET" in caplog.text
+
+
+class TestPromptInputPaths:
+    """``getpass`` only on a TTY; a plain read otherwise.
+
+    ``getpass`` opens ``/dev/tty`` itself and, when that fails, falls back
+    to reading stdin *with a warning that the input may be echoed*.  Under
+    a compositor keybind, a pipe or CI there is no terminal to echo to, and
+    that fallback would be the only warning the user ever sees.
+    """
+
+    def test_tty_uses_getpass(self, monkeypatch):
+        class _Tty(io.StringIO):
+            def isatty(self):
+                return True
+
+        monkeypatch.setattr(sys, "stdin", _Tty(""))
+        calls = []
+        monkeypatch.setattr(
+            cli.getpass, "getpass", lambda label: calls.append(label) or "TypedSecret"
+        )
+        assert cli._prompt("Client secret: ", hidden=True) == "TypedSecret"
+        assert calls == ["Client secret: "]
+
+    def test_non_tty_never_touches_getpass(self, monkeypatch):
+        def _explode(*a, **k):
+            raise AssertionError("getpass must not run without a TTY")
+
+        monkeypatch.setattr(sys, "stdin", io.StringIO("PipedSecret1\n"))
+        monkeypatch.setattr(cli.getpass, "getpass", _explode)
+        assert cli._prompt("Client secret: ", hidden=True) == "PipedSecret1"
+
+    def test_piped_secret_from_stdin_keeps_it_off_argv(self, monkeypatch, registry):
+        # The scripting route: `... --login spotify --client-id ID < secret.txt`
+        monkeypatch.setattr(sys, "stdin", io.StringIO("PipedSecret1\n"))
+        seen = []
+        monkeypatch.setattr(
+            cli.auth_setup, "save_and_verify_spotify_credentials",
+            lambda cid, sec, tok: seen.append((cid, sec, tok)) or {"ok": True},
+        )
+        assert cli.run_login("spotify", "CID", None, "TOK") == 0
+        assert seen == [("CID", "PipedSecret1", "TOK")]
+
+    def test_prompt_label_goes_to_stderr_keeping_stdout_parseable(
+        self, monkeypatch, capsys
+    ):
+        # The login command prints exactly one result line on stdout; a
+        # prompt label there would break `out=$(playlistmanager --login ...)`.
+        monkeypatch.setattr(sys, "stdin", io.StringIO("PipedSecret1\n"))
+        cli._prompt("Client secret: ", hidden=True)
+        out, err = capsys.readouterr()
+        assert out == ""
+        assert "Client secret: " in err
+
+    def test_eof_returns_none(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+        monkeypatch.setattr(
+            cli.getpass, "getpass",
+            lambda label: (_ for _ in ()).throw(AssertionError("no TTY here")),
+        )
+        assert cli._prompt("Client secret: ", hidden=True) is None
+
+    def test_closed_stdin_returns_none(self, monkeypatch):
+        closed = io.StringIO("x")
+        closed.close()
+        monkeypatch.setattr(sys, "stdin", closed)
+        assert cli._prompt("Client secret: ", hidden=True) is None
+
+    def test_no_stdin_stream_returns_none(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", None)
+        assert cli._prompt("Client secret: ", hidden=True) is None
+        assert cli._stdin_is_tty() is False
 
 
 # ---------------------------------------------------------------------------

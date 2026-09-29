@@ -13,6 +13,9 @@ Entry points (all equivalent):
     python -m app --login youtube_music
     python -m app --login spotify            # interactive: prompts for the credentials
     python -m app --login spotify --client-id X --client-secret Y --refresh-token Z
+    #   ...or keep the secret off argv (any local user can read
+    #   /proc/<pid>/cmdline, and argv lands in the shell history):
+    #   PLAYLISTMANAGER_SPOTIFY_CLIENT_SECRET=... python -m app --login spotify
     python -m app --logout youtube_music
     python -m app --logout spotify
     python -m app --install spotify            # download/install a platform plugin
@@ -35,6 +38,7 @@ from __future__ import annotations
 import getpass
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -52,7 +56,7 @@ from services.scrobble_service import scrobble_current_song
 from services.song_manager import SongManager
 from utils.config import get_setting
 from utils.i18n import tr, tr_status, trn
-from utils.logging_config import user_log
+from utils.logging_config import redact, register_secret, user_log
 from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
@@ -764,18 +768,153 @@ def _stored_refresh_token_for(plugin) -> str | None:
         return None
 
 
-def _prompt(label: str, hidden: bool = False) -> str | None:
-    """Interactive credential prompt (getpass = hidden, like sudo).
+# ---------------------------------------------------------------------------
+# Credential sources for --login
+# ---------------------------------------------------------------------------
+# Three tiers, in this order: explicit flag, environment variable, hidden
+# prompt.  The flag stays for scripted use but is the *worst* way to hand a
+# secret to a process:
+#
+#   argv      /proc/<pid>/cmdline is mode 0444, so every local user can read
+#             it with `ps`, and the value is persisted in the shell history
+#             (and in tmux/screen scrollback, in the terminal emulator's
+#             saved state, in process-accounting records).
+#   env       /proc/<pid>/environ is mode 0400 and owned by the process, so
+#             only the same user and root can read it, and nothing is written
+#             to any history.  The cost: the value is inherited by every
+#             child the exporting shell spawns, for as long as it is
+#             exported - so `unset` it right after the login.
+#   prompt    Nothing in argv, the environment or the history; the input is
+#             not echoed.  The right choice interactively, and what
+#             --login does on its own.
+#
+# See CLI.MD "Authentication" for the user-facing version.
 
-    Returns None when the input stream is closed (EOFError) so non-
-    interactive invocations fail cleanly instead of crashing.
+_ENV_PREFIX = "PLAYLISTMANAGER_"
+
+# field -> i18n key of the prompt label used when nothing else supplied it.
+_CREDENTIAL_PROMPT_KEYS = {
+    "client_id": "cli.prompt_client_id",
+    "client_secret": "cli.prompt_client_secret",
+    "refresh_token": "cli.prompt_refresh_token",
+    "arl": "cli.prompt_arl_cookie",
+    "token": "cli.prompt_listenbrainz_token",
+}
+
+
+def env_credential(platform: str, field: str) -> str | None:
+    """Read a credential from the environment; None when unset or blank.
+
+    The name is ``PLAYLISTMANAGER_<PLATFORM>_<FIELD>`` - e.g.
+    ``PLAYLISTMANAGER_SPOTIFY_CLIENT_SECRET`` or
+    ``PLAYLISTMANAGER_DEEZER_ARL``.  A blank or whitespace-only value counts
+    as unset, so `VAR= ... --login` falls through to the prompt instead of
+    failing a verify with an empty secret.
+    """
+    name = f"{_ENV_PREFIX}{platform.upper()}_{field.upper()}"
+    value = (os.environ.get(name) or "").strip()
+    return value or None
+
+
+def _stdin_is_tty() -> bool:
+    """True when stdin is a usable terminal (False when closed/None)."""
+    stream = sys.stdin
+    if stream is None:
+        return False
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def _read_line(label: str) -> str | None:
+    """Read one line from stdin, with *label* on stderr; None at EOF.
+
+    Deliberately not ``input()``: that writes the prompt to *stdout*,
+    polluting the single result line a script parses.  Nothing is echoed -
+    stdin is a pipe or a file here, there is no terminal to echo to.
+    """
+    if sys.stdin is None:
+        return None
+    sys.stderr.write(label)
+    sys.stderr.flush()
+    try:
+        line = sys.stdin.readline()
+    except (OSError, ValueError):
+        return None
+    if not line:  # closed / empty stdin -> clean failure upstream
+        return None
+    return line.strip()
+
+
+def _prompt(label: str, hidden: bool = False) -> str | None:
+    """Credential prompt: hidden on a TTY, a plain read otherwise.
+
+    Returns None on a closed input stream (EOF) so non-interactive
+    invocations fail cleanly instead of crashing.
+
+    The hidden path is only taken when stdin is a TTY.  ``getpass`` opens
+    ``/dev/tty`` itself and, when that fails, silently falls back to reading
+    from stdin *with a warning that the input may be echoed* - which is both
+    noisy and wrong here: under a compositor keybind, a pipe or CI there is no
+    terminal to echo to, and the fallback would be the only warning the user
+    ever sees.
     """
     try:
-        if hidden:
-            return getpass.getpass(label).strip()
-        return input(label).strip()
+        if not hidden or not _stdin_is_tty():
+            return _read_line(label)
+        return getpass.getpass(label).strip()
     except EOFError:
         return None
+
+
+def _resolve_credential(
+    platform: str, field: str, flag_value: str | None, *, hidden: bool
+) -> str | None:
+    """Resolve one credential: flag > env > prompt.
+
+    An explicit flag wins so a script can override an exported variable
+    for a single run.  Only the *source* is ever logged, never the value.
+    """
+    if flag_value and flag_value.strip():
+        return flag_value.strip()
+    env_value = env_credential(platform, field)
+    if env_value:
+        logger.debug(
+            "--login %s: %s from %s%s_%s",
+            platform, field, _ENV_PREFIX, platform.upper(), field.upper(),
+        )
+        return env_value
+    return _prompt(tr(_CREDENTIAL_PROMPT_KEYS[field]), hidden=hidden)
+
+
+def _resolve_login_credentials(
+    platform: str,
+    client_id: str | None,
+    client_secret: str | None,
+    refresh_token: str | None,
+    stored_refresh_token: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Resolve the three login fields, then fall back to the stored token.
+
+    The client id is not a secret (it is a public identifier in the OAuth
+    dance) so its prompt is visible; the secret and the token are hidden.
+    An empty refresh-token prompt re-logs in with the stored token - it is
+    long-lived, and re-entering it is only needed when the client
+    credentials changed.
+    """
+    client_id = _resolve_credential(platform, "client_id", client_id, hidden=False)
+    client_secret = _resolve_credential(
+        platform, "client_secret", client_secret, hidden=True
+    )
+    refresh_token = _resolve_credential(
+        platform, "refresh_token", refresh_token, hidden=True
+    )
+    # Register before anything can fail with an error string that echoes a
+    # value: from here on redact() masks the secret/token in the log *and* in
+    # the reason this function's caller prints.
+    register_secret(client_secret, refresh_token)
+    return client_id, client_secret, refresh_token or stored_refresh_token
 
 
 def _run_soundcloud_login(
@@ -795,14 +934,10 @@ def _run_soundcloud_login(
         print(tr("cli.soundcloud_plugin_not_found"), file=sys.stderr)
         return 2
 
-    if not client_id:
-        client_id = _prompt(tr("cli.prompt_client_id"))
-    if not client_secret:
-        client_secret = _prompt(tr("cli.prompt_client_secret"), hidden=True)
-    if not refresh_token:
-        stored = _stored_refresh_token_for(plugin)
-        prompt_value = _prompt(tr("cli.prompt_refresh_token"), hidden=True)
-        refresh_token = prompt_value or stored
+    client_id, client_secret, refresh_token = _resolve_login_credentials(
+        "soundcloud", client_id, client_secret, refresh_token,
+        _stored_refresh_token_for(plugin),
+    )
     if not client_id or not client_secret or not refresh_token:
         print(
             tr("cli.credentials_required_soundcloud"),
@@ -816,7 +951,7 @@ def _run_soundcloud_login(
         return 0
 
     print(
-        tr("cli.login_failed_soundcloud", reason=result.get("error")),
+        tr("cli.login_failed_soundcloud", reason=redact(str(result.get("error") or ""))),
         file=sys.stderr,
     )
     return 1
@@ -848,18 +983,23 @@ def _soundcloud_dir_name() -> str:
 
 
 def _run_deezer_login() -> int:
-    """CLI Deezer login: prompts for the ARL cookie, verifies FIRST.
+    """CLI Deezer login: gets the ARL cookie, verifies FIRST.
 
     The ARL is obtained by logging into Deezer in a browser and copying
-    the ``arl`` cookie value from DevTools → Application → Cookies.
+    the ``arl`` cookie value from DevTools → Application → Cookies.  It is
+    a live session cookie, so it is read from
+    ``PLAYLISTMANAGER_DEEZER_ARL`` or the hidden prompt - there is no flag
+    for it, which used to make a scripted Deezer login impossible (the
+    prompt was the only source).
     """
-    arl = _prompt(tr("cli.prompt_arl_cookie"), hidden=True)
+    arl = _resolve_credential("deezer", "arl", None, hidden=True)
     if not arl:
         print(
             tr("cli.arl_cookie_required"),
             file=sys.stderr,
         )
         return 2
+    register_secret(arl)
 
     result = auth_setup.save_and_verify_deezer_credentials(arl.strip())
     if result.get("ok"):
@@ -889,8 +1029,14 @@ def run_login(
     when no terminal emulator is available).
 
     spotify: ``--login spotify`` alone prompts interactively (client id,
-    client secret, refresh token - secret/token hidden like sudo).  The
-    flags remain as overrides for scripting/compositor use.  The refresh
+    client secret, refresh token - secret/token hidden like sudo).  Each
+    of the three can also arrive from
+    ``PLAYLISTMANAGER_SPOTIFY_{CLIENT_ID,CLIENT_SECRET,REFRESH_TOKEN}``
+    or from stdin; the flags remain as overrides for
+    scripting/compositor use, in the order flag > env > prompt.  argv is
+    world-readable through ``/proc/<pid>/cmdline`` and is persisted in the
+    shell history, so prefer the env var or the prompt for a real secret
+    (CLI.MD "Authentication" has the full comparison).  The refresh
     token is long-lived (the 3600 s default is the *access* token's
     lifetime); leaving the prompt empty reuses the stored token.
     Credentials are verified against ``/v1/me`` FIRST and only persisted
@@ -953,16 +1099,10 @@ def run_login(
     if platform == "soundcloud":
         return _run_soundcloud_login(client_id, client_secret, refresh_token)
 
-    # Spotify.  Flags override; missing values are prompted interactively
-    # (hidden input for the secret and the token, like sudo).
-    if not client_id:
-        client_id = _prompt(tr("cli.prompt_client_id"))
-    if not client_secret:
-        client_secret = _prompt(tr("cli.prompt_client_secret"), hidden=True)
-    if not refresh_token:
-        stored = _stored_refresh_token()
-        prompt_value = _prompt(tr("cli.prompt_refresh_token"), hidden=True)
-        refresh_token = prompt_value or stored
+    # Spotify.  flag > env > hidden prompt, then the stored refresh token.
+    client_id, client_secret, refresh_token = _resolve_login_credentials(
+        "spotify", client_id, client_secret, refresh_token, _stored_refresh_token(),
+    )
     if not client_id or not client_secret or not refresh_token:
         print(
             tr("cli.credentials_required_spotify"),
@@ -982,7 +1122,7 @@ def run_login(
         return 0
 
     print(
-        tr("cli.login_failed_spotify", reason=result.get("error")),
+        tr("cli.login_failed_spotify", reason=redact(str(result.get("error") or ""))),
         file=sys.stderr,
     )
     return 1

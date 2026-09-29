@@ -513,13 +513,28 @@ def uninstall_platform_data(
     else:
         cred_files = list(auth_setup.PLATFORM_CREDENTIAL_FILES.get(platform_id, []))
     for path in cred_files:
+        deleted = False
         try:
             if path.exists():
                 path.unlink()
                 report["credentials"] += 1
+                deleted = True
                 logger.info("Deleted credentials %s", path)
         except OSError as e:
             logger.warning("Failed to delete credentials %s: %s", path, e)
+        # Clear the OS-keyring mirror (services/credential_store.py)
+        # alongside the file: only auth-dir files are ever mirrored, a
+        # manifest-declared repo-root fallback has no keyring entry.  Same
+        # contract as the CLI logout path's
+        # auth_setup.delete_platform_credentials - uninstall must not
+        # leave live credentials behind in the keyring.  Separate from the
+        # unlink block (and best-effort) so a mirror problem can never
+        # distort the uninstall report.
+        if deleted and path.parent == profile_store.auth_dir():
+            try:
+                credential_store.delete(path.name)
+            except Exception:
+                logger.debug("Keyring mirror cleanup failed for %s", path, exc_info=True)
 
     report["playlists"] = PlaylistStore.delete_playlists_for_platform(platform_id)
 

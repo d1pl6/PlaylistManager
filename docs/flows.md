@@ -38,6 +38,17 @@ and are not repeated per step here.
    recently-played on a receiver miss, `extension` waits for the extension
    only. A POST with `playing: false` is a paused-skip no-op and never
    falls back to recently-played.
+   `_ensure_initialized` only *builds* the receiver (no socket yet); the
+   bind happens later inside `execute_flow`. So between the two,
+   `handle_keybind` pre-flights the manifest port
+   (`services.receiver_port.conflict_for`, only for `flow_type` "extension"
+   platforms, which are the ones guaranteed to bind): if it is already taken
+   by another process, the add is aborted before the flow thread starts, with
+   the `receiver_port_busy` status code on the card and status row plus a
+   `duplicate_queue.record_error` entry naming the port and its holder in
+   the activity window's Errors tab. Without that check the flow swallows
+   `EADDRINUSE` and the user waits out the ~30 s capture timeout only to
+   be told the extension sent nothing.
 4. `flow.execute_flow(...)`: the platform API add runs FIRST. A False
    return or missing playlist id raises, fires `on_error`, and nothing is
    written locally (invariant in [plugins.md](plugins.md) "Integration quirks").
@@ -203,13 +214,21 @@ name is read by `services/profile_store.initialize()` during
   the slot; off leaves the slot on disk but hidden (no data destroy).
 - **Rename**: `profile_store.rename(old, new)` - validates, moves the
   metadata entry and the on-disk `profiles/<name>/` dirs, and updates the
-  active pointer if the renamed profile was active.
+  active pointer if the renamed profile was active. Moves the profile's
+  `auth/<old>/` dir along, and calls `credential_store.rename_profile(old,
+  new)` so the OS-keyring mirror follows: accounts are `"<profile>:<file>"`
+  (`services/credential_store.py`), so a mirror left under the old prefix
+  would strand a live credential and be unreachable from the new name.
 - **Delete**: Settings -> Profiles -> Delete -> confirmation dialog ->
   `profile_store.delete(name)`. Refuses `default` and the active profile.
   For an owned Playlists bucket it removes `db/profiles/<name>/` wholesale
   (playlists.json, extra.json, scrobbles.json, every `<platform>/*.db`);
   a shared bucket removes nothing (the shared data is owned by everyone).
-  Immediate, no restart needed (the deleted profile is never active).
+  An owned Logins bucket purges `auth/<name>/`, and
+  `credential_store.delete_profile(name)` sweeps the OS-keyring entries
+  too - the mirror lives in the platform credential store, not on disk,
+  so the rmtree cannot reach it. Immediate, no restart needed (the
+  deleted profile is never active).
 
 ## 10. Manage dialog status refresh (authenticated probe)
 

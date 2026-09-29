@@ -96,8 +96,10 @@ def parse_args():
     p.add_argument(
         "--login", dest="login_platform", metavar="PLATFORM",
         help='log in to a platform: "youtube_music", "spotify" '
-             '(spotify takes --client-id/--client-secret/--refresh-token), '
-             '"soundcloud" or "deezer"',
+             '(spotify/soundcloud take --client-id/--client-secret/'
+             '--refresh-token, or PLAYLISTMANAGER_<PLATFORM>_<FIELD> env '
+             'vars, or are prompted for), "soundcloud" or "deezer" '
+             '(deezer takes PLAYLISTMANAGER_DEEZER_ARL or is prompted)',
     )
     p.add_argument(
         "--logout", dest="logout_platform", metavar="PLATFORM",
@@ -116,15 +118,21 @@ def parse_args():
     )
     p.add_argument(
         "--client-id", dest="client_id", default=None,
-        help="Spotify client ID (for --login spotify)",
+        help="Spotify/SoundCloud client ID for --login; also read from "
+             "PLAYLISTMANAGER_<PLATFORM>_CLIENT_ID, else prompted",
     )
     p.add_argument(
         "--client-secret", dest="client_secret", default=None,
-        help="Spotify client secret (for --login spotify)",
+        help="client secret for --login. Prefer the hidden prompt or "
+             "PLAYLISTMANAGER_<PLATFORM>_CLIENT_SECRET: a secret passed "
+             "this way is world-readable via /proc/<pid>/cmdline and is "
+             "kept in your shell history (see CLI.MD)",
     )
     p.add_argument(
         "--refresh-token", dest="refresh_token", default=None,
-        help="Spotify refresh token (for --login spotify)",
+        help="Spotify/SoundCloud refresh token for --login; also read "
+             "from PLAYLISTMANAGER_<PLATFORM>_REFRESH_TOKEN, else "
+             "prompted (empty reuses the stored token)",
     )
     p.add_argument(
         "--data-saver", action="store_true",

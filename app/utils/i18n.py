@@ -79,6 +79,21 @@ DEFAULT_STRINGS: dict[str, str] = {
     "card_status.waiting": "Waiting",
     "card_status.removing": "Removing",
     "card_status.removed": "Removed",
+    "card_status.receiver_port_busy": "Port in use",
+    # --- URL-receiver port diagnostics (services/receiver_port.py) -----------
+    # {hint} is the empty string when the holder could not be identified,
+    # which is why it sits inside the sentence instead of being its own row.
+    "receiver.port_busy": (
+        "The URL receiver for {platform} could not start: port {port} is "
+        "already in use{hint}, so the browser extension cannot hand over the "
+        "current song and nothing was added."
+    ),
+    "receiver.port_busy_holder": " (held by {holder})",
+    "receiver.port_busy_fix": (
+        "Free that port, or quit the other PlaylistManager instance using "
+        "it. The port is pinned in the plugin manifest (receiver_port) and "
+        "the extension's host permissions, so changing it means editing both."
+    ),
     # --- showcase rows --------------------------------------------------------
     "showcase.stats.songs.one": "{count} song",
     "showcase.stats.songs.other": "{count} songs",
@@ -557,6 +572,7 @@ DEFAULT_STRINGS: dict[str, str] = {
 CARD_STATUS_KEYS: frozenset[str] = frozenset({
     "busy", "loading", "added", "exists", "duplicate", "error",
     "sync", "ok", "no_tracks", "waiting", "removing", "removed",
+    "receiver_port_busy",
 })
 
 _current_lang: str = DEFAULT_LANGUAGE
