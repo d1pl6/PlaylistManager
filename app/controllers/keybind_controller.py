@@ -533,7 +533,12 @@ class KeybindController:
             )
 
         def on_error(error_msg):
-            logger.error("Keybind flow error: %s", error_msg)
+            # Debug level: every flow logs the failure itself (ERROR with a
+            # traceback) before calling on_error - see the execute_flow
+            # handlers in YouTubeMusicFlow / SpotifyFlow / SoundCloudFlow /
+            # DeezerFlow - so an ERROR here would duplicate the same
+            # incident.  The Errors-tab persistence below still runs.
+            logger.debug("Keybind flow error: %s", error_msg)
             # Persist for the activity window's Errors tab - the red card
             # status alone is gone at the next keybind.
             if self.integrations.get(platform) is None:
@@ -625,6 +630,9 @@ class KeybindController:
             try:
                 flow = self._flows.get(platform)
                 if flow is None:
+                    # The only on_error path that no flow logs itself - keep
+                    # an ERROR line here so it stays visible in the console.
+                    logger.error("Flow not initialized for platform '%s'", platform)
                     on_error("Flow not initialized")
                     return
                 flow.execute_flow(

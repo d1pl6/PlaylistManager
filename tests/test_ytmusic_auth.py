@@ -205,6 +205,31 @@ class _ScanClient:
         return []
 
 
+class TestBoundedSession:
+    def test_requests_default_to_bounded_timeout(self, monkeypatch):
+        """The runtime client's session must cap per-call timeouts (the
+        flow's ytmusicapi default is a 30 s stall per call)."""
+        mod = _plugin_mod()
+        import requests as requests_mod
+
+        seen = {}
+
+        def fake_request(self, *args, **kwargs):
+            seen["kwargs"] = kwargs
+            return object()
+
+        monkeypatch.setattr(requests_mod.Session, "request", fake_request)
+        session = mod._bounded_session(timeout=7)
+
+        # No explicit timeout -> the bounded default is injected.
+        session.request("GET", "http://example.invalid")
+        assert seen["kwargs"].get("timeout") == 7
+
+        # An explicit per-call timeout still wins.
+        session.request("GET", "http://example.invalid", timeout=3)
+        assert seen["kwargs"].get("timeout") == 3
+
+
 class TestFlowPlaylistIdCache:
     def test_negative_result_cached_no_rescan(self):
         import integrations.youtube_music.flow as flow_mod
@@ -231,3 +256,78 @@ class TestFlowPlaylistIdCache:
         assert flow._get_playlist_id("Some Playlist", "PL123") == "PL123"
         assert flow._get_playlist_id("Some Playlist", "PL123") == "PL123"
         assert client.scans == 0
+
+
+# A grid-less response the real ytmusicapi library parser accepts as a
+# valid (zero-playlist) library answer.
+_EMPTY_LIBRARY_RESPONSE = {
+    "contents": {
+        "singleColumnBrowseResultsRenderer": {
+            "tabs": [
+                {"tabRenderer": {"content": {"sectionListRenderer": {"contents": []}}}}
+            ]
+        }
+    }
+}
+
+
+class _FakeLibraryClient:
+    """Stands in for a ytmusicapi instance; routes browse requests by id."""
+
+    def __init__(self, fail_browse_ids=()):
+        self.fail_browse_ids = set(fail_browse_ids)
+        self.requested = []
+
+    def _check_auth(self):
+        pass
+
+    def _send_request(self, endpoint, body, additionalParams=""):
+        browse_id = body["browseId"]
+        self.requested.append(browse_id)
+        if browse_id in self.fail_browse_ids:
+            raise RuntimeError("Server returned HTTP 400: Bad Request.")
+        return _EMPTY_LIBRARY_RESPONSE
+
+
+class TestLibraryFetchFallback:
+    """The library-fetch fallback must tolerate a dead browse endpoint.
+
+    Regression: ``FEmusic_library_playlists`` returns HTTP 400 on the
+    current YT Music backend.  The old fallback probed it first and
+    re-raised its 400 whenever another browse legitimately returned zero
+    playlists, so every re-auth (``_setup_browser_auth`` verifies auth via
+    ``get_library_playlists``) and library scan died with that 400 and
+    freshly pasted credentials never took effect.
+    """
+
+    def test_live_browse_ids_only(self):
+        """The dead id is gone; only the id current ytmusicapi uses remains."""
+        mod = _plugin_mod()
+        assert mod._LIBRARY_BROWSE_IDS == ("FEmusic_liked_playlists",)
+        assert "FEmusic_library_playlists" not in mod._LIBRARY_BROWSE_IDS
+
+    def test_one_browse_failed_one_empty_returns_empty_not_error(self, monkeypatch):
+        pytest.importorskip("ytmusicapi")
+        mod = _plugin_mod()
+        monkeypatch.setattr(
+            mod,
+            "_LIBRARY_BROWSE_IDS",
+            ("FEmusic_library_playlists", "FEmusic_liked_playlists"),
+        )
+        client = _FakeLibraryClient(fail_browse_ids={"FEmusic_library_playlists"})
+
+        result = mod._patched_get_library_playlists(client, limit=5)
+
+        # The dead browse 400s but the empty liked browse is a valid answer:
+        # nothing may be raised over it - this was the reported failure.
+        assert result == []
+        assert "FEmusic_liked_playlists" in client.requested
+
+    def test_all_browses_failed_still_raises(self, monkeypatch):
+        pytest.importorskip("ytmusicapi")
+        mod = _plugin_mod()
+        monkeypatch.setattr(mod, "_LIBRARY_BROWSE_IDS", ("FEmusic_liked_playlists",))
+        client = _FakeLibraryClient(fail_browse_ids={"FEmusic_liked_playlists"})
+
+        with pytest.raises(RuntimeError, match="HTTP 400"):
+            mod._patched_get_library_playlists(client, limit=5)
