@@ -457,13 +457,31 @@ def validate_rename(old: str, new: str) -> None:
 
 def rename(old: str, new: str) -> None:
     """Rename a profile (updates metadata and moves owned data)."""
+    # Fast-fail on invalid names / default-profile rules with the same
+    # messages the dialog surfaces from validate_rename().
     validate_rename(old, new)
     with _lock:
+        # Re-validate under the lock: a profile with the target name may
+        # have been created between validate_rename() and here - popping
+        # over it would silently destroy the other profile's metadata.
         profiles = _load_profiles()
         progs = profiles.get("profiles", {})
+        if old not in progs:
+            raise ValueError(f"Profile {old!r} does not exist")
+        if new in progs:
+            raise ValueError(f"Profile {new!r} already exists")
         captured_logins = bool(progs[old].get("logins", False))
-        progs[new] = progs.pop(old)
-        _save_profiles(profiles)
+        # Build a FRESH dict instead of mutating the cached one in place:
+        # _save_profiles only publishes the cache after the disk write
+        # succeeds, so a failed persist (disk full / permissions) leaves
+        # memory consistent with disk instead of showing a renamed
+        # profile that does not exist.
+        new_profiles = {
+            "version": profiles.get("version", 1),
+            "profiles": {**progs},
+        }
+        new_profiles["profiles"][new] = new_profiles["profiles"].pop(old)
+        _save_profiles(new_profiles)
         # Move owned data on disk.
         for base in (_DEFAULT_DB_DIR / "profiles", _DEFAULT_CFG_DIR / "profiles"):
             src = base / old

@@ -189,6 +189,21 @@ class TestSongCrud:
                                   "trackX", platform="spotify", playlist_id="pl1")
         assert id1 == id2
 
+    def test_add_song_by_info_mixed_non_ascii_dedupes_like_sqlite_lower(self, sm):
+        # Regression: _normalize_title_key must fold the ASCII letters of a
+        # mixed "É..." title exactly like SQLite's LOWER(TRIM(title)) - the
+        # old whole-string isascii() gate left them unfolded, so the dedupe
+        # lookup missed its own inserted row and every re-add inserted a
+        # duplicate ("Época Rocks" vs "Época rocks").
+        id1 = sm.add_song_by_info("Playlist A", "Época Rocks", ["Artist"], 200,
+                                  "track1", platform="spotify", playlist_id="pl1")
+        id2 = sm.add_song_by_info("Playlist A", "Época Rocks", ["Artist"], 200,
+                                  "trackX", platform="spotify", playlist_id="pl1")
+        assert id1 == id2
+        # The all-caps spelling folds to the same key on both sides.
+        assert sm.song_exists_by_info("Playlist A", "ÉPOCA ROCKS", ["Artist"], 200,
+                                      platform="spotify", playlist_id="pl1") is True
+
     def test_song_exists_false(self, sm):
         assert sm.song_exists("Playlist A", "missing", platform="spotify",
                               playlist_id="pl1") is False

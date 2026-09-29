@@ -630,7 +630,7 @@ def rename_theme(old: str, new: str) -> None:
 # ``set_*`` writers invalidate the cache explicitly, so a Settings-dialog
 # change is visible on the next read even if the file mtime were to collide.
 
-_settings_lock = threading.Lock()
+_settings_lock = threading.RLock()
 _settings_cache: ConfigParser | None = None
 _settings_cache_sig: tuple | None = None  # (path, mtime_ns, size)
 
@@ -695,25 +695,31 @@ def _cached_config() -> ConfigParser:
 
 
 def ensure_settings_file() -> None:
-    cfg = ConfigParser()
-    if SETTINGS_PATH.exists():
-        cfg = _safe_read_config(cfg, SETTINGS_PATH)
-    _migrate_legacy_update_check(cfg)
-    changed = False
-    for section, values in DEFAULT_SETTINGS.items():
-        if section not in cfg:
-            cfg[section] = values
-            changed = True
-        else:
-            for key, value in values.items():
-                if key not in cfg[section]:
-                    cfg[section][key] = value
-                    changed = True
-    if not SETTINGS_PATH.exists() or changed:
-        _write_ini_file(SETTINGS_PATH, cfg)
-        # A write here changes the on-disk state; drop any cached parse so
-        # the next getter re-reads (mtime would catch it, but be explicit).
-        _invalidate_settings_cache()
+    # Serialized against the other writers (and the _cached_config fill,
+    # which also writes): a concurrent set_setting_value stamp could
+    # otherwise be clobbered by this create-and-backfill write, or vice
+    # versa (lost update - e.g. the updater thread's "last_check" stamp
+    # reverting to "0" and re-triggering an update check every launch).
+    with _settings_lock:
+        cfg = ConfigParser()
+        if SETTINGS_PATH.exists():
+            cfg = _safe_read_config(cfg, SETTINGS_PATH)
+        _migrate_legacy_update_check(cfg)
+        changed = False
+        for section, values in DEFAULT_SETTINGS.items():
+            if section not in cfg:
+                cfg[section] = values
+                changed = True
+            else:
+                for key, value in values.items():
+                    if key not in cfg[section]:
+                        cfg[section][key] = value
+                        changed = True
+        if not SETTINGS_PATH.exists() or changed:
+            _write_ini_file(SETTINGS_PATH, cfg)
+            # A write here changes the on-disk state; drop any cached parse so
+            # the next getter re-reads (mtime would catch it, but be explicit).
+            _invalidate_settings_cache()
 
 
 def get_setting(section: str, fallback: bool = True) -> bool:
@@ -730,15 +736,22 @@ def set_setting(section: str, enabled: bool) -> None:
 
     Unknown or legacy sections in settings.ini (e.g. ``toggle_frameless``)
     are left untouched.
+
+    The read-modify-write holds ``_settings_lock`` (RLock - safe to call
+    :func:`ensure_settings_file` and :func:`_cached_config` from inside),
+    so concurrent writers - notably the updater thread's
+    ``last_check`` stamp - cannot be clobbered by each other (lost
+    update).
     """
-    ensure_settings_file()
-    cfg = ConfigParser()
-    cfg = _safe_read_config(cfg, SETTINGS_PATH)
-    if section not in cfg:
-        cfg[section] = {}
-    cfg[section]["is_true"] = "yes" if enabled else "no"
-    _write_ini_file(SETTINGS_PATH, cfg)
-    _invalidate_settings_cache()
+    with _settings_lock:
+        ensure_settings_file()
+        cfg = ConfigParser()
+        cfg = _safe_read_config(cfg, SETTINGS_PATH)
+        if section not in cfg:
+            cfg[section] = {}
+        cfg[section]["is_true"] = "yes" if enabled else "no"
+        _write_ini_file(SETTINGS_PATH, cfg)
+        _invalidate_settings_cache()
 
 
 def get_setting_value(section: str, option: str, fallback: str = "") -> str:
@@ -758,12 +771,15 @@ def set_setting_value(section: str, option: str, value: str) -> None:
     """Write one arbitrary setting option, preserving every other section.
 
     Unknown or legacy sections in settings.ini are left untouched.
+    Serialized under ``_settings_lock`` like :func:`set_setting`
+    (see there for the lost-update rationale).
     """
-    ensure_settings_file()
-    cfg = ConfigParser()
-    cfg = _safe_read_config(cfg, SETTINGS_PATH)
-    if section not in cfg:
-        cfg[section] = {}
-    cfg[section][option] = value
-    _write_ini_file(SETTINGS_PATH, cfg)
-    _invalidate_settings_cache()
+    with _settings_lock:
+        ensure_settings_file()
+        cfg = ConfigParser()
+        cfg = _safe_read_config(cfg, SETTINGS_PATH)
+        if section not in cfg:
+            cfg[section] = {}
+        cfg[section][option] = value
+        _write_ini_file(SETTINGS_PATH, cfg)
+        _invalidate_settings_cache()

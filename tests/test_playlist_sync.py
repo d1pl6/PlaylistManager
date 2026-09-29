@@ -301,12 +301,14 @@ class TestReloadDatabaseSync:
             service.reload_database_sync("Dance", "spotify", "SP1")
         assert "db_delete" not in events.events
 
-    def test_happy_path_order_is_fetch_then_destroy_then_persist(
+    def test_happy_path_order_is_fetch_then_thumb_then_destroy_then_reinsert(
         self, stub_song_manager, stub_side_effects, events
     ):
         # The policy order: details BEFORE delete (playlist reachable?),
         # tracks BEFORE delete (slowest step serves reads from the old DB),
-        # delete BEFORE reinsert.
+        # cover refresh BEFORE the empty-check so a trackless result still
+        # persists it, delete only once a NON-EMPTY list is in hand, then
+        # reinsert.
         integration = _FakeIntegration(
             details={"thumbnail": "tb", "followerCount": 42},
             tracks=[{"title": "a"}, {"title": "b"}],
@@ -318,7 +320,7 @@ class TestReloadDatabaseSync:
         result = service.reload_database_sync("Dance", "spotify", "SP1")
         assert result == (2, "ok", "tb")
         assert events.events == [
-            "details", "metadata", "tracks", "db_delete", "thumb", "add"
+            "details", "metadata", "tracks", "thumb", "db_delete", "add"
         ]
 
     def test_follower_count_only_persisted_when_present(
@@ -350,11 +352,15 @@ class TestReloadDatabaseSync:
         assert result[2] is None
         assert "thumb" not in events.events
 
-    def test_empty_tracks_still_refresh_cover(
+    def test_empty_tracks_refresh_cover_but_do_not_destroy_db(
         self, stub_song_manager, stub_side_effects, events
     ):
-        # An empty playlist must still get its cover refreshed, and the
-        # DB must be rebuilt (deleted) even with nothing to insert.
+        # An EMPTY fetch is ambiguous: get_playlist_tracks returns [] both
+        # for a genuinely empty playlist and for a platform fetch error
+        # (flaky pagination).  The cover is still refreshed, but the
+        # cached DB must NEVER be deleted on an empty result - a transient
+        # error must not lose the cached tracks (regression: the old order
+        # deleted the DB before the empty check).
         integration = _FakeIntegration(details={"thumbnail": "tb"}, tracks=[], events=events)
         service = playlist_sync.PlaylistSyncService(
             SimpleNamespace(get=lambda p: integration)
@@ -362,7 +368,8 @@ class TestReloadDatabaseSync:
         assert service.reload_database_sync("Dance", "spotify", "SP1") == (
             0, "no_tracks", "tb"
         )
-        assert events.events == ["details", "tracks", "db_delete", "thumb"]
+        assert events.events == ["details", "tracks", "thumb"]
+        assert "db_delete" not in events.events
 
     def test_uninstalled_mid_flight_aborts_before_delete(
         self, stub_song_manager, stub_side_effects, events

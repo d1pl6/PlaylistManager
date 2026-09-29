@@ -37,6 +37,15 @@ class TestNormalizeKey:
         assert key_mapping.normalize_key(Key.space) == "space"
         assert key_mapping.normalize_key(Key.f5) == "f5"
 
+    def test_esc_enter_paging_fold_to_tk_spellings(self):
+        # The recording-state machine cancels on "escape", and combos
+        # must match the Tk keysym spellings - pynput's own names must
+        # never leak through unchecked (regression).
+        assert key_mapping.normalize_key(Key.esc) == "escape"
+        assert key_mapping.normalize_key(Key.enter) == "return"
+        assert key_mapping.normalize_key(Key.page_up) == "prior"
+        assert key_mapping.normalize_key(Key.page_down) == "next"
+
     def test_unknown_object_returns_none(self):
         assert key_mapping.normalize_key("not-a-key") is None
 
@@ -98,6 +107,19 @@ class TestParseKeybind:
         # A raw "ctrl++" (the separator swallowing the key) is a corrupt
         # spelling - it reads back as if only ctrl was pressed.
         assert key_mapping.parse_keybind("ctrl++") == {"ctrl"}
+
+    def test_pynput_aliases_fold_to_tk_spellings(self):
+        # pynput reports esc/enter/page_up/page_down where Tk reports
+        # Escape/Return/Prior/Next - a combo recorded under either
+        # listener (or typed by hand with either name) must match the
+        # other's live key set.
+        assert key_mapping.parse_keybind("ctrl+esc") == {"ctrl", "escape"}
+        assert key_mapping.parse_keybind("ctrl+enter") == {"ctrl", "return"}
+        assert key_mapping.parse_keybind("ctrl+page_up") == {"ctrl", "prior"}
+        assert key_mapping.parse_keybind("ctrl+page_down") == {"ctrl", "next"}
+        # The canonical spellings are untouched.
+        assert key_mapping.parse_keybind("ctrl+escape") == {"ctrl", "escape"}
+        assert key_mapping.parse_keybind("ctrl+return") == {"ctrl", "return"}
 
 
 class TestModifierSet:

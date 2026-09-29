@@ -8,6 +8,13 @@ tested and reused independently of the pynput listener loop.
 from pynput import keyboard
 
 # -- pynput key → normalised name -------------------------------------------------
+# Names are kept identical to the Tk keysym normalisation (_TK_KEY_MAP):
+# pynput reports these four keys as "esc"/"enter"/"page_up"/"page_down"
+# while Tk reports "Escape"/"Return"/"Prior"/"Next" - without mapping
+# them to one spelling, a keybind recorded under one listener never
+# matches the other, and the recording-state machine's "escape cancels"
+# branch (keybind_controller._handle_press) silently fails under the
+# global listener.
 _KEY_MAP = {
     keyboard.Key.ctrl_l: "ctrl",
     keyboard.Key.ctrl_r: "ctrl",
@@ -21,6 +28,10 @@ _KEY_MAP = {
     keyboard.Key.cmd: "cmd",
     keyboard.Key.cmd_l: "cmd",
     keyboard.Key.cmd_r: "cmd",
+    keyboard.Key.esc: "escape",
+    keyboard.Key.enter: "return",
+    keyboard.Key.page_up: "prior",
+    keyboard.Key.page_down: "next",
 }
 
 # -- tkinter keysym → normalised name ---------------------------------------------
@@ -127,9 +138,22 @@ def parse_keybind(keybind_str: str) -> set[str]:
     typed by hand): the separator would otherwise swallow it - ``"ctrl++"``
     reads back as ``{'ctrl'}``.  ``"ctrl+plus"`` round-trips to the same
     live key set as the physical plus key (``'+'``).
+
+    pynput/Tk name aliases (``esc``/``enter``/``page_up``/``page_down``)
+    are folded to the canonical Tk spelling (``escape``/``return``/
+    ``prior``/``next``) so a combo recorded under either listener - or
+    typed by hand with either name - matches the other's live key set.
     """
     tokens = {k.strip().lower() for k in keybind_str.split("+") if k.strip()}
     if "plus" in tokens:
         tokens.remove("plus")
         tokens.add("+")
+    # pynput spellings -> Tk canonical spellings (see normalize_key).
+    aliases = {
+        "esc": "escape",
+        "enter": "return",
+        "page_up": "prior",
+        "page_down": "next",
+    }
+    tokens = {aliases.get(t, t) for t in tokens}
     return tokens

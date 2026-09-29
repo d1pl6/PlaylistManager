@@ -250,16 +250,22 @@ class PlaylistSyncService:
         if self.integrations.get(platform) is None:
             raise RuntimeError(f"no integration for platform '{platform}'")
 
-        DatabaseManager.delete_playlist_db(playlist_name, platform, playlist_id)
-        logger.info("Deleted database for '%s'", playlist_name)
-
         # Persist the thumbnail regardless of the track import -
         # an empty playlist must still get its cover refreshed.
         if thumb_url:
             PlaylistStore.update_thumbnail(playlist_name, platform, thumb_url)
 
+        # An EMPTY fetch is ambiguous: get_playlist_tracks returns [] both
+        # for a genuinely empty playlist and for a platform fetch error
+        # (see BaseIntegration.get_playlist_tracks).  The details check
+        # above proved the playlist is reachable, but a flaky pagination
+        # must not destroy the cached tracks - keep the old DB instead of
+        # deleting it (mirrors import_tracks_sync, which never deletes).
         if not tracks:
             return 0, "no_tracks", thumb_url
+
+        DatabaseManager.delete_playlist_db(playlist_name, platform, playlist_id)
+        logger.info("Deleted database for '%s'", playlist_name)
 
         sm = SongManager()
         inserted = sm.add_songs_bulk(

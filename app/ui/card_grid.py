@@ -129,6 +129,13 @@ class CardGridManager:
 
         self.cards: list[PlaylistCard] = []
 
+        # Root-grid row the cards area lives on.  MainWindow's
+        # _apply_notification_layout assigns it from the
+        # [notification_bar] position setting (below_header / top -> 3,
+        # bottom -> 2) and keeps this in sync via set_main_row() - the
+        # historical hardcoded row=2 was only ever correct for "bottom".
+        self._main_row = 2
+
         for c in range(self._columns):
             self._content_frame.grid_columnconfigure(c, weight=1)
 
@@ -640,9 +647,19 @@ class CardGridManager:
         for card in self.cards:
             card.frame.grid_forget()
 
+    def set_main_row(self, row: int) -> None:
+        """Record the root-grid row the cards area occupies.
+
+        Called by MainWindow's ``_apply_notification_layout`` when the
+        ``[notification_bar] position`` setting (re)assigns rows, so
+        :meth:`_show_main_content` re-grids the cards on the position's
+        main row instead of a hardcoded one.
+        """
+        self._main_row = row
+
     def _show_main_content(self) -> None:
         self.parent_frame.grid(
-            row=2, column=0, columnspan=self._columns, sticky="nsew"
+            row=self._main_row, column=0, columnspan=self._columns, sticky="nsew"
         )
         for i, card in enumerate(self.cards):
             self._restore_frame_grid(card.frame, i)

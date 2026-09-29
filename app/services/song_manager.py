@@ -308,13 +308,18 @@ def _pick_thumbnail(thumbnails: list) -> str | None:
 # normaliser (duplicate_check.py has its own); keep the names distinct so
 # they are never swapped by accident.
 def _normalize_title_key(text: str) -> str:
-    # SQLite's LOWER() only folds ASCII - Unicode folding (ICU) is not
-    # available to the DB side.  Match that exactly: a Unicode-aware
+    # SQLite's LOWER() only folds ASCII (A-Z) - Unicode folding (ICU) is
+    # not available to the DB side.  Match that exactly: a Unicode-aware
     # str.lower() would fold "É" -> "é" where the DB leaves the stored
     # "É" alone, and the dedupe/identity lookups would miss every
-    # accented title (SD2.2 vs 2.2 style mismatches).
+    # accented title (SD2.2 vs 2.2 style mismatches).  Folding only the
+    # ASCII subset also keeps a MIXED string ("Época Rocks") in step with
+    # the DB: the whole-string isascii() gate previously left the ASCII
+    # letters unfolded whenever any non-ASCII character was present,
+    # so "Época Rocks" (Python) never equalled LOWER()'s
+    # "Época rocks" (DB).
     stripped = text.strip()
-    return stripped.lower() if stripped.isascii() else stripped
+    return "".join(ch.lower() if ch.isascii() else ch for ch in stripped)
 
 # ------------------------------------------------------------------
 # SongManager

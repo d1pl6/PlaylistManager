@@ -306,6 +306,9 @@ class MainWindow:
             row=rows["main"], column=0, columnspan=self._columns, sticky="nsew"
         )
         self.search.set_row(rows["search"])
+        # Keep the card grid's own re-grid (search dismiss, dialog close,
+        # add-playlist) on the position's main row - not a hardcoded one.
+        self.card_grid.set_main_row(rows["main"])
 
     def _apply_notification_enabled(self, enabled: bool) -> None:
         """Live show/hide the notification bar (Settings → Notification bar)."""

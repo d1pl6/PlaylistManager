@@ -455,6 +455,7 @@ def run_add(spec: str) -> int:
                 # "api" type - reads the platform directly, no receiver.
                 flow = flow_cls(integration, song_manager)
             ctx["flow"] = flow
+            ctx["flow_type"] = plugin.flow_type
             ctx["url"], ctx["song_data"], ctx["error"] = flow.capture(URL_WAIT_TIMEOUT)
         except Exception as e:
             logger.error("%s flow/capture failed: %s", platform, e, exc_info=True)
@@ -468,7 +469,7 @@ def run_add(spec: str) -> int:
         ctx = contexts[platform]
         if ctx["flow"] is None:
             ok, message = False, f"Error: {ctx['error']}"
-        elif plugin_registry.get(platform).flow_type == "extension" and ctx["url"] is None:
+        elif ctx.get("flow_type") == "extension" and ctx["url"] is None:
             ok, message = False, f"Error: {ctx['error'] or 'Timeout: no URL received'}"
         elif ctx["song_data"] is None:
             ok, message = False, f"Error: {ctx['error'] or 'Nothing playing'}"

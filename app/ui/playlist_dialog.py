@@ -13,6 +13,7 @@ import tkinter as tk
 from queue import Empty, Queue
 from ui.scrollable import ScrollableFrame
 from utils.i18n import tr
+from utils.config import compute_notification_rows, resolve_notification_position
 from utils.scaling import px, ui_font
 from utils.theme import C, btn_colors
 from utils.thumbnail import ThumbnailService
@@ -55,8 +56,14 @@ class PlaylistDialog:
         close_btn = btn_colors(close_bg, close_fg)
 
         self.choose_frame = tk.Frame(self.parent, background=dialog_bg)
+        # Overlay the cards area's row on the root grid.  The parent is
+        # MainWindow's root and the cards are hidden while the picker is
+        # up, so the picker must occupy the position's MAIN row - the
+        # historical hardcoded row=2 was only correct for the "bottom"
+        # notification-bar position.
+        main_row = compute_notification_rows(resolve_notification_position())["main"]
         self.choose_frame.grid(
-            row=2, column=0, columnspan=self.columns, sticky="nsew"
+            row=main_row, column=0, columnspan=self.columns, sticky="nsew"
         )
 
         title_frame = tk.Frame(self.choose_frame, background=dialog_bg)
