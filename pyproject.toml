@@ -31,12 +31,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+keyring = ["keyring"]
 youtubemusic = ["ytmusicapi"]
 tray = ["pystray"]
-test = ["pytest"]
+test = ["pytest", "keyring"]
 all = [
+    "keyring",
     "ytmusicapi",
-    "pystray",
+    "pystray"
 ]
 
 [tool.pytest.ini_options]

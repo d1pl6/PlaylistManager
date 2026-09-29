@@ -24,6 +24,8 @@ import shutil
 import sys
 import tempfile
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # 1. app/ on sys.path (same import resolution as the running app)
 # ---------------------------------------------------------------------------
@@ -90,3 +92,74 @@ def _cleanup_temp_root() -> None:
 
 
 atexit.register(_cleanup_temp_root)
+
+
+# ---------------------------------------------------------------------------
+# OS-keyring backend fixtures (services/credential_store.py)
+# ---------------------------------------------------------------------------
+# The CI/dev machines have no secret-service daemon, so the real
+# keyring resolves to its fail backend there.  All credential-store
+# tests use these hermetic stand-ins instead of the environment's
+# backend - and they must reset the module's cached probe result.
+
+
+class _FakeKeyringBackend:
+    """In-memory keyring backend: set/get/delete against a dict."""
+
+    def __init__(self):
+        self._data = {}
+        self.set_calls = 0
+
+    def set_password(self, service, account, password):
+        self.set_calls += 1
+        self._data[(service, account)] = password
+
+    def get_password(self, service, account):
+        return self._data.get((service, account))
+
+    def delete_password(self, service, account):
+        self._data.pop((service, account), None)
+
+
+@pytest.fixture
+def fake_keyring_backend(monkeypatch):
+    """credential_store against a working in-memory backend."""
+    from services import credential_store
+
+    fake = _FakeKeyringBackend()
+    monkeypatch.setattr(credential_store, "_backend", lambda: fake)
+    monkeypatch.setattr(credential_store, "_available", None)
+    return fake
+
+
+@pytest.fixture
+def fail_keyring_backend(monkeypatch):
+    """credential_store against the library's fail backend (every op raises)."""
+    from services import credential_store
+    from keyring.backends.fail import Keyring
+
+    monkeypatch.setattr(credential_store, "_backend", lambda: Keyring())
+    monkeypatch.setattr(credential_store, "_available", None)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_keyring(monkeypatch):
+    """Keep every test off the developer's REAL OS keyring.
+
+    ``credential_store._backend()`` falls back to ``keyring.get_keyring()``,
+    which on a desktop session resolves the environment's Secret Service
+    backend - and the availability probe performs a real
+    write/read/delete there.  That would make a test run (and the profile
+    delete/rename sweeps it now drives) mutate the user's real credential
+    store.  Point the fallback at the library's fail backend so the probe
+    resolves to "unavailable" and every mirror call is a no-op.
+
+    Tests that want a working mirror request ``fake_keyring_backend``,
+    which replaces ``credential_store._backend`` itself and therefore wins
+    over this fallback (autouse fixtures are set up first).
+    """
+    from services import credential_store
+    from keyring.backends.fail import Keyring
+
+    monkeypatch.setattr("keyring.get_keyring", lambda: Keyring())
+    monkeypatch.setattr(credential_store, "_available", None)

@@ -34,10 +34,10 @@ Requires **Python 3.10+** (uses `X | Y` union type syntax).
 
 ## Dependencies
 
-Core: `pillow`, `requests`, `platformdirs`, `flask`, `flask-cors`, `pynput`.
-Optional: `ytmusicapi` (for YouTube Music integration), `pystray` (for the system tray / hide-to-tray; the code degrades gracefully when it's missing).
+Core: `pillow`, `requests`, `platformdirs`, `flask`, `flask-cors`, `pynput`, `py-minisign` (plugin download signature verification).
+Optional: `ytmusicapi` (for YouTube Music integration), `pystray` (for the system tray / hide-to-tray; the code degrades gracefully when it's missing), `keyring` (OS credential-store mirror — optional because its Linux transitive chain `SecretStorage` -> `cryptography` + `jeepney` is the heaviest in the project and is useless without a running daemon; imported lazily inside `credential_store._backend()`, so a missing package degrades to file-only like a missing backend does).
 
-## No lint / typecheck; pytest suite
+`all` must list **every** extra: the nightly `pip-audit` job installs `.[all,test]` and scans only what is installed, so an extra missing from `all` silently escapes the audit. `test` needs `keyring` itself — `tests/conftest.py`'s autouse `_hermetic_keyring` fixture does `from keyring.backends.fail import Keyring`, so without the package the *entire* suite errors at fixture setup.
 
 There is no linter or type checker configured. There **is** a pytest suite (service layer, headless — see `tests/` and CONTRIBUTING.md "Testing"):
 
@@ -54,7 +54,7 @@ Tests must stay headless-safe: `tests/conftest.py` redirects every profile-roote
 
 File names use mixed casing on purpose (`README.MD`, `CLI.MD`, `TODO.MD`, `INTEGRATIONS.MD`, `AGENTS.md`) — always match existing filename casing when creating or referencing files. (On this machine's drive the variants collide; see `.agents/AGENTS.md`.)
 
-Gitignored paths — commits cannot carry them, and edits to them never show in `git status`: `requirements.txt` (untracked mirror of the tracked `pyproject.toml` manifest), `opencode.jsonc`, `log/`, `.agents/`, `integrations/*` (every plugin dir — only `integrations/__init__.py` is tracked), plus the runtime dirs `db/`, `cfg/`, `auth/`, `.pytest_cache/`.
+There is no `log/` directory: `utils/logging_config.py` installs a single stderr `StreamHandler` (`basicConfig` with no `filename`), so nothing is written to disk and there is nothing to rotate or retain. A log file would be a new feature, not a setting.
 
 No app data lives in the repo — `db/`, `cfg/`, and `auth/` are under the platformdirs root (see Key data paths).
 

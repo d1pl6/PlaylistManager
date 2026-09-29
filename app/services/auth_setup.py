@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from services import credential_store
+from services import health_check
 from services import profile_store as _profile_store
 
 from utils.i18n import tr
@@ -32,6 +34,12 @@ def complete_browser_file(path: Path) -> bool:
     auth cookie constructs an UNAUTHORIZED client whose every browse
     fails.  The check mirrors ytmusicapi's own requirement (its setup
     refuses to write a file without ``cookie``).
+
+    Auth-dir files observed complete are ALSO mirrored into the OS
+    keyring (services/credential_store.py): the terminal flow writes
+    browser.json itself, outside the app, so first observation is the
+    only core-side write point for it.  Mirroring is self-quiescing
+    (identical payloads are skipped) and a no-op without a backend.
     """
     try:
         if not path.exists():
@@ -40,9 +48,12 @@ def complete_browser_file(path: Path) -> bool:
         if not isinstance(data, dict):
             return False
         keys = {k.lower() for k in data}
-        return bool(keys & {"cookie", "access_token"})
+        ready = bool(keys & {"cookie", "access_token"})
     except Exception:
         return False
+    if ready and path.parent == AUTH_DIR:
+        credential_store.mirror(path.name)
+    return ready
 
 
 def browser_file_ready() -> bool:
@@ -179,6 +190,7 @@ def save_and_verify_ytmusic_auth(
     except OSError as e:
         logger.error("Failed to save YT Music credentials: %s", e)
         return {"ok": False, "error": str(e)}
+    credential_store.mirror("yt_music.json")
     logger.info("YT Music credentials verified and saved")
     return {"ok": True}
 
@@ -211,15 +223,22 @@ def save_spotify_credentials(
         ) from None
 
     save_spotify_credentials_file(client_id, client_secret, refresh_token)
+    # Mirror the freshly-written file into the OS keyring (best-effort).
+    credential_store.mirror("spotify.json")
 
 
 def load_spotify_credentials() -> Dict[str, str]:
     """Load existing Spotify credentials from disk.
 
-    Returns an empty dict when no file exists or on parse failure.
+    A missing file is first re-materialized from the OS keyring mirror
+    (when present), so a lost/copied auth dir can be rebuilt.  Returns
+    an empty dict when no file exists - even after a restore attempt -
+    or on parse failure.
     """
     if not SPOTIFY_FILE.exists():
-        return {}
+        credential_store.restore("spotify.json")
+        if not SPOTIFY_FILE.exists():
+            return {}
     try:
         data = json.loads(SPOTIFY_FILE.read_text(encoding="utf-8"))
         register_secret(
@@ -241,6 +260,7 @@ def delete_spotify_credentials() -> bool:
     if SPOTIFY_FILE.exists():
         try:
             SPOTIFY_FILE.unlink()
+            credential_store.delete("spotify.json")  # clear the keyring mirror
             user_log(logger, tr("auth.deleted_spotify"))
             return True
         except OSError as e:
@@ -429,6 +449,7 @@ def save_and_verify_lastfm_credentials(api_key: str, api_secret: str) -> Dict[st
                 result.get("session_key", ""),
                 result.get("username", ""),
             )
+            credential_store.mirror("lastfm.json")
         except ImportError:
             logger.error("Last.fm plugin not found; credentials not saved")
             return {
@@ -478,7 +499,10 @@ def delete_soundcloud_credentials() -> bool:
         from integrations.soundcloud.soundcloud import (
             delete_soundcloud_credentials as delete_impl,
         )
-        return delete_impl()
+        deleted = delete_impl()
+        if deleted:
+            credential_store.delete("soundcloud.json")  # clear the keyring mirror
+        return deleted
     except ImportError:
         logger.warning("SoundCloud plugin not found - cannot delete credentials")
         return False
@@ -528,7 +552,10 @@ def save_and_verify_soundcloud_credentials(
         from integrations.soundcloud.soundcloud import (
             save_and_verify_soundcloud_credentials as save_impl,
         )
-        return save_impl(client_id, client_secret, refresh_token)
+        result = save_impl(client_id, client_secret, refresh_token)
+        if result.get("ok"):
+            credential_store.mirror("soundcloud.json")
+        return result
     except ImportError:
         return {"ok": False, "error": "SoundCloud plugin not found"}
     except Exception as e:
@@ -574,7 +601,10 @@ def save_and_verify_deezer_credentials(arl: str) -> dict:
         from integrations.deezer.deezer import (
             save_and_verify_deezer_credentials as save_impl,
         )
-        return save_impl(arl)
+        result = save_impl(arl)
+        if result.get("ok"):
+            credential_store.mirror("deezer.json")
+        return result
     except ImportError:
         return {"ok": False, "error": "Deezer plugin not found"}
     except Exception as e:
@@ -638,6 +668,10 @@ def delete_platform_credentials(
     for path in _credential_paths(plugin_registry, platform):
         if path.exists():
             path.unlink()
+            # Only auth-dir files are ever mirrored; legacy repo-root
+            # fallbacks have no keyring entry to clear.
+            if path.parent == AUTH_DIR:
+                credential_store.delete(path.name)
             user_log(logger, tr("auth.deleted_credential_path", path=path))
             deleted.append(path)
         else:

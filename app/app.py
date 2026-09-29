@@ -8,6 +8,7 @@ from controllers.app_controller import AppController
 from controllers.keybind_controller import KeybindController
 from plugin_loader import PluginInfo, PluginRegistry
 from services.integration import IntegrationRegistry
+from services.credential_store import restore_all
 from services.playlist_store import PlaylistStore
 from services.tray import TrayService
 from ui.main_window import MainWindow

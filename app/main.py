@@ -32,6 +32,7 @@ from utils.logging_config import configure_logging
 from utils.config import get_setting_value
 from utils.i18n import set_language, tr
 from services.health_check import check_network
+from services.credential_store import restore_all
 
 
 def _require_network() -> None:
@@ -173,6 +174,11 @@ def main():
     # Same wiring as App.__init__: pick the [language] setting for every
     # CLI output line (run_* prints go through tr()/trn()).
     set_language(get_setting_value("language", "lang", "en"))
+
+    # Headless CLI flows build plugin auth managers that read credential
+    # files directly - restore OS-keyring mirrors first (best-effort),
+    # so a lost auth dir does not silently log every platform out.
+    restore_all()
 
     if args.list_only:
         sys.exit(run_list())

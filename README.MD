@@ -51,30 +51,33 @@ pip install .
 pip install ".[all]"
 
 # to install basic & specify optional dependencies
-pip install ".[tray]"
+pip install ".[tray, keyring]"
 # or
-pip install pystray
+pip install pystray keyring
 ```
 
 ## Linux
-> [!TIP]
+> [!NOTE]
 > It's not recommended to install dependencies through `pip` because it can break system packages.
 
 ### Arch
 ```bash
 pacman -S tk python-pillow python-requests python-platformdirs python-flask python-flask-cors python-pynput
 
-# Tray
-pacman -S python-pystray
+# Optional
+pacman -S python-pystray python-keyring
 ```
 
 ### Debian / Ubuntu
 ```bash
 apt install -y python3-tk python3-pil python3-requests python3-platformdirs python3-flask python3-flask-cors python3-pynput
 
-# Tray
-apt install -y python3-pystray
+# Optional
+apt install -y python3-pystray python3-keyring
 ```
+
+> [!NOTE]
+> For **keyring** you need secret-service daemon (gnome-keyring, kwallet).
 
 > [!NOTE]
 > **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.

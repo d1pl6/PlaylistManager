@@ -5,7 +5,7 @@ import webbrowser
 from tkinter import messagebox, ttk
 
 from _version import __version__
-from services import auth_setup, profile_store
+from services import auth_setup, credential_store, profile_store
 from services.scrobble import SCROBBLE_NONE, split_platforms
 from ui.profiles_ui import (
     show_create_profile_dialog,
@@ -1994,6 +1994,38 @@ def show_settings_dialog(
     # one block per platform from the live registry (fallback: the
     # hardcoded credential map when no registry was handed in).
     _cred_row(tr("settings.auth_dir_name"), [auth_dir])
+
+    # OS-keyring mirror status (services/credential_store.py): the files
+    # above stay the plugin-facing contract; the OS keyring is the
+    # encrypted mirror / restore source.  Surfacing the state makes the
+    # degraded file-only mode visible instead of silent.
+    kr_line = tk.Frame(cred_section, background=theme_win_bg)
+    kr_line.pack(fill="x", padx=16, pady=(4, 0))
+    tk.Label(
+        kr_line,
+        text=tr("settings.keyring"),
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        font=ui_font(9),
+        anchor="w",
+    ).pack(side="left", fill="x", expand=True)
+    if not credential_store.mirroring_enabled():
+        kr_state, kr_fg = tr("settings.keyring_off"), theme_label_fg
+    elif credential_store.keyring_available():
+        kr_state, kr_fg = tr("settings.keyring_active"), C["label_playlist_good_fg"]
+    else:
+        kr_state, kr_fg = (
+            tr("settings.keyring_unavailable"),
+            C["label_playlist_warn_fg"],
+        )
+    tk.Label(
+        kr_line,
+        text=kr_state,
+        background=theme_win_bg,
+        foreground=kr_fg,
+        font=ui_font(9),
+        anchor="e",
+    ).pack(side="right", padx=(8, 0))
     if plugin_registry is not None:
         cred_rows = [
             ((platform_display_names or {}).get(pid, pid), plugin.auth_paths)
