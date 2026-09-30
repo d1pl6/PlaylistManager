@@ -12,7 +12,7 @@ import tkinter as tk
 import webbrowser
 from typing import TYPE_CHECKING, Callable
 
-from controllers.callbacks import KeybindCallbacks
+from controllers.keybind_registry import KeybindCallbacks
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
 from services.playlist_url import build_playlist_url

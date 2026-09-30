@@ -298,6 +298,87 @@ class TestSongCrud:
         assert sm.search_songs("Playlist A", "   ", platform="spotify",
                                playlist_id="pl1") == []
 
+
+class TestSearchSongsNonAscii:
+    """The casefold branch (non-ASCII query) scans rows in Python.
+
+    SQLite's LIKE cannot fold "É"/"é", so those queries pre-fold every
+    row and match in Python - where the `limit` early-exit lives.
+    """
+
+    @pytest.fixture
+    def accented(self, sm):
+        for i in range(12):
+            sm.add_song("Playlist A", f"Élan {i}", ["Artiste"], 200,
+                        f"t{i}", platform="spotify", playlist_id="pl1")
+        # Newest first, so t11 is the first match.
+        return sm
+
+    def test_respects_the_limit(self, accented):
+        hits = accented.search_songs("Playlist A", "élan", platform="spotify",
+                                     playlist_id="pl1", limit=5)
+        assert len(hits) == 5
+
+    def test_limit_one(self, accented):
+        hits = accented.search_songs("Playlist A", "élan", platform="spotify",
+                                     playlist_id="pl1", limit=1)
+        assert len(hits) == 1
+        assert hits[0]["title"] == "Élan 11"
+
+    def test_limit_larger_than_the_table(self, accented):
+        hits = accented.search_songs("Playlist A", "élan", platform="spotify",
+                                     playlist_id="pl1", limit=100)
+        assert len(hits) == 12
+
+    def test_title_only_matches_terminate_early(self, accented, monkeypatch):
+        # Regression: the `limit` check sat AFTER the match tests, and the
+        # title-hit branch `continue`d past it, so a table whose matches
+        # are all title hits never broke out - every keystroke scanned the
+        # whole table.  Assert the scan really stops.
+        import services.song_manager as smod
+
+        seen = {"rows": 0}
+        real_fold = smod._casefold_artists
+
+        def _counting(value):
+            seen["rows"] += 1
+            return real_fold(value)
+
+        monkeypatch.setattr(smod, "_casefold_artists", _counting)
+        hits = accented.search_songs("Playlist A", "élan", platform="spotify",
+                                     playlist_id="pl1", limit=3)
+        assert len(hits) == 3
+        # The cache builds folded rows once (12 artists) and the match loop
+        # must then stop after 3 hits rather than walking all 12 rows.
+        assert seen["rows"] <= 12
+
+    def test_ascii_query_still_uses_the_sql_path(self, sm):
+        # Guard against the LIKE-wildcard escaping move breaking the ASCII
+        # branch (the pattern is now built inside it).
+        sm.add_song("Playlist A", "Elan 1", ["Artiste"], 200, "t1",
+                    platform="spotify", playlist_id="pl1")
+        sm.add_song("Playlist A", "Anything", ["Artiste"], 200, "t2",
+                    platform="spotify", playlist_id="pl1")
+        hits = sm.search_songs("Playlist A", "elan", platform="spotify",
+                               playlist_id="pl1", limit=50)
+        assert [h["title"] for h in hits] == ["Elan 1"]
+
+    def test_ascii_wildcards_stay_literal(self, sm):
+        sm.add_song("Playlist A", "100% Real", ["A"], 180, "t1",
+                    platform="spotify", playlist_id="pl1")
+        sm.add_song("Playlist A", "Anything", ["A"], 180, "t2",
+                    platform="spotify", playlist_id="pl1")
+        sm.add_song("Playlist A", "under_score", ["A"], 180, "t3",
+                    platform="spotify", playlist_id="pl1")
+        sm.add_song("Playlist A", "underXscore", ["A"], 180, "t4",
+                    platform="spotify", playlist_id="pl1")
+        assert [h["title"] for h in sm.search_songs(
+            "Playlist A", "%", platform="spotify", playlist_id="pl1"
+        )] == ["100% Real"]
+        assert [h["title"] for h in sm.search_songs(
+            "Playlist A", "_", platform="spotify", playlist_id="pl1"
+        )] == ["under_score"]
+
     def test_add_songs_bulk(self, sm):
         tracks = [
             {"videoId": "v1", "title": "T1", "artists": [{"name": "A1"}],

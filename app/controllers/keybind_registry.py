@@ -3,23 +3,66 @@ Keybind registry - stores registered keybind combos and matches them
 against the currently-pressed keys.
 
 This module has no knowledge of pynput or tkinter; it is pure data.
-The ``KeybindCallbacks`` callback container lives in
-``controllers/callbacks.py`` - this module only names it in type hints.
+``KeybindCallbacks`` lives here next to the registry that stores it: the
+controller emits updates through it and the UI side implements it, so it is
+the one piece of this contract both ends must import - splitting it into a
+second module bought nothing but a ``TYPE_CHECKING`` dance (the UI already
+imports the controller anyway).
 """
 
 import threading
 import logging
-from typing import TYPE_CHECKING
+from typing import Callable
 
 from utils.key_mapping import parse_keybind
-
-if TYPE_CHECKING:
-    from controllers.callbacks import KeybindCallbacks
 
 # Legacy bindings predate the platform field; they were all YouTube Music.
 PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Callback interface (replaces raw labels_dict)
+# ---------------------------------------------------------------------------
+
+
+class KeybindCallbacks:
+    """Thin callback container that replaces direct widget access.
+
+    A ``KeybindCallbacks`` instance is registered once per playlist
+    and is called from worker threads - the implementation should
+    route to the main thread (e.g. via ``root.after()``).
+
+    Args:
+        on_status: Called with (text, background_colour) to update status.
+        on_song_info: Called with (artist_text, title_text).
+        on_entry_state: Called with the new state for the keybind entry.
+        on_reset: Called with entry_state when all labels should be cleared.
+        on_song_added: Called (no args) after a song was added by the
+            flow, so the caller can refresh song-derived UI (e.g. the
+            showcase section).  Not called for "exists" results - the
+            song data did not change.
+    """
+
+    def __init__(
+        self,
+        on_status: Callable[[str, str], None] = lambda text, bg: None,
+        on_song_info: Callable[[str, str], None] = lambda artist, name: None,
+        on_entry_state: Callable[[str], None] = lambda state: None,
+        on_reset: Callable[[str], None] = lambda entry_state: None,
+        on_song_added: Callable[[], None] = lambda: None,
+    ):
+        self.on_status = on_status
+        self.on_song_info = on_song_info
+        self.on_entry_state = on_entry_state
+        self.on_reset = on_reset
+        self.on_song_added = on_song_added
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
 
 
 class KeybindRegistry:

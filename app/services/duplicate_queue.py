@@ -35,9 +35,14 @@ RAISE (see below).
 
 Write failures RAISE (via :mod:`utils.atomic_json`): mutating callers
 keep a process-wide guarantee that a failed persist is never mistaken
-for a successful one.  Best-effort bookkeeping is the task of the
-*flow* layer - it decides whether a failed persist is worth an error
-card; this module never swallows silently.
+for a successful one.  This module never swallows silently - but a
+caller that must not let bookkeeping failure abort the operation it is
+bookkeeping for (a teardown, a purge, a queue write on the add path)
+catches :data:`utils.atomic_json.WRITE_ERRORS` itself and decides what
+to do.  Two mistakes to avoid: catching nothing (the raise escapes and
+skips the caller's remaining work) and catching bare ``Exception`` (an
+unrelated bug in the caller's own logic gets absorbed as "the disk was
+full").
 """
 
 import json

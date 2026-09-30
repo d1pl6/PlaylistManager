@@ -17,10 +17,36 @@ from utils.thumbnail import ThumbnailService
 
 logger = logging.getLogger(__name__)
 
-# How long reload_database() waits for an in-flight add to drain before
-# giving up and reporting an error (the add path can sit in a URL-receiver
-# capture for up to URL_WAIT_TIMEOUT, plus the platform API round trip).
-GATE_ACQUIRE_TIMEOUT = 60.0
+# Ceiling on how long reload_database() waits for an in-flight flow to
+# drain before giving up.  It is NOT a single capture's duration: the
+# scrobble action keybind holds the same ``_flow_busy`` gate across EVERY
+# platform, capturing from each in turn (services.scrobble_service), and
+# each capture can sit for its full timeout plus a platform API round trip.
+# A fixed one-capture ceiling therefore aborts a healthy reload as soon as
+# more than a couple of players are installed, so the budget is per
+# platform - see gate_acquire_timeout().
+GATE_ACQUIRE_PER_PLATFORM = 45.0
+
+# Floor: a single add-flow's capture + platform write, plus headroom, even
+# when no integration exposes its registry (so the count is unknown).
+GATE_ACQUIRE_MIN_TIMEOUT = 60.0
+
+
+def gate_acquire_timeout(integrations) -> float:
+    """Seconds a reload should wait for the flow gate, given *integrations*.
+
+    Scales with the number of registered platforms, because a single flow
+    can legitimately hold the gate that many times over (the scrobble
+    action walks the registry capturing from each).  *integrations* is
+    duck-typed - anything without a ``get_all()`` is treated as a single
+    platform rather than raising inside a background worker.
+    """
+    count = 1
+    try:
+        count = max(1, len(integrations.get_all()))
+    except Exception:
+        logger.debug("Could not count integrations; assuming one", exc_info=True)
+    return max(GATE_ACQUIRE_MIN_TIMEOUT, GATE_ACQUIRE_PER_PLATFORM * count)
 
 # TTL cache for the YouTube Music library listing used by
 # prefer_library_thumbnail: every reload did a full
@@ -108,6 +134,11 @@ class PlaylistSyncService:
         reload waits for running adds to drain, and adds that fire during
         the reload are skipped by the keybind's non-blocking acquire and
         reported as "another add in progress".
+
+        The drain budget is :func:`gate_acquire_timeout`, not a fixed
+        one-capture ceiling: the scrobble action keybind holds the same
+        gate across every platform, so with several players installed a
+        reload can legitimately wait minutes.
         """
         if not playlist_id:
             logger.warning("No playlist_id for '%s', cannot reload", playlist_name)
@@ -127,11 +158,12 @@ class PlaylistSyncService:
                 # skips, so there is no circular wait.  A lock that never
                 # frees (e.g. a hung platform API round trip) must not wedge
                 # the reload thread forever - give up after a sane ceiling.
-                if not lock_gate.acquire(timeout=GATE_ACQUIRE_TIMEOUT):
+                timeout = gate_acquire_timeout(self.integrations)
+                if not lock_gate.acquire(timeout=timeout):
                     logger.error(
                         "Could not acquire the flow gate within %.0fs - "
                         "reload aborted for '%s'",
-                        GATE_ACQUIRE_TIMEOUT, playlist_name,
+                        timeout, playlist_name,
                     )
                     on_done(playlist_name, 0, "error", None)
                     return

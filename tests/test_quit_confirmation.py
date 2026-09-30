@@ -14,6 +14,7 @@ import configparser
 import pytest
 
 import utils.config as config
+from controllers import app_controller as app_controller_module
 from controllers.app_controller import AppController, should_confirm_quit
 from ui import dialogs
 
@@ -72,8 +73,11 @@ def choice(monkeypatch):
 
     def _install(answer):
         holder = {"answer": answer, "shown": 0}
+        # Patch where the controller LOOKS the name up: app_controller
+        # imports confirm_quit at module scope, so patching ui.dialogs
+        # alone would leave the controller holding the real dialog.
         monkeypatch.setattr(
-            dialogs,
+            app_controller_module,
             "confirm_quit",
             lambda root: (holder.__setitem__("shown", holder["shown"] + 1)
                           or holder["answer"]),
@@ -185,7 +189,7 @@ class TestQuitAppConfirmation:
         self._enable(monkeypatch)
         answer = {"value": dialogs.QUIT_CANCELLED}
         monkeypatch.setattr(
-            dialogs,
+            app_controller_module,
             "confirm_quit",
             lambda root: answer["value"],
         )
@@ -213,7 +217,7 @@ class TestQuitAppConfirmation:
             controller.quit_app()  # a second request, mid-dialog
             return dialogs.QUIT_CANCELLED
 
-        monkeypatch.setattr(dialogs, "confirm_quit", reentrant)
+        monkeypatch.setattr(app_controller_module, "confirm_quit", reentrant)
         controller.quit_app()
         assert shown["n"] == 1
         assert (app.cleanup_calls, app.quit_calls) == (0, 0)

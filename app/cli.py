@@ -60,6 +60,7 @@ from services.scrobble_service import scrobble_current_song
 from services.song_manager import SongManager
 from utils.config import get_setting
 from utils.i18n import tr, tr_status, trn
+from utils.atomic_json import WRITE_ERRORS
 from utils.logging_config import redact, register_secret, user_log
 from utils.thumbnail import ThumbnailService
 
@@ -625,7 +626,16 @@ def run_del(spec: str) -> int:
         )
         DatabaseManager.delete_playlist_db(name, platform, playlist_id=playlist_id)
         scrobble_log.remove_playlist_entries(platform, playlist_id)
-        duplicate_queue.purge_playlist(platform, playlist_id, name or "")
+        # Best-effort: a stale extra.json entry only points at a playlist
+        # whose DB is already gone, so a failed purge must not abort the
+        # remaining targets (or turn a completed delete into a failure).
+        try:
+            duplicate_queue.purge_playlist(platform, playlist_id, name or "")
+        except WRITE_ERRORS as e:
+            print(
+                tr("cli.purge_failed", platform=platform, error=e),
+                file=sys.stderr,
+            )
         print(tr("cli.deleted_line", number=number, name=name, platform=platform), flush=True)
     return 0
 
@@ -1272,7 +1282,16 @@ def run_logout(platform: str) -> int:
     # Drop the platform's pending duplicate-decisions and scrobble-ledger
     # records (matching integration_manager.uninstall_platform_data), so a
     # later login can't resurface stale decisions / unscrobbles for it.
-    n_pending, n_songs, n_errors = duplicate_queue.purge_platform(platform)
+    # Best-effort: the credentials, registry entries and databases are
+    # already gone, so a failed purge is a warning, not a failed logout.
+    try:
+        n_pending, n_songs, n_errors = duplicate_queue.purge_platform(platform)
+    except WRITE_ERRORS as e:
+        print(
+            tr("cli.purge_failed", platform=platform, error=e),
+            file=sys.stderr,
+        )
+        n_pending = n_songs = n_errors = 0
     if n_pending or n_songs or n_errors:
         items = [
             trn("cli.purge_decisions", n_pending),

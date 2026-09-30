@@ -2,8 +2,6 @@
 ### [Added](#added-1)
 - [Spotify](#spotify)
 - [YouTube Music](#youtube-music)
-- [Last.fm](#lastfm)
-- [ListenBrainz](#listenbrainz)
 - [SoundCloud](#soundcloud)
 - [Deezer](#deezer)
 - [Tidal](#tidal)
@@ -11,7 +9,9 @@
 - [Apple Music](#apple-music)
 - [Amazon Music](#amazon-music-blocked)
 - [Qobuz](#qobuz)
-### [Others](#others)
+### [Others (added)](#others)
+- [Last.fm](#lastfm)
+- [ListenBrainz](#listenbrainz)
 
 ---
 
@@ -46,34 +46,6 @@ Extension getting songs every 5 seconds, so you CAN skip songs fast but it's NOT
 6. Follow instructions given in console (`copy Request Headers -> paste them in console -> Enter -> Ctrl+Z/Ctrl+D -> Enter`). Use Ctrl+C to cancel
 
 It doesn't matter when you load an extension.
-
-### Lastfm
-Lastfm is not supporting playlists through API anymore (only likes & scrobble songs are available)
-
-1. Create an [API account](https://www.last.fm/api/account/create) (Callback URL is not needed)
-2. Copy-paste API Key and Client Secret
-
-- NOTE: I wasn't able to to find API Key and Client Secret anywhere after creating account so save them in password manager or something
-
-### ListenBrainz
-No playlists (only scrobbles) - the same deal as Last.fm.
-
-1. Log into [listenbrainz.org](https://listenbrainz.org/)
-2. Open [Settings](https://listenbrainz.org/settings/) and copy the **User token**
-3. Paste it in:
-    - GUI `Login -> ListenBrainz`
-    - CLI `PLAYLISTMANAGER_LISTENBRAINZ_TOKEN=<token> python -m app --login listenbrainz`
-
-Notes:
-- A logged-in ListenBrainz starts receiving listens immediately, same as Last.fm. Both are switched on
-  and off on their own in `settings.ini`, in their own section - `[listenbrainz] scrobbles = false`
-  stops ListenBrainz while Last.fm keeps working, and Settings -> Integrations -> Scrobbling does the
-  same with a checkbox per service plus Select all / Deselect all. With both on, every listen goes to
-  both services.
-- Removing a song from a playlist deletes the matching listen from every service that received it, but
-  only when ListenBrainz can match the listen back to a recording (it assigns the id the delete needs
-  on submit). If it can't, the listen stays and so does the app's record of it - it never guesses and
-  deletes a different listen.
 
 ### [SoundCloud](https://soundcloud.com/you/apps/new)
 **Requires Artist Pro**
@@ -117,12 +89,6 @@ OAuth page in your browser.
 5. Approve the authorize page that opens, then press a keybind
 
 Notes:
-- **The extension is required, not optional.** Tidal has no now-playing or
-  recently-played endpoint in either API version, and there is no Linux desktop
-  app to read - the web player is the only capture source. When a capture comes
-  up short (the numeric id is only readable when the page was open as the song
-  started), the flow resolves the song by title + artist through catalogue
-  search instead of failing, with the album breaking ties.
 - Tidal's **v1** API is what the plugin talks; the v2 endpoints sit behind
   developer access tiers an app you register yourself is not granted.
 - A playlist write carries that playlist's ETag, so an add cannot land on a
@@ -132,7 +98,9 @@ Notes:
 - A track that is not available in your subscription's country comes back as a
   2xx with nothing added; the app reports that as a failure instead of
   pretending the song landed.
+
 ---
+
 ## Planned
 ### [Apple Music](https://developer.apple.com/documentation/applemusicapi/generating-developer-tokens)
 
@@ -147,4 +115,34 @@ Won’t be added in the near future.
 No official API
 
 # Others
-You can request app/platform that you're using [here](https://github.com/d1pl6/PlaylistManager/issues/new?template=platform-integration-request.md)
+### Lastfm
+Lastfm is not supporting playlists through API anymore (only likes & scrobble songs are available)
+
+1. Create an [API account](https://www.last.fm/api/account/create) (Callback URL is not needed)
+2. Copy-paste API Key and Client Secret
+
+- NOTE: I wasn't able to to find API Key and Client Secret anywhere after creating account so save them in password manager or something
+
+### ListenBrainz
+No playlists (only scrobbles) - the same deal as Last.fm.
+
+1. Log into [listenbrainz.org](https://listenbrainz.org/)
+2. Open [Settings](https://listenbrainz.org/settings/) and copy the **User token**
+3. Paste it in:
+    - GUI `Login -> ListenBrainz`
+    - CLI `PLAYLISTMANAGER_LISTENBRAINZ_TOKEN=<token> python -m app --login listenbrainz`
+
+Notes:
+- A logged-in ListenBrainz starts receiving listens immediately, same as Last.fm. Both are switched on
+  and off on their own in `settings.ini`, in their own section - `[listenbrainz] scrobbles = false`
+  stops ListenBrainz while Last.fm keeps working, and Settings -> Integrations -> Scrobbling does the
+  same with a checkbox per service plus Select all / Deselect all. With both on, every listen goes to
+  both services.
+- Removing a song from a playlist deletes the matching listen from every service that received it, but
+  only when ListenBrainz can match the listen back to a recording (it assigns the id the delete needs
+  on submit). If it can't, the listen stays and so does the app's record of it - it never guesses and
+  deletes a different listen.
+
+
+
+**You can request app/platform that you're using [here](https://github.com/d1pl6/PlaylistManager/issues/new?template=platform-integration-request.md)**

@@ -668,6 +668,56 @@ class TestRunCommands:
         assert cli.run_del("4") == 0
         assert len(_FakeStore._items) == 3
 
+    def test_run_del_survives_an_unwritable_extra_json(self, monkeypatch, capsys):
+        # db/extra.json can fail to persist (full disk, permissions).  The
+        # registry entry and the song DB are already gone, so the delete
+        # must still report success and must not skip the remaining targets.
+        _use_fake_store(monkeypatch, _playlists())
+
+        def _boom(*args, **kwargs):
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(cli.duplicate_queue, "purge_playlist", _boom)
+        assert cli.run_del("1,2") == 0
+        captured = capsys.readouterr()
+        # Both targets were still deleted and reported; only the legacy
+        # entry #4 is left in the registry.
+        assert len(_FakeStore._items) == 2
+        assert all(p.get("playlist_id") != "PL1" for p in _FakeStore._items)
+        assert all(p.get("playlist_id") != "PL2" for p in _FakeStore._items)
+        # The purge failure is surfaced, not swallowed.
+        assert "No space left" in captured.err
+        assert captured.out.count("\n") >= 2
+
+    def test_run_logout_survives_an_unwritable_extra_json(
+        self, monkeypatch, capsys, registry
+    ):
+        # Credentials, registry entries and DBs are already deleted by the
+        # time the duplicate-queue purge runs, so a failed purge must be a
+        # warning - the logout itself succeeded, and the scrobble-ledger
+        # cleanup that follows must still run.
+        purged_ledger = []
+        monkeypatch.setattr(
+            cli.auth_setup,
+            "delete_platform_credentials",
+            lambda platform, **kw: (["token"], []),
+        )
+
+        def _boom(platform):
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(cli.duplicate_queue, "purge_platform", _boom)
+        monkeypatch.setattr(
+            cli.scrobble_log,
+            "remove_platform_entries",
+            lambda platform: purged_ledger.append(platform),
+        )
+
+        assert cli.run_logout("spotify") == 0
+        captured = capsys.readouterr()
+        assert "No space left" in captured.err
+        assert purged_ledger == ["spotify"]
+
     def test_run_refresh_empty_registry(self, monkeypatch):
         _use_fake_store(monkeypatch, [])
         assert cli.run_refresh("1") == 2

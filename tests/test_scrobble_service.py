@@ -4,8 +4,12 @@
 The policy under test: iterate platforms in registry order, skip what
 cannot produce a song (unauthenticated, no plugin, no flow, silent
 capture), stop at the FIRST platform that captures a song, and never
-let one platform's capture/scrobble failure sink the action - the next
-platform gets the chance.
+let one platform's capture/scrobble failure sink the action - a capture
+failure hands the attempt to the next platform.  A captured song whose
+scrobble every backend refuses is a different case: the loop STOPS and
+the song comes back with a ``None`` timestamp, so the caller can tell
+"the service rejected your listen" from "nothing is playing" (both of
+which used to arrive as ``None``).
 
 Also pins the two integration-selection modes: the default registry
 lookup gates on ``is_authenticated()``, while an ``integration_provider``
@@ -211,7 +215,11 @@ class TestScrobbleCurrentSong:
         assert silent.calls == 1 and live.calls == 1
         assert scrobbler.calls == [SONG]
 
-    def test_scrobble_failure_tries_next_platform(self):
+    def test_scrobble_failure_does_not_re_capture_from_another_platform(self):
+        # A song WAS captured and the scrobble was refused.  The loop must
+        # stop: re-capturing from a second player can only report a
+        # different song (or scrobbled the same one twice), and reporting
+        # None would tell the user nothing is playing.
         song_a = {"title": "A"}
         song_b = {"title": "B"}
         flows = {"youtube_music": _FakeFlow(song_data=song_a), "spotify": _FakeFlow(song_data=song_b)}
@@ -219,9 +227,7 @@ class TestScrobbleCurrentSong:
 
         def _flaky(song):
             scrobbled.append(song)
-            if song == song_a:
-                raise RuntimeError("Last.fm refused")
-            return 42
+            raise RuntimeError("Last.fm refused")
 
         scrobbler = _FakeScrobbler()
         scrobbler.scrobble = _flaky
@@ -233,26 +239,25 @@ class TestScrobbleCurrentSong:
             _flow_provider(flows),
             scrobbler,
         )
-        assert result == (song_b, 42)
-        assert scrobbled == [song_a, song_b]
+        assert result == (song_a, None)  # captured, but nothing accepted it
+        assert scrobbled == [song_a]
+        assert flows["spotify"].calls == 0
 
-    def test_all_platforms_failing_scrobble_returns_none(self):
-        # A scrobble rejection must not fabricate a success: when every
-        # captured song is refused, the orchestration reports None.
+    def test_all_platforms_failing_scrobble_reports_the_captured_song(self):
+        # A scrobble rejection must not fabricate a success, and must not be
+        # reported as "no song found" either: the caller has to be able to
+        # tell the two apart.
         song_a = {"title": "A"}
-        song_b = {"title": "B"}
-        flows = {"youtube_music": _FakeFlow(song_data=song_a), "spotify": _FakeFlow(song_data=song_b)}
+        flows = {"youtube_music": _FakeFlow(song_data=song_a)}
         scrobbler = _FakeScrobbler(exc=RuntimeError("Last.fm refused"))
         result = scrobble_service.scrobble_current_song(
-            _FakeIntegrations(
-                {"youtube_music": _FakeIntegration(), "spotify": _FakeIntegration()}
-            ),
-            _FakeRegistry(ids=("youtube_music", "spotify")),
+            _FakeIntegrations({"youtube_music": _FakeIntegration()}),
+            _FakeRegistry(ids=("youtube_music",)),
             _flow_provider(flows),
             scrobbler,
         )
-        assert result is None
-        assert len(scrobbler.calls) == 2
+        assert result == (song_a, None)
+        assert len(scrobbler.calls) == 1
 
     def test_every_backend_gets_the_song(self):
         # Two services switched on, one captured song, both scrobbled - the
@@ -282,10 +287,11 @@ class TestScrobbleCurrentSong:
         assert result == (SONG, 222)
         assert live.calls == [SONG]
 
-    def test_every_backend_failing_tries_the_next_platform(self):
-        # Nothing accepted, so the pre-existing retry kicks in: the next
-        # source platform gets its own capture + its own attempt at each
-        # service.  Two platforms x two backends = four calls.
+    def test_every_backend_failing_reports_the_captured_song(self):
+        # Nothing accepted the listen.  The captured song is still returned
+        # (with a None timestamp) so the caller reports a failed scrobble
+        # rather than a silent no-op, and the second platform is NOT
+        # captured from: one song, one attempt per backend.
         flows = {
             "youtube_music": _FakeFlow(song_data={"title": "A"}),
             "spotify": _FakeFlow(song_data={"title": "B"}),
@@ -299,8 +305,21 @@ class TestScrobbleCurrentSong:
             _flow_provider(flows),
             [dead, dead],
         )
-        assert result is None
-        assert len(dead.calls) == 4
+        assert result == ({"title": "A"}, None)
+        assert len(dead.calls) == 2
+        assert flows["spotify"].calls == 0
+
+    def test_no_backend_at_all_reports_the_captured_song(self):
+        # Same contract when the backend list is empty (every platform
+        # switched off): the song was playing, nothing recorded it.
+        flows = {"spotify": _FakeFlow(song_data=SONG)}
+        result = scrobble_service.scrobble_current_song(
+            _FakeIntegrations({"spotify": _FakeIntegration()}),
+            _FakeRegistry(ids=("spotify",)),
+            _flow_provider(flows),
+            [],
+        )
+        assert result == (SONG, None)
 
     def test_capture_failure_tries_next_platform(self):
         broken = _FakeFlow(song_data=SONG, exc=RuntimeError("receiver down"))

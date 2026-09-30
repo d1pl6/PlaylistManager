@@ -283,14 +283,26 @@ def set_active(name: str) -> None:
     """Switch the active profile (persists to disk).
 
     The change takes effect on the *next* app launch (restart required).
+
+    Rolls the in-memory pointer back if the persist fails: ``_active`` is
+    what every ``db_dir()``/``cfg_dir()``/``auth_dir()`` call in this
+    process resolves through, so leaving it pointed at a profile whose
+    ``active`` file never got written would silently read and write the
+    wrong profile's data for the rest of the session - exactly the drift
+    the caller is being told did not happen.
     """
     with _lock:
         profiles = _load_profiles()
         if name not in profiles.get("profiles", {}):
             raise ValueError(f"Profile {name!r} does not exist")
         global _active
+        previous = _active
         _active = name
-        _persist_active()
+        try:
+            _persist_active()
+        except Exception:
+            _active = previous
+            raise
 
 
 # ---------------------------------------------------------------------------

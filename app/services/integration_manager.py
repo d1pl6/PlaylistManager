@@ -38,6 +38,7 @@ from plugin_loader import PluginRegistry
 from services import auth_setup, duplicate_queue, plugin_signing
 from services import credential_store, profile_store, scrobble_log
 from utils.i18n import tr
+from utils.atomic_json import WRITE_ERRORS
 from services.database import DatabaseManager
 from services.playlist_store import PlaylistStore
 
@@ -307,17 +308,32 @@ def download_integration(platform_id: str) -> List[Path]:
                     # the swap can never leave the platform with no
                     # files at all.
                     backup = dst.parent / f".{dst.name}.old"
-                    if dst.exists():
-                        if backup.exists():
-                            shutil.rmtree(backup, ignore_errors=True)
-                        shutil.move(str(dst), str(backup))
+                    if backup.exists():
+                        shutil.rmtree(backup, ignore_errors=True)
                     try:
+                        # INSIDE the try: parking the old install is itself
+                        # a filesystem operation that can fail (a full disk,
+                        # a read-only integrations/, an antivirus lock on
+                        # Windows).  If the park raised with the restore
+                        # outside the handler, the platform was left with no
+                        # installation and the staging copy thrown away.
+                        if dst.exists():
+                            shutil.move(str(dst), str(backup))
                         staging.rename(dst)
                     except OSError:
-                        # Restore the parked installation so the
-                        # platform stays usable.
-                        if backup.exists():
-                            shutil.move(str(backup), str(dst))
+                        # Restore the parked installation so the platform
+                        # stays usable.  Only when the swap is what failed:
+                        # a half-done park can leave `dst` in place, and
+                        # overwriting it would compound the damage.
+                        if backup.exists() and not dst.exists():
+                            try:
+                                shutil.move(str(backup), str(dst))
+                            except OSError as restore_err:
+                                logger.error(
+                                    "Could not restore %s from %s after a "
+                                    "failed install: %s",
+                                    dst, backup, restore_err,
+                                )
                         raise
                     if backup.exists():
                         shutil.rmtree(backup, ignore_errors=True)
@@ -540,7 +556,17 @@ def uninstall_platform_data(
 
     report["databases"] = DatabaseManager.delete_platform_databases(platform_id)
 
-    n_pending, n_songs, n_errors = duplicate_queue.purge_platform(platform_id)
+    # Best-effort, like every other step above: a stale extra.json entry is
+    # cosmetic (it points at a playlist/DB that is already gone), while
+    # letting the raise escape would abort the report and strand the plugin
+    # directory + scrobble-ledger rows that come after this.
+    try:
+        n_pending, n_songs, n_errors = duplicate_queue.purge_platform(platform_id)
+    except WRITE_ERRORS as e:
+        logger.warning(
+            "Failed to purge duplicate-queue records for %s: %s", platform_id, e
+        )
+        n_pending = n_songs = n_errors = 0
     report["pending"], report["songs"], report["errors"] = (
         n_pending,
         n_songs,

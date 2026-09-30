@@ -155,6 +155,23 @@ class TestMisc:
         assert store.PlaylistStore.playlist_still_registered("Chill", "spotify", "pl1") is True
         assert store.PlaylistStore.playlist_still_registered("Gone", "spotify", "nope") is False
 
+    def test_module_level_alias_still_imports(self, store):
+        # Plugin repos are separate and downloaded at runtime, so a service
+        # symbol their flow.py imports is part of the plugin API.  The
+        # free function was the pre-staticmethod spelling; removing it broke
+        # every published plugin at IMPORT time (killing the whole hotkey
+        # path), not just the liveness check.
+        store.PlaylistStore.add_playlist("Chill", "spotify", "pl1")
+        assert store.playlist_still_registered("Chill", "spotify", "pl1") is True
+        assert store.playlist_still_registered("Gone", "spotify", "nope") is False
+
+    def test_module_level_alias_matches_the_staticmethod(self, store):
+        store.PlaylistStore.add_playlist("Chill", "spotify", "pl1")
+        for args in (("Chill", "spotify", "pl1"), ("Gone", "spotify", "nope")):
+            assert store.playlist_still_registered(*args) == (
+                store.PlaylistStore.playlist_still_registered(*args)
+            )
+
     def test_reload_after_external_change(self, store, monkeypatch):
         import time
         # Simulate another process rewriting the file - cache TTL expiry

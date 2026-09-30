@@ -536,3 +536,32 @@ class PlaylistStore:
             )
         except Exception:
             return True
+
+
+# ---------------------------------------------------------------------------
+# Deprecated module-level alias - plugin API compatibility
+# ---------------------------------------------------------------------------
+#
+# Platform plugins are separate repos downloaded at runtime (docs/plugins.md),
+# so a service-layer symbol their ``flow.py`` imports is part of the plugin
+# API.  Every add-flow calls ``playlist_still_registered`` before its
+# platform write; the version installed alongside an older core would fail at
+# IMPORT time, not degrade - the whole hotkey path would be dead.
+#
+# It became a staticmethod in the "bug fixes, optimization" commit, but that
+# commit could only rewrite the call sites in THIS repo.  Keep the free
+# function until docs/plugins.md declares a minimum plugin ``api_version``
+# and every published plugin has been released against it.
+
+def playlist_still_registered(
+    playlist_name: str, platform: str, playlist_id: str | None
+) -> bool:
+    """Deprecated - use :meth:`PlaylistStore.playlist_still_registered`.
+
+    Thin forwarder kept so plugin repos built against the pre-staticmethod
+    core keep importing.  Behaviour is identical.
+    """
+    return PlaylistStore.playlist_still_registered(
+        playlist_name, platform, playlist_id
+    )
+

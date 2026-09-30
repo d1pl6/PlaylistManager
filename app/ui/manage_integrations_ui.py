@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, cast
 from plugin_loader import PluginRegistry
 from services import duplicate_queue, health_check, integration_manager
 from ui.scrollable import ScrollableFrame
+from utils.atomic_json import WRITE_ERRORS
 from utils.i18n import tr, trn
 from utils.icons import IconService
 from utils.scaling import ui_font
@@ -584,7 +585,12 @@ def show_manage_dialog(
             errors.append("card teardown")
         try:
             if keybind_controller is not None:
-                keybind_controller.update_credentials(refreshed_ids=[pid])
+                # force_stop_platform, NOT update_credentials: a re-auth
+                # parks a mid-capture receiver in _stale_receivers and
+                # reclaims it on the next _build_flow, but an uninstalled
+                # platform is never built again - the parked receiver would
+                # hold its port for the rest of the process.
+                keybind_controller.force_stop_platform(pid)
         except Exception:
             logger.exception("Flow teardown failed for %s", pid)
             errors.append("flow teardown")
@@ -613,8 +619,15 @@ def show_manage_dialog(
                 report = integration_manager.uninstall_platform_data(pid, plugin=plugin)
                 # Re-purge duplicate/error records: a flow that aborted the
                 # moment the receiver/flow stopped may have written an
-                # error between the first purge and now.
-                duplicate_queue.purge_platform(pid)
+                # error between the first purge and now.  Best-effort - the
+                # uninstall already succeeded, so a failed re-purge must not
+                # be reported as a failed uninstall.
+                try:
+                    duplicate_queue.purge_platform(pid)
+                except WRITE_ERRORS as e:
+                    logger.warning(
+                        "Re-purge of duplicate records failed for %s: %s", pid, e
+                    )
             except Exception as e:
                 logger.exception("Uninstall failed for %s", pid)
                 error = str(e)
@@ -897,7 +910,15 @@ def show_manage_dialog(
                 plugin = plugins.get(pid)
                 try:
                     integration_manager.uninstall_platform_data(pid, plugin=plugin)
-                    duplicate_queue.purge_platform(pid)
+                    try:
+                        duplicate_queue.purge_platform(pid)
+                    except WRITE_ERRORS as e:
+                        # Best-effort re-purge (see _uninstall_single): the
+                        # platform's data is already gone, so a stale
+                        # extra.json row is not an uninstall failure.
+                        logger.warning(
+                            "Re-purge of duplicate records failed for %s: %s", pid, e
+                        )
                 except Exception as e:
                     logger.exception("Uninstall failed for %s", pid)
                     failures.append(f"{_display_name(plugin, pid)}: {e}")

@@ -1067,9 +1067,6 @@ class SongManager:
         """
         if not query or not query.strip():
             return []
-        # Escape SQL LIKE wildcards in user input.
-        safe = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        pattern = f"%{safe}%"
         try:
             with self.db_manager.get_connection(
                 playlist_name, platform=platform, playlist_id=playlist_id
@@ -1078,13 +1075,21 @@ class SongManager:
                 if query.strip().isascii():
                     # SQLite LIKE is ASCII-case-insensitive, so the SQL
                     # pre-filter is exact for pure-ASCII queries.
+                    # Escape SQL LIKE wildcards in user input (only this
+                    # branch binds a LIKE pattern).
+                    safe = (
+                        query.strip()
+                        .replace("\\", "\\\\")
+                        .replace("%", "\\%")
+                        .replace("_", "\\_")
+                    )
                     cursor.execute(
                         "SELECT id, title, artists, thumbnail_url, duration, track_id "
                         "FROM songs "
                         "WHERE title LIKE ? ESCAPE '\\' "
                         "OR artists LIKE ? ESCAPE '\\' "
                         "ORDER BY added_at DESC, id DESC LIMIT ?",
-                        (pattern, pattern, limit),
+                        (f"%{safe}%", f"%{safe}%", limit),
                     )
                     rows = cursor.fetchall()
                 else:
@@ -1135,23 +1140,27 @@ class SongManager:
                     rows = []
                     if cached_rows is not None:
                         for folded_title, folded_artists_j, row in cached_rows:
+                            # Checked BEFORE the match test: a title hit
+                            # `continue`s past the trailing check, which
+                            # used to let a title-only match set past
+                            # `limit` and keep scanning the whole table.
+                            if len(rows) >= limit:
+                                break
                             if folded in folded_title:
                                 rows.append(row)
                                 continue
                             if folded in folded_artists_j:
                                 rows.append(row)
-                            if len(rows) >= limit:
-                                break
                     else:
                         # Table too big to cache (memory guard) - old path.
                         for row in all_rows:
+                            if len(rows) >= limit:
+                                break
                             if folded in row[1].casefold():
                                 rows.append(row)
                                 continue
                             if folded in _casefold_artists(row[2]):
                                 rows.append(row)
-                            if len(rows) >= limit:
-                                break
                 songs = []
                 for row in rows[:limit]:
                     songs.append({

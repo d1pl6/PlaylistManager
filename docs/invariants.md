@@ -188,8 +188,9 @@ are resolved explicitly:
 - **`controllers` and `ui` share a rank**, so an import between them is
   lateral, not upward — `app_controller` delegating the dialogs to the UI
   layer is legal, and `card_grid`/`main_window` importing
-  `controllers.callbacks` for a type is legal. A `services` → `ui` or
-  `services` → `controllers` import *is* upward and is caught.
+  `controllers.keybind_registry` for `KeybindCallbacks` is legal. A
+  `services` → `ui` or `services` → `controllers` import *is* upward and
+  is caught.
 - **`app/`'s top level is not one layer.** The four roots
   (`__main__.py`, `main.py`, `app.py`, `cli.py`) sit above everything and
   may reach any layer; `plugin_loader.py` and `_version.py` are shared
@@ -251,8 +252,11 @@ the bare `config` the same table prefers elsewhere. A name that resolves to
 nothing (`integrations.*`, which lives in another repo) is ignored.
 
 An import inside `if TYPE_CHECKING:` is **not** a documented edge. It
-annotates rather than runs, and `modules.md` records the one that exists
-(`keybind_registry` → `callbacks`) by hand in the row's "Used by" column.
+annotates rather than runs. Nothing in `app/` relies on that any more —
+`KeybindCallbacks` used to sit in a `controllers/callbacks.py` of its own,
+which meant `keybind_registry` had to name it under `TYPE_CHECKING`; both
+ends already import the registry, so folding the class back in removed
+both the module and the special case.
 
 **Known limits.** The reverse direction — a name in a "Uses" cell that is no
 longer imported — is not checked, because the sibling "Used by" column is

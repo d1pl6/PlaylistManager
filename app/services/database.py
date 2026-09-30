@@ -272,8 +272,14 @@ class DatabaseManager:
         try:
             conn = sqlite3.connect(str(db_path))
             conn.row_factory = sqlite3.Row  # Enable column access by name
-            self._init_playlist_database(conn)
+            # Pragmas FIRST.  _init_playlist_database() runs DDL (CREATE
+            # TABLE / CREATE INDEX / COMMIT), which needs the write lock -
+            # and without busy_timeout already installed, SQLite falls back
+            # to its 5s default and a connection open that collides with a
+            # concurrent flow thread or a CLI process holding that lock
+            # raised "database is locked" straight out of the schema init.
             _set_pragmas(conn)
+            self._init_playlist_database(conn)
             logger.debug("Connected to playlist database: %s", db_path)
             return conn
         except sqlite3.Error as e:

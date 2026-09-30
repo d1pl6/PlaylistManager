@@ -460,6 +460,39 @@ class TestDownloadIntegration:
         assert not (base_dir / ".youtube_music.old").exists()
         assert not (base_dir / ".youtube_music.install_tmp").exists()
 
+    def test_park_failure_leaves_the_installation_intact(
+        self, monkeypatch, base_dir
+    ):
+        # Moving the old install aside is itself a filesystem operation
+        # and can fail (full disk, read-only integrations/, a Windows AV
+        # lock).  It must be inside the restore handler, or the platform
+        # would be left with no files and the staging copy thrown away.
+        dst = base_dir / "youtube_music"
+        dst.mkdir()
+        (dst / "marker.txt").write_text("old", encoding="utf-8")
+
+        _serve(monkeypatch, _repo_tarball("youtube_music"))
+
+        real_move = integration_manager.shutil.move
+        state = {"raised": False}
+
+        def flaky_move(src, dst_arg, *args, **kwargs):
+            # Fail the PARK (dst -> .dst.old), not the restore.
+            if not state["raised"] and Path(src) == dst:
+                state["raised"] = True
+                raise PermissionError("simulated park failure")
+            return real_move(src, dst_arg, *args, **kwargs)
+
+        monkeypatch.setattr(integration_manager.shutil, "move", flaky_move)
+
+        with pytest.raises(PermissionError, match="simulated park failure"):
+            integration_manager.download_integration("youtube_music")
+
+        # Nothing was destroyed: the old install is exactly where it was.
+        assert (dst / "marker.txt").read_text(encoding="utf-8") == "old"
+        assert not (base_dir / ".youtube_music.old").exists()
+        assert not (base_dir / ".youtube_music.install_tmp").exists()
+
     # ------------------------------------------------------------------
     # Signature verification (fail-closed by default)
     # ------------------------------------------------------------------
@@ -870,6 +903,57 @@ class TestUninstallBestEffort:
         report = integration_manager.uninstall_platform_data("youtube_music")
         assert report["credentials"] == 0
         assert locked.exists()
+
+    def test_duplicate_purge_failure_does_not_abort_the_uninstall(
+        self, base_dir, monkeypatch, tmp_path
+    ):
+        # extra.json can be unwritable (full disk, permissions).  A stale
+        # duplicate record is cosmetic next to a half-done uninstall, so
+        # the raise must not skip the scrobble-ledger purge or the plugin
+        # directory removal that follow it.
+        removed = []
+        _stub_downstream(monkeypatch)
+
+        def _boom(pid):
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(
+            integration_manager.duplicate_queue, "purge_platform", _boom
+        )
+        monkeypatch.setattr(
+            integration_manager.scrobble_log,
+            "remove_platform_entries",
+            lambda pid: removed.append(pid),
+        )
+        monkeypatch.setattr(
+            integration_manager,
+            "_remove_plugin_directories",
+            lambda pid: 1,
+        )
+
+        report = integration_manager.uninstall_platform_data("youtube_music")
+
+        assert report["pending"] == 0
+        assert report["songs"] == 0
+        assert report["errors"] == 0
+        # The steps AFTER the failed purge still ran.
+        assert removed == ["youtube_music"]
+        assert report["plugin_dirs"] == 1
+
+    def test_typeerror_from_a_bad_record_is_also_tolerated(
+        self, base_dir, monkeypatch
+    ):
+        # json.dump raises TypeError on an unserialisable value - a real
+        # (if unlikely) way for a purge to fail, and the same class of
+        # best-effort bookkeeping.
+        _stub_downstream(monkeypatch)
+        monkeypatch.setattr(
+            integration_manager.duplicate_queue,
+            "purge_platform",
+            lambda pid: (_ for _ in ()).throw(TypeError("not serialisable")),
+        )
+        report = integration_manager.uninstall_platform_data("youtube_music")
+        assert (report["pending"], report["songs"], report["errors"]) == (0, 0, 0)
 
 
 class TestUninstallRealData:

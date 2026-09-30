@@ -17,7 +17,7 @@ PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 PLATFORM_SPOTIFY = "spotify"
 PLATFORM_SOUNDCLOUD = "soundcloud"
 PLATFORM_DEEZER = "deezer"
-from controllers.callbacks import KeybindCallbacks
+from controllers.keybind_registry import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
 from services import duplicate_queue
 from services import health_check
@@ -31,6 +31,7 @@ from services.song_manager import SongManager
 from utils.icons import IconService
 from utils.scaling import px, ui_font
 from utils.i18n import tr, trn, tr_status
+from utils.atomic_json import WRITE_ERRORS
 from ui.activity_window import show_activity_window
 from ui.card_grid import CardGridManager
 from ui.notification_bar import NotificationBar
@@ -991,10 +992,11 @@ on_like_button_change=self._apply_like_button_visibility,
         """Dispatcher passed to the activity window (runs on UI thread)."""
         try:
             self._dispatch_activity_song(record, action)
-        except OSError as e:
-            # extra.json persistence failed (disk full/permissions) - the
-            # action itself (platform add / local delete) already ran, so
-            # degrade to a log instead of a raw Tk traceback.
+        except WRITE_ERRORS as e:
+            # extra.json persistence failed (disk full/permissions, or a
+            # value json.dump cannot serialise) - the action itself (platform
+            # add / local delete) already ran, so degrade to a log instead
+            # of a raw Tk traceback.
             logger.error("Activity action '%s' could not be persisted: %s", action, e)
             self.refresh_activity_badge()
 

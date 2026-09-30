@@ -89,6 +89,42 @@ class TestSetActive:
         with pytest.raises(ValueError):
             sandbox.set_active("does_not_exist")
 
+    def test_set_active_rolls_back_when_the_persist_fails(self, sandbox, monkeypatch):
+        # _active is what every db_dir()/cfg_dir()/auth_dir() call in the
+        # process resolves through.  Leaving it pointed at a profile whose
+        # active file was never written would silently read and write the
+        # wrong profile's data for the rest of the session - exactly the
+        # drift the caller was just told did not happen.
+        sandbox.create("work", logins=False, playlists=False, settings=False)
+        before = sandbox.active_profile()
+
+        def _boom():
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(sandbox, "_persist_active", _boom)
+        with pytest.raises(OSError):
+            sandbox.set_active("work")
+
+        assert sandbox.active_profile() == before
+        assert sandbox.db_dir() == sandbox._DEFAULT_DB_DIR
+
+    def test_set_active_rollback_does_not_persist(self, sandbox, monkeypatch):
+        # Belt and braces: the restore must not itself write anything.
+        sandbox.create("work", logins=False, playlists=False, settings=False)
+        writes = []
+        real = sandbox._persist_active
+
+        def _counting():
+            writes.append(1)
+            real()
+
+        monkeypatch.setattr(sandbox, "_persist_active", _counting)
+        sandbox.set_active("work")
+        assert writes == [1]
+        sandbox._active = ""
+        sandbox.initialize()
+        assert sandbox.active_profile() == "work"
+
 
 class TestPathResolution:
     def test_shared_dirs_when_buckets_off(self, sandbox):

@@ -291,8 +291,8 @@ class _Harness:
     def __init__(self, port, receiver_running=False):
         import threading
 
-        from controllers.callbacks import KeybindCallbacks
         from controllers.keybind_controller import KeybindController
+        from controllers.keybind_registry import KeybindCallbacks
 
         self.statuses = []
         self.resets = []
@@ -412,4 +412,110 @@ class TestKeybindPreflight:
         h.keybind()
         assert h.flow_ran.wait(timeout=5) is True
         assert "receiver_port_busy" not in h.statuses
+
+
+# ---------------------------------------------------------------------------
+# Uninstall teardown: force_stop_platform
+# ---------------------------------------------------------------------------
+
+
+class _StoppableReceiver:
+    def __init__(self):
+        self.stopped = 0
+
+    def stop(self):
+        self.stopped += 1
+
+
+class _BoomReceiver:
+    def stop(self):
+        raise OSError("address already in use")
+
+
+def _controller_with_parked_receiver():
+    """A controller whose platform receiver is parked in _stale_receivers.
+
+    That is the state uninstall teardown can land in: a re-auth happened
+    while a flow held ``_flow_busy``, so ``update_credentials`` MOVED the
+    receiver out of _receivers into _stale_receivers instead of tearing it
+    down under the capture.
+    """
+    from controllers.keybind_controller import KeybindController
+
+    kc = KeybindController(
+        SimpleNamespace(get=lambda pid: None),
+        {},
+    )
+    parked = _StoppableReceiver()
+    kc._stale_receivers["tp"] = parked
+    kc._flows["tp"] = object()
+    return kc, parked
+
+
+class TestForceStopPlatform:
+    def test_stops_a_parked_receiver_immediately(self):
+        # An uninstalled platform is never rebuilt, so _build_flow - the
+        # normal reclaim path for a parked receiver - never runs.  The
+        # uninstall must stop it itself or the port stays bound until exit.
+        kc, parked = _controller_with_parked_receiver()
+        kc.force_stop_platform("tp")
+        assert parked.stopped == 1
+
+    def test_stops_a_live_receiver(self):
+        kc = _controller_with_parked_receiver()[0]
+        live = _StoppableReceiver()
+        kc._receivers["tp"] = live
+        kc.force_stop_platform("tp")
+        assert live.stopped == 1
+        assert "tp" not in kc._receivers
+
+    def test_drops_the_flow_and_both_receiver_entries(self):
+        kc, _ = _controller_with_parked_receiver()
+        kc.force_stop_platform("tp")
+        assert "tp" not in kc._receivers
+        assert "tp" not in kc._stale_receivers
+        assert "tp" not in kc._flows
+
+    def test_a_stopping_failure_does_not_leave_the_entry(self):
+        # Teardown is best-effort but must not wedge: the next reinstall
+        # has to be able to build a fresh receiver.
+        kc = _controller_with_parked_receiver()[0]
+        kc._receivers["tp"] = _BoomReceiver()
+        kc.force_stop_platform("tp")
+        assert "tp" not in kc._receivers
+        assert "tp" not in kc._stale_receivers
+
+    def test_unknown_platform_is_a_no_op(self):
+        kc, parked = _controller_with_parked_receiver()
+        kc.force_stop_platform("other")
+        assert parked.stopped == 0
+        assert kc._stale_receivers["tp"] is parked  # untouched
+
+    def test_stopping_releases_the_init_lock(self):
+        # _init_lock is also taken by _ensure_initialized; holding it on
+        # return would deadlock every later keybind.
+        kc, _ = _controller_with_parked_receiver()
+        kc.force_stop_platform("tp")
+        acquired = kc._init_lock.acquire(blocking=False)
+        if acquired:
+            kc._init_lock.release()
+        assert acquired
+
+    def test_update_credentials_parked_it_because_a_flow_was_busy(self):
+        # Pins the precondition the uninstall path exists for: with the
+        # gate held, update_credentials parks rather than stops.
+        kc, parked = _controller_with_parked_receiver()
+        kc._receivers = {}
+        kc._stale_receivers = {}
+        assert kc._flow_busy.acquire(blocking=False)
+        try:
+            kc._receivers["tp"] = parked
+            kc.update_credentials(refreshed_ids=["tp"])
+        finally:
+            kc._flow_busy.release()
+        assert kc._stale_receivers["tp"] is parked
+        assert parked.stopped == 0
+        # ...and the uninstall reclaims exactly what that parked.
+        kc.force_stop_platform("tp")
+        assert parked.stopped == 1
 

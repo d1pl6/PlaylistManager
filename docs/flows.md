@@ -197,7 +197,15 @@ eligible for the scrobble paths and ineligible for the heart.
   then hands `song_data` to every selected backend's `scrobble()`, each of
   which returns the timestamp the service ACCEPTED (an ignored/rejected
   scrobble returns `None` and is a silent no-op for that service only - one
-  dead service never costs the others their listen). The add paths record
+  dead service never costs the others their listen). The loop has three
+  distinct outcomes, and the callers branch on them: `None` = nothing was
+  playing, `(song, None)` = a song WAS playing and every backend refused
+  it, `(song, ts)` = scrobbled. A *capture* failure (no song from a
+  platform) falls through to the next source platform; a captured song
+  every backend refused does not - re-capturing could only report a
+  different song, or scrobble the same one twice, and reporting `None`
+  would tell the user their player is idle when their scrobble service is
+  what failed. The add paths record
   that timestamp - plus the **ids of the services that accepted it** - in
   the scrobble ledger (`services/scrobble_log.py`, `db/scrobbles.json`
   schema v3, keyed by platform + playlist_id + local song_id). `-s` prints

@@ -301,6 +301,7 @@ DEFAULT_STRINGS: dict[str, str] = {
     "cli.purge_songs.other": "{count} remembered songs",
     "cli.purge_errors.one": "{count} error",
     "cli.purge_errors.other": "{count} errors",
+    "cli.purge_failed": "warning: could not purge {platform} duplicate records: {error}",
     "cli.uninstall_credentials.one": "{count} credential",
     "cli.uninstall_credentials.other": "{count} credentials",
     "cli.uninstall_playlists.one": "{count} playlist",

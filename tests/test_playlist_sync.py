@@ -538,7 +538,9 @@ class TestReloadDatabaseThreaded:
         service.reload_database("Dance", "spotify", "SP1", done, gate=gate)
         assert done.calls == [(("Dance", 0, "error", None), {})]
         assert gate.acquire_calls == 1
-        assert gate.timeout_seen == playlist_sync.GATE_ACQUIRE_TIMEOUT
+        assert gate.timeout_seen == playlist_sync.gate_acquire_timeout(
+            service.integrations
+        )
         assert gate.released == 0
         assert stub_warm_cache.calls == []
 
@@ -579,3 +581,46 @@ class TestReloadDatabaseThreaded:
         service.reload_database_sync = _Stub((1, "ok", "tb"))
         service.reload_database("Dance", "spotify", "SP1", done)
         assert done.calls == [(("Dance", 1, "ok", "tb"), {})]
+
+
+class TestGateAcquireTimeout:
+    """The drain budget must scale with how many platforms a flow can hold.
+
+    The scrobble action keybind captures from every platform in turn under
+    the SAME ``_flow_busy`` gate, so a single-capture ceiling aborts a
+    healthy reload once a few players are installed.
+    """
+
+    def test_single_platform_gets_the_floor(self):
+        integ = SimpleNamespace(get_all=lambda: {"spotify": object()})
+        assert playlist_sync.gate_acquire_timeout(integ) == (
+            playlist_sync.GATE_ACQUIRE_MIN_TIMEOUT
+        )
+
+    def test_many_platforms_scale_the_budget(self):
+        integ = SimpleNamespace(
+            get_all=lambda: {f"p{i}": object() for i in range(5)}
+        )
+        assert playlist_sync.gate_acquire_timeout(integ) == (
+            playlist_sync.GATE_ACQUIRE_PER_PLATFORM * 5
+        )
+
+    def test_registry_without_get_all_falls_back_to_the_floor(self):
+        # A duck-typed registry must not raise inside the worker thread.
+        assert playlist_sync.gate_acquire_timeout(
+            SimpleNamespace(get=lambda p: None)
+        ) == playlist_sync.GATE_ACQUIRE_MIN_TIMEOUT
+
+    def test_get_all_raising_falls_back_to_the_floor(self):
+        def _boom():
+            raise RuntimeError("registry gone")
+
+        assert playlist_sync.gate_acquire_timeout(
+            SimpleNamespace(get_all=_boom)
+        ) == playlist_sync.GATE_ACQUIRE_MIN_TIMEOUT
+
+    def test_empty_registry_is_treated_as_one_platform(self):
+        integ = SimpleNamespace(get_all=dict)
+        assert playlist_sync.gate_acquire_timeout(integ) == (
+            playlist_sync.GATE_ACQUIRE_MIN_TIMEOUT
+        )

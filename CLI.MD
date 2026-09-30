@@ -71,19 +71,6 @@ playlistmanager --logout spotify            # delete spotify.json + registry ent
   callback on 127.0.0.1 for a few minutes, and exchanges the code for a refresh token. The
   credentials are verified against the platform before anything is written. Headless is fine - the
   URL is printed, so open it on whatever machine has a browser.
-- Both Last.fm and ListenBrainz are scrobble backends. Each one is switched on and off on its own
-  in settings.ini, in that platform's own section:
-
-      [lastfm]
-      scrobbles = true
-      [listenbrainz]
-      scrobbles = false
-
-  The key is absent by default, meaning enabled, so a freshly logged-in backend starts receiving
-  listens immediately and turning one off is always deliberate. Every enabled backend gets the
-  same listen (one failing never costs the others theirs), and Settings -> Integrations ->
-  Scrobbling exposes the same thing as a checkbox per backend plus Select all / Deselect all -
-  the CLI reads exactly those keys.
 - Passing a secret: each credential is read in one order, flag then env var then prompt. An
   explicit flag wins so a script can override an exported variable for a single run, and a
   blank env var counts as unset.
@@ -130,7 +117,6 @@ playlistmanager -p refresh all                # refresh every playlist
   YouTube/YouTube Music URLs: `.../playlist?list=<id>` on music.youtube.com or youtube.com.
   Tidal URLs: `https://tidal.com/browse/playlist/<id>` (a plain `https://tidal.com/playlist/<id>`
   resolves to the same thing).
-  Song URLs (`.../watch?v=...`) are rejected with a hint - use `-a` for the current song.
 - A playlist name that is pure digits (e.g. `"123"`) is always read as an order number,
   and names containing commas cannot be addressed by name - use `--list` numbers or the
   playlist URL for those.

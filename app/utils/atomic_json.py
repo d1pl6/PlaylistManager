@@ -16,6 +16,14 @@ import os
 import tempfile
 from pathlib import Path
 
+# The error types :func:`atomic_json_write` propagates.  Callers that must
+# TOLERATE a failed persist - best-effort bookkeeping, teardown that has to
+# finish its remaining steps - catch this tuple instead of each one
+# re-deciding between ``OSError`` and ``TypeError``.  Catching the tuple
+# (rather than bare ``Exception``) keeps an unrelated bug in a caller's own
+# logic from being silently absorbed as "the disk was full".
+WRITE_ERRORS = (OSError, TypeError)
+
 
 def atomic_json_write(path: Path, data: object) -> None:
     """Atomically write *data* to *path* (unique temp file + rename).
@@ -29,7 +37,7 @@ def atomic_json_write(path: Path, data: object) -> None:
     Raises the underlying error (``OSError`` from the filesystem, or
     ``TypeError`` from ``json.dump``) on failure - the temp file is
     cleaned up first.  Callers that cannot surface an error (best-effort
-    bookkeeping) wrap this themselves.
+    bookkeeping) catch :data:`WRITE_ERRORS` themselves.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".json")

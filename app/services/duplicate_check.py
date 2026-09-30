@@ -29,6 +29,7 @@ import unicodedata
 from collections.abc import Iterable
 
 from services import duplicate_queue
+from utils.atomic_json import WRITE_ERRORS
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ UNKNOWN_ARTIST = "Unknown Artist"
 # Drift band for upload-length differences beyond [duplicate_check]
 # duration_tolerance: distinct uploads of the same recording routinely
 # drift 10-20 s (intros/silence, speed).  Inside the band a much stronger
-# title ratio is required (see _pair_ratio) so live/remix variants stay
+# title ratio is required (see pair_similarity) so live/remix variants stay
 # excluded regardless of gap.
 DRIFT_MAX_GAP = 20        # extra seconds allowed past duration_tolerance
 DRIFT_RATIO_FLOOR = 0.90  # minimum title ratio inside the drift band
@@ -103,7 +104,7 @@ def titles_similar(title_a: str, title_b: str, threshold: float = 0.85) -> bool:
     return title_ratio(title_a, title_b) >= threshold
 
 
-def _pair_ratio(
+def pair_similarity(
     title_a, artists_a, dur_a,
     title_b, artists_b, dur_b,
     *,
@@ -112,9 +113,11 @@ def _pair_ratio(
 ) -> float | None:
     """Similarity for two songs, or None when a gate fails.
 
-    Thin wrapper over :func:`_pair_ratio_precomputed` that normalises both
-    sides fresh - kept for callers with single pairs (tests).  The O(N^2)
-    scans below precompute the keys once and skip this wrapper.
+    The public single-pair entry point: callers holding two raw songs pass
+    them here and get the ratio back.  The O(N^2) scans below cannot -
+    re-folding text inside the loop is pure waste - so they fold each song
+    once and call :func:`_pair_ratio_precomputed` instead.  This wrapper
+    is that same computation with the normalisation done for you.
     """
     return _pair_ratio_precomputed(
         _normalize_text(title_a), _artist_set(artists_a), dur_a,
@@ -374,29 +377,40 @@ def resolve_near_duplicate(
     if song == "dismissed":
         return "skip", match
 
-    duplicate_queue.add_pending(
-        {
-            # pair_key rides on the record so the activity window's
-            # actions can record the song without recomputing it.
-            "pair_key": pair_key,
-            "playlist_name": playlist_name,
-            "platform": platform,
-            "playlist_id": playlist_id or "",
-            "url": url,
-            "track_id": track_id,
-            "title": title,
-            "artists": list(artists or []),
-            "duration": duration,
-            "thumbnail_url": thumbnail,
-            "existing": {
-                "track_id": match.get("track_id"),
-                "title": match.get("title"),
-                "artists": list(match.get("artists") or []),
-                "duration": match.get("duration"),
-            },
-            "similarity": match.get("similarity"),
-        }
-    )
+    # Best-effort queue write: the decision the caller acts on is "proceed"
+    # and that does not depend on the pending record being persisted.  If
+    # extra.json is unwritable the flow must still add the song, so a failed
+    # persist degrades to a log instead of aborting the add.
+    try:
+        duplicate_queue.add_pending(
+            {
+                # pair_key rides on the record so the activity window's
+                # actions can record the song without recomputing it.
+                "pair_key": pair_key,
+                "playlist_name": playlist_name,
+                "platform": platform,
+                "playlist_id": playlist_id or "",
+                "url": url,
+                "track_id": track_id,
+                "title": title,
+                "artists": list(artists or []),
+                "duration": duration,
+                "thumbnail_url": thumbnail,
+                "existing": {
+                    "track_id": match.get("track_id"),
+                    "title": match.get("title"),
+                    "artists": list(match.get("artists") or []),
+                    "duration": match.get("duration"),
+                },
+                "similarity": match.get("similarity"),
+            }
+        )
+    except WRITE_ERRORS as e:
+        logger.warning(
+            "Near-duplicate for '%s' could not be queued in extra.json: %s",
+            title, e,
+        )
+        return "proceed", match
     logger.info(
         "Near-duplicate queued for '%s' vs '%s' (%.2f) in %s",
         title, match.get("title"), match.get("similarity", 0.0), playlist_name,

@@ -13,6 +13,7 @@ Add songs that you're currently listening to your chosen playlists or liked trac
 - [Usage](#usage)
   - [CLI](CLI.MD)
 - [Uninstall](#uninstall)
+- [Help needed (real account required)](#help-needed)
 - [License](#license)
 - [Q&A](#q--a)
 
@@ -29,6 +30,10 @@ Currently supported:
 - Deezer ([should be working fine](#help-needed))
 - Tidal ([not tested](#help-needed))
 
+Plus:
+- Lastfm (scrobbles & likes)
+- ListenBrainz (scrobbles)
+
 See [INTEGRATIONS.MD](INTEGRATIONS.MD)
 
 # Install
@@ -39,9 +44,8 @@ git clone https://github.com/d1pl6/PlaylistManager.git --depth 1
 Or Download clean ZIP from [Releases](https://github.com/d1pl6/PlaylistManager/releases/latest)
 
 To Update:
-GUI: `Settings → Check for updates`
-
-CLI: `git pull --ff-only`
+- GUI: `Settings → Check for updates`
+- CLI: `git pull --ff-only`
 
 ## Windows / Mac OS
 ```bash
@@ -83,12 +87,9 @@ apt install -y python3-pystray python3-keyring
 > [!NOTE]
 > **Wayland**: the AppIndicator backend is the only one that works; on GNOME enable the AppIndicator/KStatusNotifierItem extension.
 
-> [!NOTE]
-> **Tray behavior**: compositors may refuse unsolicited raise/focus requests (focus-stealing prevention), so the window can appear unfocused or behind other windows. A maximized window may also restore unmaximized after hide-to-tray (the compositor clears the maximized state when the window is hidden). May be fixed in the future.
-
 # Usage
 > [!NOTE]
-> **Wayland**: whatewer wayland devs are thinking, but wayland don't have Global Shortcuts Protocol, so if you using wayland: Bind compositor shortcuts to the [CLI](CLI.MD#song-add) and [*install* playlistmanager](CLI.MD#global-install-for-compositor-shortcuts).
+> **Wayland**: Bind compositor shortcuts to the [CLI](CLI.MD#song-add) and [*install* playlistmanager](CLI.MD#global-install-for-compositor-shortcuts). If wayland devs add Global Shortcut Protocol - please open new [Issue](https://github.com/d1pl6/PlaylistManager/issues), I'll implement it
 ```
 python -m main
 
@@ -134,12 +135,11 @@ keybind add to the platform's *like* API. Things to test on each platform:
   with a platform error (fake playlist id) and the row stays; the local
   entry is only deleted when the platform call succeeds. Report the exact
   error line.
-* YouTube Music needs no testing here - "Liked songs" (LM) is a real
-  playlist.
 
-Specific per platform:
+### Specific per platform:
 
-- **Spotify (real account)** - RE-AUTH FIRST: `python main.py --login
+#### Spotify (real account)
+- RE-AUTH FIRST: `python main.py --login
   spotify ...` (the new `user-library-modify` scope only applies after a
   fresh login; an old token makes the like call 403, not a code bug).
   - "Liked Songs" shows in the add dialog; adding likes the song in the
@@ -149,20 +149,21 @@ Specific per platform:
     confirm the picker has no non-owned entries.
   - Initial card import shows "No tracks" (known gap - the virtual entry
     has no `/v1/playlists/<id>/tracks`).
-- **SoundCloud (real account)** - playlists you follow but don't own must
+#### SoundCloud (real account)
+- playlists you follow but don't own must
   be absent from the add dialog (new `user.id` ownership filter - confirm
   a followed playlist is gone). "Liked Tracks" adds must like via
   `PUT /me/track-likes/<numeric id>` - confirm in the SoundCloud app.
-- **Deezer** - "Loved Tracks" likes go through the public REST
+#### Deezer
+- "Loved Tracks" likes go through the public REST
   `PUT /user/me/tracks` with the ARL cookie - this endpoint is UNVERIFIED
   against the live API. Key test: does adding a song to "Loved Tracks"
-  return 2xx and show up in the Deezer favorites? If it 4xxs, we need to
-  find the Pipe GraphQL favorite mutation instead - report the status code
+  return 2xx and show up in the Deezer favorites? If it 4xxs - report the status code
   and response body. Also confirm no non-owned playlists appear
   (`me.playlists` is own-only, but verify nothing unexpected shows).
 
-- **Tidal (real account + a browser extension)** - the least-tested
-  platform here, and the one that needs the most setup. Register an app at
+#### Tidal (real account + a browser extension)
+- the least-tested platform here, and the one that needs the most setup. Register an app at
   https://developer.tidal.com/apps with the redirect URI
   `http://127.0.0.1:47831/callback` (exact string), then
   `python main.py --login tidal` (GUI `Login -> Tidal`, or the env vars from
@@ -205,10 +206,6 @@ Q: Current state?
 
 A: Pseudo-release.
 
-Q: Why AI?
-
-A: I hate programming.
-
 Q: Will _platform_ be added?
 
-A: See [TODO](TODO.MD), if it doesn't exist there - open `Platform integration request` on [Issue](https://github.com/d1pl6/PlaylistManager/issues) page.
+A: Open `Platform integration request` on [Issue](https://github.com/d1pl6/PlaylistManager/issues) page and I'll see what I can do.

@@ -10,9 +10,8 @@ only difference is how they build a flow for a platform and what they do
 with the result.
 """
 
-import logging
-
 from collections.abc import Callable
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,9 @@ def scrobble_current_song(
     not authenticated or declare no keybind flow.  *flow_provider*
     supplies the flow object for a platform id (or ``None`` when it
     cannot be built — that platform is skipped).  The first platform
-    that captures a song scrobbles it and the loop stops.
+    that captures a song scrobbles it and the loop stops; a *capture*
+    failure falls through to the next platform, but a captured song whose
+    scrobble every backend refuses does not (see below).
 
     *integration_provider* supplies the (already authenticated)
     integration for a platform id and replaces the default registry
@@ -54,6 +55,10 @@ def scrobble_current_song(
     backend's timestamp; the capture loop is what callers report, and
     every backend here was handed the same song and derived the same
     ``played_at`` from it.
+
+    The three outcomes are therefore distinguishable by the caller:
+    ``None`` = nothing was playing, ``(song, None)`` = a song was playing
+    and every backend refused it, ``(song, ts)`` = scrobbled.
     """
     for platform_id in plugin_registry.get_platform_ids():
         if integration_provider is not None:
@@ -74,7 +79,11 @@ def scrobble_current_song(
             if flow is None:
                 continue
 
-            _url, song_data, error = flow.capture(timeout)
+            # `error` is the flow's own capture message; the service-level
+            # "this platform could not report a song" reason is logged in
+            # the handler below, and a song-less capture is not a scrobble
+            # failure the caller needs to act on.
+            _url, song_data, _error = flow.capture(timeout)
             if not song_data:
                 continue
 
@@ -100,10 +109,15 @@ def scrobble_current_song(
                 if ts is not None and accepted_ts is None:
                     accepted_ts = ts
             if accepted_ts is None and any_failed:
-                # Nothing took the listen, so fall through to the next source
-                # platform - a different player may report a song that
-                # scrobbles (the pre-existing retry, unchanged).
-                continue
+                # Every backend refused or raised.  STOP here rather than
+                # falling through to the next source platform: a song WAS
+                # captured, so re-capturing from another player can only
+                # report a different song (or the same one, scrobbled twice)
+                # and, because the fall-through eventually returns None, it
+                # reports the failure to the caller as "no song found" -
+                # telling the user their player is idle when in fact their
+                # scrobble service rejected the listen.
+                return song_data, None
             return song_data, accepted_ts
         except Exception as e:
             # One platform's capture/scrobble failure must not sink the

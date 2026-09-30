@@ -92,57 +92,57 @@ class TestTitleSimilarity:
 
 class TestPairRatio:
     def test_identical_songs(self):
-        assert dc._pair_ratio(
+        assert dc.pair_similarity(
             "Song", "Artist", 200, "Song", "Artist", 200,
             threshold=0.85, duration_tolerance=5,
         ) == 1.0
 
     def test_different_artist_fails_gate(self):
-        assert dc._pair_ratio(
+        assert dc.pair_similarity(
             "Song", "Artist A", 200, "Song", "Artist B", 200,
             threshold=0.85, duration_tolerance=5,
         ) is None
 
     def test_unknown_artist_fails_closed(self):
-        assert dc._pair_ratio(
+        assert dc.pair_similarity(
             "Intro", "Unknown Artist", 200, "Intro", "Unknown Artist", 200,
             threshold=0.85, duration_tolerance=5,
         ) is None
 
     def test_duration_gap_inside_tolerance(self):
-        assert dc._pair_ratio(
+        assert dc.pair_similarity(
             "Song A", "Artist", 200, "Song B", "Artist", 205,
             threshold=0.5, duration_tolerance=5,
         ) is not None
 
     def test_duration_gap_beyond_tolerance_and_ratio_low(self):
-        assert dc._pair_ratio(
+        assert dc.pair_similarity(
             "Completely Different Title", "Artist", 200, "Song B", "Artist", 260,
             threshold=0.85, duration_tolerance=5,
         ) is None
 
     def test_duration_gap_in_drift_band_high_ratio(self):
         # 12s gap but near-identical title → drift band admits it.
-        assert dc._pair_ratio(
+        assert dc.pair_similarity(
             "Tales from Tha Guttah", "Artist", 212, "Tales from da Guttah", "Artist", 200,
             threshold=0.85, duration_tolerance=5,
         ) >= 0.90
 
     def test_duration_gap_in_drift_band_low_ratio_rejected(self):
         # 12s gap but ratio below the drift floor → not a match.
-        assert dc._pair_ratio(
+        assert dc.pair_similarity(
             "Tales from Tha Guttah", "Artist", 212, "Tales from da Guttah (Live)", "Artist", 200,
             threshold=0.85, duration_tolerance=5,
         ) is None
 
     def test_missing_duration_uses_title_only(self):
-        assert dc._pair_ratio(
+        assert dc.pair_similarity(
             "Song A", "Artist", None, "Song B", "Artist", 0,
             threshold=0.5, duration_tolerance=5,
         ) is not None
 
     def test_shared_artist_among_multi(self):
-        assert dc._pair_ratio(
+        assert dc.pair_similarity(
             "Song", ["Artist A", "Artist B"], 200,
             "Song", ["Artist B", "Artist C"], 200,
             threshold=0.85, duration_tolerance=5,
@@ -312,3 +312,34 @@ class TestResolveNearDuplicate:
         )
         assert action == "skip"
         assert match is not None
+
+    def test_unwritable_queue_still_lets_the_add_proceed(self, monkeypatch):
+        # The queue write is bookkeeping, not the decision: the caller acts
+        # on "proceed"/"skip".  A failed persist (full disk, permissions)
+        # must not raise out of the add flow and lose the song.
+        def _boom(record):
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(duplicate_queue, "add_pending", _boom)
+        action, match = dc.resolve_near_duplicate(
+            songs=[_song("Tales from Tha Guttah", "Artist", 212, "t1")],
+            title="Tales from da Guttah", artists="Artist", duration=200,
+            track_id="new", platform="spotify", playlist_id="pl", playlist_name="X",
+        )
+        assert action == "proceed"
+        assert match is not None  # the caller can still report the near-dup
+
+    def test_unserialisable_record_also_lets_the_add_proceed(self, monkeypatch):
+        # json.dump raises TypeError on a value it cannot encode - the same
+        # best-effort contract as the OSError case above.
+        monkeypatch.setattr(
+            duplicate_queue,
+            "add_pending",
+            lambda record: (_ for _ in ()).throw(TypeError("not serialisable")),
+        )
+        action, match = dc.resolve_near_duplicate(
+            songs=[_song("Tales from Tha Guttah", "Artist", 212, "t1")],
+            title="Tales from da Guttah", artists="Artist", duration=200,
+            track_id="new", platform="spotify", playlist_id="pl", playlist_name="X",
+        )
+        assert action == "proceed"

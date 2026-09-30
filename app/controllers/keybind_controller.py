@@ -23,8 +23,8 @@ from utils.key_mapping import (
 )
 from utils.config import get_setting
 from utils.platform import is_wayland_session
-from controllers.callbacks import KeybindCallbacks
 from controllers.keybind_registry import (
+    KeybindCallbacks,
     KeybindRegistry,
     PLATFORM_YOUTUBE_MUSIC,
 )
@@ -139,6 +139,34 @@ class KeybindController:
                 self._flows.clear()
                 self._receivers.clear()
         logger.info("KeybindController credentials updated, flows invalidated")
+
+    def force_stop_platform(self, platform_id: str) -> None:
+        """Stop *platform_id*'s receiver now, even if a flow is mid-capture.
+
+        :meth:`update_credentials` deliberately parks a receiver whose flow
+        is mid-capture in ``_stale_receivers`` rather than tearing it down
+        under the capture - the parked receiver is then reclaimed in
+        ``_build_flow`` the next time the platform is used.  That works for
+        a *re-authentication*, but not for an **uninstall**: an uninstalled
+        platform is never built again, so the parked receiver would keep
+        its port bound (and its keybind object referenced) until the whole
+        process exits.
+
+        Uninstall teardown calls this instead.  The flow that might be
+        mid-capture is for a platform whose credentials and databases are
+        about to be deleted - aborting that capture is the correct outcome,
+        and the port is released immediately so a reinstall (or another
+        extension-type platform) can bind it.
+        """
+        with self._init_lock:
+            live = self._receivers.pop(platform_id, None)
+            if live is not None:
+                self._stop_receiver_safe(platform_id, live)
+            stale = self._stale_receivers.pop(platform_id, None)
+            if stale is not None:
+                self._stop_receiver_safe(platform_id, stale)
+            self._flows.pop(platform_id, None)
+        logger.info("KeybindController force-stopped platform %s", platform_id)
 
     # ------------------------------------------------------------------
     # Root window & listener mode
@@ -815,7 +843,14 @@ class KeybindController:
                 if ts:
                     logger.info("Scrobbled: %s", song_data.get("title", ""))
                 else:
-                    logger.debug("Failed to scrobble: %s", song_data.get("title", ""))
+                    # A song WAS captured and no backend accepted it -
+                    # distinct from the "no song found" branch above, and
+                    # worth info-level since there is no card to show it on.
+                    logger.info(
+                        "Failed to scrobble: %s - no scrobble backend "
+                        "accepted the listen",
+                        song_data.get("title", ""),
+                    )
             except Exception as e:
                 logger.error("Scrobble action failed: %s", e, exc_info=True)
             finally:
@@ -952,11 +987,6 @@ class KeybindController:
         for pid, receiver in list(self._stale_receivers.items()):
             self._stop_receiver_safe(pid, receiver)
         self._stale_receivers.clear()
-
-    def stop_receiver(self):
-        """Stop every active URL receiver (all platforms with a URL receiver)."""
-        for pid, receiver in list(self._receivers.items()):
-            self._stop_receiver_safe(pid, receiver)
 
     def stop_listener(self, wait: bool = True):
         if self._global_mode:

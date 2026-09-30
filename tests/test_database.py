@@ -133,6 +133,37 @@ class TestConnection:
             }
         assert "songs" in tables
 
+    def test_pragmas_are_installed_before_the_schema_ddl(self, dbman, monkeypatch):
+        # _init_playlist_database() runs CREATE TABLE / CREATE INDEX /
+        # COMMIT - it needs the write lock.  With busy_timeout set only
+        # AFTERWARDS, a connection open that collides with a concurrent
+        # flow thread (or the CLI) holding that lock raised "database is
+        # locked" out of the schema init on SQLite's 5s default, before any
+        # caller could do anything about it.
+        import services.database as dbmod
+
+        order = []
+        real_pragmas = dbmod._set_pragmas
+        real_init = dbman._init_playlist_database
+
+        monkeypatch.setattr(
+            dbmod,
+            "_set_pragmas",
+            lambda conn: (order.append("pragmas"), real_pragmas(conn))[1],
+        )
+        monkeypatch.setattr(
+            dbman,
+            "_init_playlist_database",
+            lambda conn: (order.append("schema"), real_init(conn))[1],
+        )
+        # A name no other test used, so get_connection() cannot serve a
+        # thread-cached connection and _get_db_connection really runs.
+        # (get_connection is a @contextmanager - the body only runs on
+        # __enter__, so this has to be a `with`.)
+        with dbman.get_connection("Pragma Order", "spotify", "porder1"):
+            pass
+        assert order == ["pragmas", "schema"]
+
     def test_shared_handle_within_thread(self, dbman):
         with dbman.get_connection("Chill Mix", "spotify") as c1:
             with dbman.get_connection("Chill Mix", "spotify") as c2:
