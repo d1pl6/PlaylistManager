@@ -8,14 +8,6 @@ import re
 import threading
 from collections import OrderedDict
 from typing import Callable
-# Platform ids are declared by the plugin manifests (integrations/*/
-# plugin.json); these local constants mirror the built-in ids so this
-# service stays importable without the loader.
-PLATFORM_YOUTUBE_MUSIC = "youtube_music"
-PLATFORM_SPOTIFY = "spotify"
-PLATFORM_SOUNDCLOUD = "soundcloud"
-PLATFORM_DEEZER = "deezer"
-PLATFORM_TIDAL = "tidal"
 from services.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -273,14 +265,17 @@ def _extract_tidal_track(track: dict) -> tuple | None:
     return (title, artists, duration, track_id, thumbnail_url)
 
 
-# Maps platform name → extractor callable.  Extractor signature:
+# Maps platform id → extractor callable.  The ids are the plugin manifest
+# ids (integrations/*/plugin.json); no local aliases, the literals keep
+# this service importable without the loader.
+# Extractor signature:
 #   (track: dict) -> (title, artists, duration, track_id, thumbnail_url) | None
 _TRACK_EXTRACTORS: dict[str, Callable[[dict], tuple | None]] = {
-    PLATFORM_YOUTUBE_MUSIC: _extract_youtube_track,
-    PLATFORM_SPOTIFY: _extract_spotify_track,
-    PLATFORM_SOUNDCLOUD: _extract_soundcloud_track,
-    PLATFORM_DEEZER: _extract_deezer_track,
-    PLATFORM_TIDAL: _extract_tidal_track,
+    "youtube_music": _extract_youtube_track,
+    "spotify": _extract_spotify_track,
+    "soundcloud": _extract_soundcloud_track,
+    "deezer": _extract_deezer_track,
+    "tidal": _extract_tidal_track,
 }
 
 # ------------------------------------------------------------------
@@ -409,7 +404,7 @@ class SongManager:
         self,
         playlist_name: str,
         tracks: list[dict],
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
     ) -> int:
         """
@@ -430,8 +425,9 @@ class SongManager:
         extractor = _TRACK_EXTRACTORS.get(platform)
         if extractor is None:
             logger.warning(
-                "Unknown platform '%s' for bulk insert, falling back to %s",
-                platform, PLATFORM_YOUTUBE_MUSIC,
+                "Unknown platform '%s' for bulk insert, falling back to the "
+                "YouTube Music extractor",
+                platform,
             )
             extractor = _extract_youtube_track
         return self._add_songs_bulk(
@@ -538,7 +534,7 @@ class SongManager:
         title: str,
         artists: list[str],
         duration: int,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
     ) -> bool:
         try:
@@ -570,7 +566,11 @@ class SongManager:
         duration: int,
         track_id: str,
         thumbnail_url: str | None = None,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        # Keyword-only: thumbnail_url keeps its positional slot (every
+        # flow passes the thumbnail there), so platform cannot become a
+        # required positional parameter.
+        *,
+        platform: str,
         playlist_id: str = "",
     ) -> int:
         """
@@ -674,7 +674,11 @@ class SongManager:
         duration: int,
         track_id: str,
         thumbnail_url: str | None = None,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        # Keyword-only: thumbnail_url keeps its positional slot (every
+        # flow passes the thumbnail there), so platform cannot become a
+        # required positional parameter.
+        *,
+        platform: str,
         playlist_id: str = "",
     ) -> int:
         """
@@ -754,7 +758,7 @@ class SongManager:
         self,
         playlist_name: str,
         track_id: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
     ) -> bool:
         """
@@ -784,7 +788,7 @@ class SongManager:
         self,
         playlist_name: str,
         track_id: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
     ) -> dict | None:
         """
@@ -819,7 +823,7 @@ class SongManager:
         self,
         playlist_name: str,
         song_id: int,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
     ) -> bool:
         """
@@ -850,7 +854,7 @@ class SongManager:
     def get_all_songs(
         self,
         playlist_name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
     ) -> list[dict]:
         """
@@ -884,7 +888,7 @@ class SongManager:
     def get_latest_song(
         self,
         playlist_name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
     ) -> dict | None:
         """
@@ -925,7 +929,7 @@ class SongManager:
         self,
         playlist_name: str,
         limit: int,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
     ) -> list[dict]:
         """Get the most recently added songs from the playlist.
@@ -972,7 +976,7 @@ class SongManager:
     def get_song_count(
         self,
         playlist_name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
     ) -> int:
         """
@@ -998,7 +1002,7 @@ class SongManager:
     def get_song_stats(
         self,
         playlist_name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
     ) -> tuple[int, int]:
         """
@@ -1024,7 +1028,7 @@ class SongManager:
     def get_total_duration(
         self,
         playlist_name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
     ) -> int:
         """Get the total duration of all songs in the playlist (in seconds).
@@ -1055,7 +1059,7 @@ class SongManager:
         playlist_name: str,
         query: str,
         *,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
         limit: int = 5,
     ) -> list[dict]:

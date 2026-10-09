@@ -120,6 +120,16 @@ DEFAULT_SETTINGS = {
     # "pinned" flags live per-playlist in the registry, not here.
     "grid_sort": {"key": "name", "direction": "asc"},
     "show_pin_buttons": {"is_true": "yes"},  # per-card pin/unpin buttons
+    # Registry number before each card's name: the same 1-based number
+    # `playlistmanager --list` prints, i.e. raw registry order - NOT the
+    # on-screen position, so numbers skip entries whose platform plugin is
+    # not installed (hidden from the grid, still listed by --list) and do
+    # not follow the grid sort/pin order.  Default off: a new visual element
+    # must not restyle existing users' cards on upgrade; toggled live from
+    # Settings > Appearance.  Rendered as its own header label - never
+    # inside the name label's text, which is the card's identity lookup key
+    # (ui/card_grid.refresh_card_numbers).
+    "show_playlist_numbers": {"is_true": "no"},
     # Notification bar: a fixed status row showing the last flow event
     # ("Playlist | Artist - Song | Status").  Read by
     # ui/notification_bar.py (via the resolve_* helpers below).

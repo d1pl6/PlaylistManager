@@ -13,8 +13,12 @@ import threading
 import logging
 from typing import Callable, Optional
 
-# Legacy entries predate the platform field; they were all YouTube Music.
-PLATFORM_YOUTUBE_MUSIC = "youtube_music"
+# Rows written before the "platform" field existed were all YouTube Music -
+# the app predated multi-platform support.  This value is used ONCE, by
+# _stamp_legacy_platform() during the load-time migration below; no call
+# site falls back to it anymore.  Platform ids themselves come from the
+# plugin manifests (integrations/*/plugin.json).
+_LEGACY_PLATFORM = "youtube_music"
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +37,31 @@ _cache_timestamp: float = 0.0
 _CACHE_TTL: float = 1.0
 
 # Serialise all read/write access so concurrent mutations don't lose data.
-_lock = threading.Lock()
+# Reentrant on purpose: load_playlists() persists the platform migration
+# while the caller (add_playlist, delete_playlist, ...) may already hold
+# this lock - a plain Lock would deadlock there.
+_lock = threading.RLock()
+
+
+def _stamp_legacy_platform(playlists) -> bool:
+    """Fill ``platform`` on rows written before the field existed.
+
+    Those rows were all YouTube Music (see :data:`_LEGACY_PLATFORM`), so
+    stamping them preserves the behaviour the old per-call-site fallback
+    had, minus the fallback: after one load every entry carries a platform
+    and callers can read the field directly.
+
+    Returns whether anything changed; the caller persists only then, so a
+    healthy registry is never rewritten.
+    """
+    if not isinstance(playlists, list):
+        return False
+    changed = False
+    for p in playlists:
+        if isinstance(p, dict) and not p.get("platform"):
+            p["platform"] = _LEGACY_PLATFORM
+            changed = True
+    return changed
 
 
 def _find_by_key(
@@ -103,6 +131,13 @@ class PlaylistStore:
                         # First call and the file is unreadable - fall back
                         # to empty rather than crashing on list(None).
                         _playlist_cache = []
+                else:
+                    # Load-time migration: stamp rows written before the
+                    # platform field existed (they were all YouTube Music)
+                    # and persist, so no call site needs a fallback again.
+                    if _playlist_cache and _stamp_legacy_platform(_playlist_cache):
+                        with _lock:
+                            PlaylistStore._write(_playlist_cache)
             else:
                 # No file (fresh clone) - the cache must become [] so an
                 # ensure_playlists_file() that writes [] underneath us is
@@ -119,7 +154,7 @@ class PlaylistStore:
             return {
                 p.get("name")
                 for p in playlists
-                if p.get("platform", PLATFORM_YOUTUBE_MUSIC) == platform
+                if p.get("platform", "") == platform
             }
         return {p.get("name") for p in playlists}
 
@@ -162,7 +197,7 @@ class PlaylistStore:
     @staticmethod
     def add_playlist(
         name: str,
-        platform: str = PLATFORM_YOUTUBE_MUSIC,
+        platform: str,
         playlist_id: str = "",
         thumbnail_url: str = "",
     ):
@@ -381,16 +416,16 @@ class PlaylistStore:
     def delete_playlists_for_platform(platform: str) -> int:
         """Remove every registry entry for *platform*.
 
-        Returns the number of entries removed.  Entries without a platform
-        field are treated as :data:`PLATFORM_YOUTUBE_MUSIC` (the legacy
-        default, matching :meth:`get_existing_names`).
+        Returns the number of entries removed.  Every entry carries a
+        platform (pre-platform rows are stamped by the load-time migration
+        in :func:`_stamp_legacy_platform`).
         """
         with _lock:
             playlists = PlaylistStore.load_playlists()
             kept = [
                 p
                 for p in playlists
-                if p.get("platform", PLATFORM_YOUTUBE_MUSIC) != platform
+                if p.get("platform", "") != platform
             ]
             removed = len(playlists) - len(kept)
             if removed:
@@ -536,6 +571,36 @@ class PlaylistStore:
             )
         except Exception:
             return True
+
+
+def registry_numbers(playlists: list[dict] | None = None) -> dict[tuple[str, str], int]:
+    """Map every registry entry to its 1-based ``--list`` number.
+
+    ``playlistmanager --list`` numbers ``PlaylistStore.load_playlists()``
+    in storage order (``cli.run_list``), so this is the one authority for
+    "the number the CLI prints".  Keyed by ``(platform, playlist_id or
+    name)`` - the same identity ``cli.resolve_targets`` dedups on - so a
+    caller holding a card's ``(platform, playlist_id, name)`` resolves its
+    number the same way the CLI resolves ``-a 3``.
+
+    *playlists* may be passed to reuse an already-loaded registry;
+    otherwise the store is read once.  Duplicate keys keep their FIRST
+    occurrence (legacy same-name, no-id rows are indistinguishable and
+    resolve identically everywhere else too).  Hidden entries - a platform
+    whose plugin is not installed, filtered out of the card grid - keep
+    their slots, so visible cards can show non-contiguous numbers exactly
+    as ``--list`` prints them.
+    """
+    if playlists is None:
+        playlists = PlaylistStore.load_playlists()
+    numbers: dict[tuple[str, str], int] = {}
+    for i, entry in enumerate(playlists, 1):
+        key = (
+            entry.get("platform", ""),
+            entry.get("playlist_id") or entry.get("name"),
+        )
+        numbers.setdefault(key, i)
+    return numbers
 
 
 # ---------------------------------------------------------------------------

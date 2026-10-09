@@ -7,6 +7,8 @@ and resets the in-memory cache, so no test ever touches the real
 ``delete_playlist``) is exercised only against the sandboxed path.
 """
 
+import json
+
 import pytest
 
 import services.playlist_store as ps
@@ -193,3 +195,125 @@ class TestMisc:
         # First load keeps previous cache; force a cold start.
         monkeypatch.setattr(store, "_playlist_cache", None)
         assert store.PlaylistStore.load_playlists() == []
+
+class TestLegacyPlatformMigration:
+    """Rows written before the "platform" field existed.
+
+    The field is stamped once, at load, so no call site carries a
+    YouTube Music fallback anymore (that fallback is exactly what was
+    deleted from keybind_registry, song_manager, cli, ...).
+    """
+
+    @staticmethod
+    def _write_registry(store, rows):
+        store.playlists_json.parent.mkdir(parents=True, exist_ok=True)
+        store.playlists_json.write_text(
+            __import__("json").dumps(rows), encoding="utf-8"
+        )
+
+    def test_missing_platform_stamped_on_load(self, store):
+        self._write_registry(
+            store, [{"name": "Old Mix", "keybind": "ctrl+1", "playlist_id": ""}]
+        )
+        playlists = store.PlaylistStore.load_playlists()
+        assert playlists[0]["platform"] == "youtube_music"
+        assert playlists[0]["keybind"] == "ctrl+1"  # untouched
+
+    def test_stamp_is_persisted(self, store):
+        self._write_registry(store, [{"name": "Old Mix"}])
+        store.PlaylistStore.load_playlists()
+        on_disk = store.playlists_json.read_text(encoding="utf-8")
+        assert '"platform": "youtube_music"' in on_disk
+
+    def test_migrated_row_is_addressable_by_platform(self, store):
+        # The read sites that used to fall back per call: a platform
+        # filter and the platform-wide delete must both see the row.
+        self._write_registry(store, [{"name": "Old Mix"}, {"name": "Kept", "platform": "spotify"}])
+        assert store.PlaylistStore.get_existing_names("youtube_music") == {"Old Mix"}
+        assert store.PlaylistStore.delete_playlists_for_platform("youtube_music") == 1
+        assert [p["name"] for p in store.PlaylistStore.load_playlists()] == ["Kept"]
+
+    def test_existing_platform_is_left_alone(self, store):
+        self._write_registry(store, [{"name": "S", "platform": "spotify"}])
+        playlists = store.PlaylistStore.load_playlists()
+        assert playlists[0]["platform"] == "spotify"
+
+    def test_empty_platform_is_stamped(self, store):
+        # Same semantics the deleted `or "youtube_music"` fallback had:
+        # a falsy platform meant "written before platforms existed".
+        self._write_registry(store, [{"name": "Old Mix", "platform": ""}])
+        playlists = store.PlaylistStore.load_playlists()
+        assert playlists[0]["platform"] == "youtube_music"
+
+
+class TestRegistryNumbers:
+    """``registry_numbers()`` - the ``playlistmanager --list`` number map.
+
+    The card grid shows these numbers (Settings > show_playlist_numbers),
+    so the map must mirror ``cli.run_list`` exactly: 1-based STORAGE order,
+    every row counted, keyed the way a caller holding a card's identity
+    (platform, id-or-name) looks itself up.
+    """
+
+    @staticmethod
+    def _rows():
+        return [
+            {"name": "Chill", "platform": "spotify", "playlist_id": "pl1"},
+            {"name": "Bangers", "platform": "youtube_music", "playlist_id": "pl2"},
+            # Legacy row: no id -> falls back to the name key.
+            {"name": "Old Mix", "platform": "spotify", "playlist_id": ""},
+        ]
+
+    def test_numbers_follow_registry_order(self, store):
+        store.playlists_json.parent.mkdir(parents=True, exist_ok=True)
+        store.playlists_json.write_text(json.dumps(self._rows()), encoding="utf-8")
+        assert store.registry_numbers() == {
+            ("spotify", "pl1"): 1,
+            ("youtube_music", "pl2"): 2,
+            ("spotify", "Old Mix"): 3,
+        }
+
+    def test_matches_run_list_position(self, store):
+        # Same rows, same numbers as `run_list` prints: enumerate the
+        # registry 1-based, no sorting, no filtering.
+        store.playlists_json.parent.mkdir(parents=True, exist_ok=True)
+        store.playlists_json.write_text(json.dumps(self._rows()), encoding="utf-8")
+        playlists = store.PlaylistStore.load_playlists()
+        numbers = store.registry_numbers(playlists)
+        for i, entry in enumerate(playlists, 1):
+            key = (
+                entry.get("platform", ""),
+                entry.get("playlist_id") or entry.get("name"),
+            )
+            assert numbers[key] == i
+
+    def test_hidden_platform_rows_keep_their_slots(self, store):
+        # --list numbers EVERY registry row, including one whose plugin is
+        # not installed (its card is hidden from the grid): visible cards
+        # then show non-contiguous numbers, matching the CLI.
+        rows = [
+            {"name": "A", "platform": "spotify", "playlist_id": "a"},
+            {"name": "Gone", "platform": "not_installed", "playlist_id": "d"},
+            {"name": "B", "platform": "spotify", "playlist_id": "b"},
+        ]
+        numbers = store.registry_numbers(rows)
+        assert numbers[("spotify", "a")] == 1
+        assert numbers[("spotify", "b")] == 3
+
+    def test_duplicate_key_keeps_first_occurrence(self, store):
+        # Two legacy same-name rows are indistinguishable everywhere else
+        # too (cli.resolve_targets dedups on the same key): first wins.
+        rows = [
+            {"name": "Same", "platform": "spotify", "playlist_id": ""},
+            {"name": "Same", "platform": "spotify", "playlist_id": ""},
+        ]
+        assert store.registry_numbers(rows)[("spotify", "Same")] == 1
+
+    def test_same_name_different_id_are_distinct(self, store):
+        rows = [
+            {"name": "Same", "platform": "spotify", "playlist_id": "id1"},
+            {"name": "Same", "platform": "spotify", "playlist_id": "id2"},
+        ]
+        numbers = store.registry_numbers(rows)
+        assert numbers[("spotify", "id1")] == 1
+        assert numbers[("spotify", "id2")] == 2

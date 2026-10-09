@@ -52,3 +52,12 @@ class PlaylistCard:
     # -- In-flight operation guards --------------------------------------
     removing: bool = False
     syncing: bool = False
+
+    # -- Registry number (Settings > show_playlist_numbers) ---------------
+    # Always created by create_main_frame but grid_remove'd while the
+    # setting is off; filled by CardGridManager.refresh_card_numbers with
+    # the ``playlistmanager --list`` number.  A separate widget (never a
+    # prefix in name_label's text) because name_label.cget("text") is the
+    # card's identity lookup key across the codebase.  Default None so a
+    # partially-built card in tests/construction code stays valid.
+    number_label: tk.Label | None = None

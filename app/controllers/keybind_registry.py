@@ -2,12 +2,8 @@
 Keybind registry - stores registered keybind combos and matches them
 against the currently-pressed keys.
 
-This module has no knowledge of pynput or tkinter; it is pure data.
-``KeybindCallbacks`` lives here next to the registry that stores it: the
-controller emits updates through it and the UI side implements it, so it is
-the one piece of this contract both ends must import - splitting it into a
-second module bought nothing but a ``TYPE_CHECKING`` dance (the UI already
-imports the controller anyway).
+``KeybindCallbacks`` lives here next to the registry that stores it, so
+both ends of the contract import one module.
 """
 
 import threading
@@ -15,9 +11,6 @@ import logging
 from typing import Callable
 
 from utils.key_mapping import parse_keybind
-
-# Legacy bindings predate the platform field; they were all YouTube Music.
-PLATFORM_YOUTUBE_MUSIC = "youtube_music"
 
 logger = logging.getLogger(__name__)
 
@@ -28,21 +21,20 @@ logger = logging.getLogger(__name__)
 
 
 class KeybindCallbacks:
-    """Thin callback container that replaces direct widget access.
+    """
+    Thin callback container that replaces direct widget access.
 
-    A ``KeybindCallbacks`` instance is registered once per playlist
-    and is called from worker threads - the implementation should
-    route to the main thread (e.g. via ``root.after()``).
+    Registered once per playlist and called from worker threads - the
+    implementation should route to the main thread (e.g. ``root.after()``).
 
     Args:
         on_status: Called with (text, background_colour) to update status.
         on_song_info: Called with (artist_text, title_text).
         on_entry_state: Called with the new state for the keybind entry.
         on_reset: Called with entry_state when all labels should be cleared.
-        on_song_added: Called (no args) after a song was added by the
-            flow, so the caller can refresh song-derived UI (e.g. the
-            showcase section).  Not called for "exists" results - the
-            song data did not change.
+        on_song_added: Called (no args) after a song was added by the flow,
+            so the caller can refresh song-derived UI.  Not called for
+            "exists" results - the song data did not change.
     """
 
     def __init__(
@@ -84,13 +76,12 @@ class KeybindRegistry:
         playlist_id: str = "",
         kind: str = "playlist",
     ) -> dict | None:
-        """Register a keybind + callbacks for *playlist_name*.
+        """
+        Register a keybind + callbacks for *playlist_name*.
 
         Playlists are identified by ``(playlist_name, platform,
-        playlist_id)`` so the same name on two platforms (or two
-        playlists sharing a name on one platform) keeps independent
-        bindings.  Replaces any previous registration for that
-        combination.
+        playlist_id)`` so the same name keeps independent bindings.
+        Replaces any previous registration for that combination.
 
         Returns the binding info of a *different* playlist that owned
         *keybind* before this registration (its binding is now displaced),
@@ -105,7 +96,7 @@ class KeybindRegistry:
                 existing = self._keybind_map.get(keybind)
                 if existing is not None and (
                     existing["playlist_name"] != playlist_name
-                    or existing.get("platform", PLATFORM_YOUTUBE_MUSIC) != platform
+                    or existing["platform"] != platform
                     or (existing.get("playlist_id", "") or "") != (playlist_id or "")
                 ):
                     displaced = existing
@@ -116,7 +107,7 @@ class KeybindRegistry:
                         "replacing its binding with '%s' (%s)",
                         keybind,
                         existing["playlist_name"],
-                        existing.get("platform", PLATFORM_YOUTUBE_MUSIC),
+                        existing["platform"],
                         playlist_name,
                         platform,
                     )
@@ -137,11 +128,8 @@ class KeybindRegistry:
     def unregister(self, playlist_name: str, platform: str = "", playlist_id: str = ""):
         """Remove keybinds registered for *playlist_name*.
 
-        With *platform* given, only that platform's binding is removed,
-        leaving a same-named playlist on the other platform intact.
-        With *playlist_id* given, only that playlist's binding is
-        removed - two playlists sharing a name on one platform stay
-        independent.
+        With *platform* / *playlist_id* given, only that combination is
+        removed, so a same-named playlist elsewhere stays bound.
         """
         with self._lock:
             to_remove = [
@@ -150,7 +138,7 @@ class KeybindRegistry:
                 if v["playlist_name"] == playlist_name
                 and (
                     not platform
-                    or v.get("platform", PLATFORM_YOUTUBE_MUSIC) == platform
+                    or v["platform"] == platform
                 )
                 and (not playlist_id or (v.get("playlist_id", "") or "") == playlist_id)
             ]
@@ -161,22 +149,18 @@ class KeybindRegistry:
     def find(
         self, playlist_name: str, platform: str = "", playlist_id: str = ""
     ) -> dict | None:
-        """Return the current binding info for *playlist_name*.
+        """
+        Return the current binding info for *playlist_name*.
 
-        With *platform* given, only that platform's binding matches;
-        with *playlist_id* given, only that playlist's binding matches
-        (two playlists sharing a name on one platform stay distinct).
-        Returns None when no binding is registered for the combination.
-
-        Used to validate a queued keybind event at execution time: the
-        frame may have been closed (or the keybind re-bound) between the
-        registry match and the ``after(0, ...)`` dispatch.
+        Used to validate a queued keybind event at execution time, since
+        the frame may have been closed (or re-bound) between the registry
+        match and the ``after(0, ...)`` dispatch.
         """
         with self._lock:
             for info in self._keybind_map.values():
                 if info["playlist_name"] == playlist_name and (
                     not platform
-                    or info.get("platform", PLATFORM_YOUTUBE_MUSIC) == platform
+                    or info["platform"] == platform
                 ) and (
                     not playlist_id
                     or (info.get("playlist_id", "") or "") == playlist_id
@@ -185,14 +169,12 @@ class KeybindRegistry:
         return None
 
     def match(self, pressed_keys: set[str]) -> tuple | None:
-        """Return the best (specificity, keybind_str, info) or *None*.
+        """
+        Return the best (specificity, keybind_str, info) or *None*.
 
-        "Best" means the entry whose parsed key set matches *pressed_keys*
-        exactly and has the highest specificity (most keys).  This
-        prevents a single-key shortcut from shadowing a multi-key combo.
-
-        The *info* dict contains 'kind' ("playlist" or "action") to
-        distinguish playlist add-flows from standalone actions like scrobble.
+        "Best" is the entry matching *pressed_keys* exactly with the most
+        keys, so a single-key shortcut cannot shadow a multi-key combo.
+        The *info* dict carries 'kind' ("playlist" or "action").
         """
         best = None
         with self._lock:

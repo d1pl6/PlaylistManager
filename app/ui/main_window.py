@@ -11,12 +11,6 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, messagebox
 
-# Platform ids are declared by the plugin manifests (integrations/*/
-# plugin.json); these local constants mirror the built-in ids.
-PLATFORM_YOUTUBE_MUSIC = "youtube_music"
-PLATFORM_SPOTIFY = "spotify"
-PLATFORM_SOUNDCLOUD = "soundcloud"
-PLATFORM_DEEZER = "deezer"
 from controllers.keybind_registry import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
 from services import duplicate_queue
@@ -223,6 +217,7 @@ class MainWindow:
             pin_img=self.pin_img,
             pin_active_img=self.pin_active_img,
             show_pin_buttons=get_setting("show_pin_buttons", True),
+            show_numbers=get_setting("show_playlist_numbers", False),
             on_pin_toggle=self._on_pin_toggle,
             make_keybind_callbacks=self._make_keybind_callbacks,
             on_reload_requested=self._on_reload_requested,
@@ -470,8 +465,9 @@ class MainWindow:
                 on_columns_change=self.set_columns,
                 on_check_updates_now=lambda on_done=None: self.ac.check_updates(force=True, on_done=on_done),
                 on_check_duplicates_now=self._run_duplicate_scan,
-on_like_button_change=self._apply_like_button_visibility,
+                on_like_button_change=self._apply_like_button_visibility,
                 on_pin_buttons_change=self._apply_pin_visibility,
+                on_numbers_change=self.card_grid.set_show_numbers,
                 on_sort_change=self.apply_grid_sort,
                 on_scrobble_keybind_change=self._register_scrobble_keybind,
                 on_notif_enabled_change=self._apply_notification_enabled,
@@ -702,6 +698,10 @@ on_like_button_change=self._apply_like_button_visibility,
             card.playlist_name = playlist_name
             card.platform = platform
             card.playlist_id = playlist_id
+            # The store write happened before this callback (see
+            # PlaylistController._on_playlist_selected), so the new entry
+            # is already in the registry and gets its --list number.
+            self.card_grid.refresh_card_numbers()
 
             status_label = card.log_status
             status_label.config(text=tr_status("sync"), background=C["label_playlist_warn_bg"])
@@ -1348,7 +1348,7 @@ on_like_button_change=self._apply_like_button_visibility,
         """
         visible = []
         for playlist in playlists:
-            platform = playlist.get("platform") or PLATFORM_YOUTUBE_MUSIC
+            platform = playlist.get("platform", "")
             if platform in available_platforms:
                 visible.append((playlist, platform))
             else:
@@ -1430,7 +1430,10 @@ on_like_button_change=self._apply_like_button_visibility,
             # updates (the per-card layout=True flushes used to run a
             # full-tree update_idletasks per card during populate), then
             # the stats rows in a single pass (registry resolved once).
+            # Card identity is assigned now, so the --list numbers can be
+            # resolved (no-op visually while the setting is off).
             self.showcase.refresh_stats_batch(stats_entries)
+            self.card_grid.refresh_card_numbers()
             self.card_grid.finalize_layout()
 
         self.card_grid._sync_empty_state()
@@ -1899,7 +1902,7 @@ on_like_button_change=self._apply_like_button_visibility,
         closed).
         """
         name = displaced.get("playlist_name")
-        platform = displaced.get("platform", PLATFORM_YOUTUBE_MUSIC)
+        platform = displaced.get("platform", "")
         displaced_id = displaced.get("playlist_id", "") or ""
         if not name:
             return
@@ -2250,7 +2253,7 @@ on_like_button_change=self._apply_like_button_visibility,
         # nothing to reach and nothing to warn about.
         available = set(self.integrations.get_all())
         platforms = {
-            p.get("platform") or PLATFORM_YOUTUBE_MUSIC
+            p.get("platform", "")
             for p in PlaylistStore.load_playlists()
         } & available
         if platforms:

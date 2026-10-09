@@ -1,20 +1,7 @@
 """
-Near-duplicate song detection (pure functions, no tkinter - headless-testable).
-
-Some platform tracks exist under variant names with the same artist
-(e.g. "Tales from Tha Guttah" vs "Tales from da Guttah") - different
-titles, different uploads, effectively the same recording.  External
-metadata services cannot help here (odesli maps per-platform IDs,
-MusicBrainz lacks coverage), so matching happens locally:
+Near-duplicate song detection.
 
     same artist + similar title + close duration  =>  near-duplicate
-
-Title similarity is ``difflib.SequenceMatcher.ratio()`` over normalised
-titles (diacritic-folded, lowercased, punctuation collapsed).  Edit
-distance absorbs slang spelling ("tha" vs "da") that rule-based
-normalisation could never cover.  Measured anchors: the Tha/da Guttah
-pair scores ~0.93; live/remix variants ("Hallelujah" vs "Halleluja
-(Live)") stay <=0.75 - hence the default threshold 0.85.
 
 No word dropping, no parenthetical stripping: "(Live)" / "(Remix)"
 suffixes must keep those variants BELOW the threshold, otherwise real
@@ -33,15 +20,8 @@ from utils.atomic_json import WRITE_ERRORS
 
 logger = logging.getLogger(__name__)
 
-# Flows resolve artists heuristically and fall back to this sentinel;
-# an unknown artist must never satisfy the artist gate.
 UNKNOWN_ARTIST = "Unknown Artist"
 
-# Drift band for upload-length differences beyond [duplicate_check]
-# duration_tolerance: distinct uploads of the same recording routinely
-# drift 10-20 s (intros/silence, speed).  Inside the band a much stronger
-# title ratio is required (see pair_similarity) so live/remix variants stay
-# excluded regardless of gap.
 DRIFT_MAX_GAP = 20        # extra seconds allowed past duration_tolerance
 DRIFT_RATIO_FLOOR = 0.90  # minimum title ratio inside the drift band
 
@@ -51,11 +31,9 @@ DRIFT_RATIO_FLOOR = 0.90  # minimum title ratio inside the drift band
 # ----------------------------------------------------------------------
 
 def _normalize_text(text: str) -> str:
-    """Fold *text* for comparison: NFKD-diacritic fold, lowercase,
+    """
+    Fold *text* for comparison: NFKD-diacritic fold, lowercase,
     punctuation -> space, collapse whitespace.
-
-    Keeps alphanumeric characters from any script (``str.isalnum``),
-    so non-Latin titles survive intact.
     """
     if not text:
         return ""
@@ -77,11 +55,8 @@ def _artist_set(artists) -> set[str]:
 
 
 def _artists_known(artist_sets: Iterable[set[str]]) -> bool:
-    """False when ANY side carries only the Unknown-Artist sentinel.
-
-    The gate must fail closed: with heuristically unresolved artists the
-    "shared artist" signal is meaningless and matching would fire on bare
-    title collisions ("Intro").
+    """
+    False when ANY side carries only the Unknown-Artist sentinel.
     """
     for names in artist_sets:
         if not names or names <= {_normalize_text(UNKNOWN_ARTIST)}:
@@ -111,14 +86,7 @@ def pair_similarity(
     threshold: float,
     duration_tolerance: int,
 ) -> float | None:
-    """Similarity for two songs, or None when a gate fails.
-
-    The public single-pair entry point: callers holding two raw songs pass
-    them here and get the ratio back.  The O(N^2) scans below cannot -
-    re-folding text inside the loop is pure waste - so they fold each song
-    once and call :func:`_pair_ratio_precomputed` instead.  This wrapper
-    is that same computation with the normalisation done for you.
-    """
+    """Similarity for two songs, or None when a gate fails."""
     return _pair_ratio_precomputed(
         _normalize_text(title_a), _artist_set(artists_a), dur_a,
         _normalize_text(title_b), _artist_set(artists_b), dur_b,
@@ -134,12 +102,7 @@ def _pair_ratio_precomputed(
     threshold: float,
     duration_tolerance: int,
 ) -> float | None:
-    """Similarity for two songs over ALREADY normalised keys.
-
-    Callers fold each song once (``_normalize_text`` title + ``_artist_set``
-    artists) and reuse the keys for every pair - re-folding text inside an
-    O(N^2) scan is pure waste.
-    """
+    """    Similarity for two songs over ALREADY normalised keys."""
     # Artist gate: >=1 shared normalised artist name.
     if not (set_a & set_b):
         return None
@@ -151,39 +114,21 @@ def _pair_ratio_precomputed(
     except (TypeError, ValueError):
         int_a = int_b = 0
 
-    # Hard duration rejection BEFORE the expensive title comparison: a gap
-    # beyond tolerance + drift band can never match, whatever the titles
-    # say - the O(1) check skips the SequenceMatcher entirely for these
-    # pairs (the bulk of any scanned playlist).
     if int_a and int_b and abs(int_a - int_b) > duration_tolerance + DRIFT_MAX_GAP:
         return None
 
-    # SequenceMatcher.ratio() is O(len^2); real_quick_ratio() (assumes the
-    # shorter string fully matches) and quick_ratio() (character-bag upper
-    # bound) are O(len) upper bounds on it, so pairs that cannot reach the
-    # threshold are rejected without the matching pass.  These are the
-    # documented filters difflib.get_close_matches itself applies.
     sm = difflib.SequenceMatcher(None, nt_a, nt_b)
     if sm.real_quick_ratio() < threshold or sm.quick_ratio() < threshold:
         return None
     ratio = sm.ratio()
 
     if not int_a or not int_b:
-        # Unknown length on either side: the title bar alone decides -
-        # a missing duration should weaken the evidence, not disable
-        # matching entirely.
         return ratio if ratio >= threshold else None
 
     gap = abs(int_a - int_b)
     if gap <= duration_tolerance:
         return ratio if ratio >= threshold else None
 
-    # Drift band.  Distinct uploads of the SAME recording routinely sit
-    # further apart than the tight band (extra intros/silence, slight
-    # speed differences - real cases at +12 s).  Inside this wider band
-    # a much stronger title signal is required, so live/remix variants
-    # ("Hallelujah" vs "... (Live)", ratio ~0.75) stay excluded no matter
-    # their gap.
     if (
         gap <= duration_tolerance + DRIFT_MAX_GAP
         and ratio >= max(threshold, DRIFT_RATIO_FLOOR)
@@ -205,12 +150,7 @@ def find_similar(
     threshold: float = 0.85,
     duration_tolerance: int = 5,
 ) -> dict | None:
-    """Best near-duplicate of (title, artists, duration) inside *songs*.
-
-    Returns a copy of the winning song dict with an extra ``"similarity"``
-    key, or None when nothing matches.  Song dicts need title / artists /
-    duration keys (the shape ``SongManager.get_all_songs`` returns).
-    """
+    """Best near-duplicate of (title, artists, duration) inside *songs*."""
     nt_q = _normalize_text(title)
     set_q = _artist_set(artists)
     best: tuple[float, dict] | None = None
@@ -244,14 +184,13 @@ def find_duplicate_pairs(
     threshold: float = 0.85,
     duration_tolerance: int = 5,
 ) -> list[dict]:
-    """All near-duplicate pairs within one playlist's songs.
+    """
+    All near-duplicate pairs within one playlist's songs.
 
-    *songs* must be ordered newest-first (the ``get_all_songs``
-    ``ORDER BY added_at DESC, id DESC`` ordering) so each pair can carry
+    *songs* must be ordered newest-first so each pair can carry
     which side is the newer addition.  Returns a list of
     ``{"newer": song, "older": song, "similarity": ratio}``, most
-    similar pair first.  O(N^2) with a cheap duration pre-screen - fine
-    for playlists of up to a few thousand rows.
+    similar pair first.  O(N^2) with a cheap duration pre-screen.
     """
     rows = []
     for song in songs:
@@ -277,8 +216,6 @@ def find_duplicate_pairs(
                 continue
             if not (set_a & set_b):
                 continue
-            # Normalised keys are already in hand from the rows pre-screen -
-            # passing the raw song dicts here would re-fold every pair.
             ratio = _pair_ratio_precomputed(
                 nt_a, set_a, dur_a,
                 nt_b, set_b, dur_b,
@@ -304,14 +241,7 @@ def find_duplicate_pairs(
 # ----------------------------------------------------------------------
 
 def read_settings() -> tuple[bool, float, int]:
-    """(enabled, title_threshold, duration_tolerance) from settings.ini.
-
-    The config import is lazy so this module stays importable without
-    any side effects; malformed knob values fall back to the defaults.
-    Threshold and tolerance are clamped to sane ranges so a hand-edited
-    or legacy INI value (0.0 threshold, negative tolerance) cannot make
-    every song "similar".
-    """
+    """(enabled, title_threshold, duration_tolerance) from settings.ini."""
     from utils.config import get_setting, get_setting_value
 
     enabled = get_setting("duplicate_check", fallback=False)
@@ -377,10 +307,6 @@ def resolve_near_duplicate(
     if song == "dismissed":
         return "skip", match
 
-    # Best-effort queue write: the decision the caller acts on is "proceed"
-    # and that does not depend on the pending record being persisted.  If
-    # extra.json is unwritable the flow must still add the song, so a failed
-    # persist degrades to a log instead of aborting the add.
     try:
         duplicate_queue.add_pending(
             {

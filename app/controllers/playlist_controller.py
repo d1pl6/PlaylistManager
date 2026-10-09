@@ -17,20 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 class PlaylistController:
-    """Handles the business logic of the "add playlist" workflow.
-
-    Callbacks received from the UI layer:
-
-    * ``on_show_platform_picker(platforms)`` - user must pick a platform
-    * ``on_show_playlist_dialog(playlists, integration)`` - show the
-      playlist selection dialog
-    * ``on_add_playlist_frame(name, platform, playlist_id, thumb_url)`` -
-      a playlist was selected and persisted; the UI should add a frame
-    * ``on_dialog_cancel()`` - restore UI after cancellation
-    * ``on_show_error()`` - show the generic integration-error dialog
-    * ``on_refresh(platform=None, on_done=None)`` - re-authenticate an
-      integration (or all of them), calling *on_done* on the main thread
-      once the new credentials are applied
+    """
+    Handles the "add playlist" workflow.
     """
 
     def __init__(
@@ -64,19 +52,8 @@ class PlaylistController:
     # ------------------------------------------------------------------
 
     def open_playlist_dialog(self, attempt: int = 0) -> None:
-        """Start the "add playlist" workflow.
-
-        Called when the user clicks the + button.  The whole workflow
-        (platform picker, fetch, selection dialog) is guarded by
-        ``_workflow_open`` so a re-entrant click cannot open a second
-        picker or fetch.
-
-        When no integration is authenticated the workflow normally fails
-        immediately - but a login that raced a mid-write ``browser.json``
-        can leave the app in exactly that state despite valid credentials
-        on disk.  On the first attempt the integrations are refreshed
-        once and the workflow re-started before the error is shown, so
-        the login "just works" instead of requiring an app restart.
+        """
+        Start the "add playlist" workflow.
         """
         if self._workflow_open:
             return
@@ -106,7 +83,9 @@ class PlaylistController:
     # ------------------------------------------------------------------
 
     def _choose_platform(self, active_integrations) -> None:
-        """Show the platform picker when multiple integrations are active."""
+        """
+        Show the platform picker when multiple integrations are active.
+        """
         platforms = list(active_integrations.values())
 
         def on_pick(integration):
@@ -119,18 +98,10 @@ class PlaylistController:
         )
 
     def _fetch_and_show_playlists(self, integration, attempt: int = 0) -> None:
-        """Fetch playlists from *integration* and show them to the user.
-
-        The platform call is a network round trip, so it runs in a daemon
-        worker; the UI continues via ``after(0, ...)`` instead of freezing
-        the window.  ``_workflow_open`` stays set for the whole fetch, so a
-        re-entrant + click cannot open a second picker meanwhile.
-
-        A failed or empty fetch is retried exactly once (via a scoped
-        credential refresh) before the integration error is shown: a
-        login that raced a mid-write ``browser.json`` or a transient
-        browse failure must not require an app restart to recover.
         """
+        Fetch playlists from *integration* and show them to the user.
+        """
+
 
         def _worker() -> None:
             try:
@@ -149,12 +120,10 @@ class PlaylistController:
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_fetch_failed(self, integration, attempt: int) -> None:
-        """Handle a failed/empty playlist fetch (main thread).
-
-        Refreshes the integration's credentials once and re-fetches
-        before giving up; ``attempt`` bounds the recursion so a genuinely
-        broken integration errors out after a single retry.
         """
+        Handle a failed/empty playlist fetch (main thread).
+        """
+
         if attempt == 0 and self._on_refresh is not None:
             def retry() -> None:
                 self._fetch_and_show_playlists(integration, attempt=1)
@@ -195,12 +164,11 @@ class PlaylistController:
     def _on_playlist_selected(
         self,
         playlist_name: str,
-        platform: str = "youtube_music",
+        platform: str,
         playlist_id: str = "",
         thumb_url: Optional[str] = None,
         follower_count: int = 0,
     ) -> None:
-        """A playlist was chosen - persist and notify the UI."""
         PlaylistStore.add_playlist(
             playlist_name,
             platform=platform,
@@ -218,7 +186,6 @@ class PlaylistController:
         self._on_add_playlist_frame(playlist_name, platform, playlist_id, thumb_url)
 
     def _on_cancel(self) -> None:
-        """User cancelled the dialog."""
         self._workflow_open = False
         self._on_dialog_cancel()
 

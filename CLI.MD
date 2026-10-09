@@ -99,12 +99,10 @@ playlistmanager --uninstall all              # remove every installed platform
 
 ### Playlist management:
 ```bash
-playlistmanager -p add "https://music.youtube.com/playlist?list=PL..."
-playlistmanager -p add "https://open.spotify.com/playlist/<id>"
-playlistmanager -p del 1,"Chill Mix"          # remove locally (registry + DB)
-playlistmanager -p del "https://open.spotify.com/playlist/<id>"   # by URL
-playlistmanager -p delete all                 # remove every playlist
-playlistmanager -p ref 2,3                    # re-import all tracks from the platform
+playlistmanager -p add "<URL>"
+playlistmanager -p del 1,"Chill Mix","<URL>"  # delete playlist and database
+playlistmanager -p delete all                 # delete all playlists
+playlistmanager -p ref 2,"Playlist 1","URL"   # refresh database (re-fetch songs & data)
 playlistmanager -p refresh all                # refresh every playlist
 ```
 
@@ -114,9 +112,6 @@ playlistmanager -p refresh all                # refresh every playlist
   database, never the playlist on the platform. `ref` deletes and re-imports the local
   database, refreshing the thumbnail too.
 - Spotify URLs: `https://open.spotify.com/playlist/<id>[...]` or `spotify:playlist:<id>`.
-  YouTube/YouTube Music URLs: `.../playlist?list=<id>` on music.youtube.com or youtube.com.
-  Tidal URLs: `https://tidal.com/browse/playlist/<id>` (a plain `https://tidal.com/playlist/<id>`
-  resolves to the same thing).
 - A playlist name that is pure digits (e.g. `"123"`) is always read as an order number,
   and names containing commas cannot be addressed by name - use `--list` numbers or the
   playlist URL for those.

@@ -603,13 +603,13 @@ class _FakeStore:
         return [dict(i) for i in cls._items]
 
     @classmethod
-    def delete_playlist(cls, name, platform="youtube_music", playlist_id=""):
+    def delete_playlist(cls, name, platform, playlist_id=""):
         cls._items = [
             p
             for p in cls._items
             if not (
                 p.get("name") == name
-                and (p.get("platform") or "youtube_music") == platform
+                and p.get("platform", "") == platform
                 and (p.get("playlist_id") or "") == playlist_id
             )
         ]

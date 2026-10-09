@@ -148,6 +148,7 @@ DEFAULT_STRINGS: dict[str, str] = {
     "settings.appearance": "Appearance",
     "settings.show_log_row": "Show log row (artist / song / status)",
     "settings.show_playlist_stats": "Show playlist stats (songs / duration / followers)",
+    "settings.show_playlist_numbers": "Show playlist numbers (as in --list)",
     "settings.ask_before_song_remove": "Ask before removing a song",
     "settings.ask_before_playlist_remove": "Ask before removing the playlist",
     "settings.confirm_on_quit": "Ask before quitting (Cancel / Hide to tray / Quit)",

@@ -1,8 +1,6 @@
 """
 Pending duplicate songs + pair-song memory (``db/extra.json``).
 
-Two kinds of state live here:
-
 ``pending``
     Queued "Similar song" songs - a hotkey add fuzzy-matched a song
     already in the playlist and was NOT added anywhere; the user resolves
@@ -21,28 +19,6 @@ Two kinds of state live here:
     Persistent error log shown in the activity window's Errors tab
     (today flow errors vanish into a red card status that is gone on the
     next keybind).  Capped at :data:`MAX_ERRORS`, newest first on read.
-
-The file sits under the gitignored ``db/`` and is created on demand,
-mirroring :mod:`services.playlist_store`'s write discipline (module-level
-lock, atomic temp-file + rename, defensive parent mkdir).
-
-Reads are served from an in-memory copy of the store keyed by the file's
-``(mtime_ns, size)`` signature: a write through this module refreshes the
-copy directly, and an *external* change (the CLI shares this file, and
-tests may rewrite it) changes the signature so the next read re-parses.
-The lock still serialises every read/write, and ``_write`` failures still
-RAISE (see below).
-
-Write failures RAISE (via :mod:`utils.atomic_json`): mutating callers
-keep a process-wide guarantee that a failed persist is never mistaken
-for a successful one.  This module never swallows silently - but a
-caller that must not let bookkeeping failure abort the operation it is
-bookkeeping for (a teardown, a purge, a queue write on the add path)
-catches :data:`utils.atomic_json.WRITE_ERRORS` itself and decides what
-to do.  Two mistakes to avoid: catching nothing (the raise escapes and
-skips the caller's remaining work) and catching bare ``Exception`` (an
-unrelated bug in the caller's own logic gets absorbed as "the disk was
-full").
 """
 
 import json
@@ -56,22 +32,13 @@ logger = logging.getLogger(__name__)
 from services import profile_store as _profile_store
 from utils.atomic_json import atomic_json_write
 
-# Bound at import time so paths resolve exactly once per process; the
-# active profile can only change via restart, so re-evaluating here
-# would be both wasted work and wrong mid-process.
 extra_json = _profile_store.db_dir() / "extra.json"
 
-# Serialise all read/write access across flow threads and the UI thread.
 _lock = threading.RLock()
 
-# In-memory store + the file signature it was parsed from.  Kept in sync
-# by _write(); any external edit changes the signature and forces a
-# re-read on the next access (see _load).
 _store_cache: dict | None = None
 _store_cache_sig: tuple[int, int] | None = None
 
-# Oldest-evicted once exceeded - a backlog must not grow unbounded when a
-# user ignores the activity window for weeks.
 MAX_PENDING = 50
 MAX_ERRORS = 100
 
@@ -85,14 +52,7 @@ def _now_iso() -> str:
 
 
 def _load() -> dict:
-    """Read the store file (caller holds *_lock*).
-
-    The parsed store is cached until the file's ``(mtime_ns, size)``
-    signature changes, so the duplicate scan's per-pair ``get_song``
-    calls (and every other read) cost a stat, not a JSON parse.  A
-    missing or corrupt file self-heals to an empty store - this is
-    song memory, never worth crashing the app over.
-    """
+    """Read the store file (caller holds *_lock*)."""
     global _store_cache, _store_cache_sig
     sig = None
     try:
@@ -128,20 +88,11 @@ def _load() -> dict:
 
 
 def _write(data: dict) -> None:
-    """Atomically persist the store (caller holds *_lock*).
-
-    Delegates to :func:`utils.atomic_json.atomic_json_write`; failures
-    raise - a persist that fails must never look like it succeeded.
-    The in-memory copy is refreshed in place so a following ``_load``
-    does not re-read the file it just wrote.
-    """
+    """Atomically persist the store (caller holds *_lock*)."""
     global _store_cache, _store_cache_sig
     try:
         atomic_json_write(extra_json, data)
     except Exception:
-        # Callers mutate the dict *before* persisting; a failed write
-        # must not leave that mutation visible through the cache (the
-        # "failed persist is never mistaken for success" guarantee).
         _store_cache = None
         _store_cache_sig = None
         raise
@@ -154,13 +105,7 @@ def _write(data: dict) -> None:
 
 
 def make_pair_key(platform: str, playlist_id: str, track_a: str, track_b: str) -> str:
-    """Order-stable pair key for the *songs* map.
-
-    Track ids are sorted so both directions of a match collapse onto one
-    key.  Legacy playlists carry ``playlist_id=""`` and stay name-scoped
-    via their records - here the empty id is part of the key exactly like
-    the flows use it for local DB addressing.
-    """
+    """Order-stable pair key for the *songs* map."""
     a, b = sorted((str(track_a or ""), str(track_b or "")))
     return f"{platform}|{playlist_id}|{a}|{b}"
 
@@ -170,7 +115,8 @@ def make_pair_key(platform: str, playlist_id: str, track_a: str, track_b: str) -
 # ----------------------------------------------------------------------
 
 def list_pending(prune_unregistered: bool = True) -> list[dict]:
-    """Return pending song records (newest first).
+    """
+    Return pending song records (newest first).
 
     Recency is the file's append order - ``add_pending`` re-appends a
     refreshed record at the end - not ``created_at``, whose
@@ -196,8 +142,6 @@ def list_pending(prune_unregistered: bool = True) -> list[dict]:
 def _playlist_alive(record: dict) -> bool:
     """Store-liveness check for one pending record."""
     try:
-        # Local import: keeps module import side-effect free for headless
-        # harnesses that patch the store path.
         from services.playlist_store import PlaylistStore
 
         return PlaylistStore.playlist_still_registered(
@@ -206,18 +150,11 @@ def _playlist_alive(record: dict) -> bool:
             record.get("playlist_id") or None,
         )
     except Exception:
-        return True  # err permissive - same policy as the flow guard
+        return True
 
 
 def add_pending(record: dict) -> str | None:
-    """Queue one near-duplicate song; returns its id.
-
-    Re-enqueueing the same ``(playlist_name, playlist_id, track_id)``
-    replaces the old record instead of stacking duplicates of the same
-    prompt.  ``playlist_name`` is part of the key: two distinct legacy
-    playlists (no playlist_id - both ``""``) can enqueue the same
-    track_id and must get two separate prompts.
-    """
+    """Queue one near-duplicate song; returns its id."""
     record = dict(record)
     record.setdefault("id", uuid.uuid4().hex)
     record.setdefault("kind", "pending")
@@ -233,8 +170,6 @@ def add_pending(record: dict) -> str | None:
                 and r.get("track_id") == record.get("track_id")
             )
         ]
-        # Append = most recent; list_pending reverses for display and the
-        # cap evicts from the front (oldest appended first).
         pending.append(record)
         if len(pending) > MAX_PENDING:
             pending = pending[-MAX_PENDING:]
@@ -258,7 +193,8 @@ def remove_pending(record_id: str) -> bool:
 
 
 def find_pending(playlist_id: str, track_id: str, playlist_name: str = "") -> dict | None:
-    """Locate one queued record by its natural key (no pruning on read).
+    """
+    Locate one queued record by its natural key (no pruning on read).
 
     Mirrors :func:`add_pending`'s dedup key: ``playlist_name`` disambiguates
     two legacy playlists (both ``playlist_id == ""``) that queued the same
@@ -361,13 +297,7 @@ def clear_errors() -> int:
 
 
 def purge_platform(platform: str) -> tuple[int, int, int]:
-    """Drop every record referencing *platform* (uninstall cleanup).
-
-    Removes pending duplicate records, pair-memory entries (keys start
-    with ``<platform>|`` - see :func:`make_pair_key`) and error-log
-    entries for the platform.  Returns the removed counts as
-    ``(pending, songs, errors)``.
-    """
+    """Drop every record referencing *platform* (uninstall cleanup)."""
     with _lock:
         data = _load()
         pending = list(data.get("pending", []))
@@ -397,18 +327,7 @@ def purge_platform(platform: str) -> tuple[int, int, int]:
 
 
 def purge_playlist(platform: str, playlist_id: str, playlist_name: str) -> tuple[int, int, int]:
-    """Drop every record referencing one playlist (playlist-delete cleanup).
-
-    Mirrors :func:`purge_platform` scoped to a single playlist.  Without
-    this, deleting a playlist leaves its pending duplicate decisions,
-    pair-memory entries and error-log lines in ``db/extra.json`` forever,
-    resurfacing if the playlist is ever re-added.
-
-    Pending records carry ``playlist_id``; pair-memory keys embed it
-    (``<platform>|<playlist_id>|...``); error-log records only carry
-    ``playlist_name``, so legacy id-less playlist errors are matched by
-    name.  Returns ``(pending, songs, errors)`` removed counts.
-    """
+    """Drop every record referencing one playlist (playlist-delete cleanup)."""
     with _lock:
         data = _load()
         pending = list(data.get("pending", []))
@@ -455,12 +374,7 @@ def purge_playlist(platform: str, playlist_id: str, playlist_name: str) -> tuple
 # ----------------------------------------------------------------------
 
 def stamp() -> float:
-    """File mtime as a change signal for badge polling.
-
-    Reading a stat is far cheaper than parsing the JSON every poll tick,
-    and cross-process writes (the CLI shares this file) are picked up
-    for free.  0.0 when the file does not exist yet.
-    """
+    """File mtime as a change signal for badge polling."""
     try:
         return extra_json.stat().st_mtime
     except OSError:

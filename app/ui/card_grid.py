@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Callable
 
 from controllers.keybind_registry import KeybindCallbacks
 from services.database import DatabaseManager
-from services.playlist_store import PlaylistStore
+from services.playlist_store import PlaylistStore, registry_numbers
 from services.playlist_url import build_playlist_url
 from services import duplicate_queue, scrobble_log
 from ui.card import PlaylistCard
@@ -80,6 +80,9 @@ class CardGridManager:
         pin_img=None,
         pin_active_img=None,
         show_pin_buttons=True,
+        # Registry number before each card's name (--list parity); filled
+        # by refresh_card_numbers, live-toggled by set_show_numbers.
+        show_numbers=False,
         on_pin_toggle: Callable[[int], None] | None = None,
         # Callbacks into MainWindow
         make_keybind_callbacks: Callable[[int], KeybindCallbacks],
@@ -111,6 +114,7 @@ class CardGridManager:
         self._pin_img = pin_img
         self._pin_active_img = pin_active_img
         self._show_pin_buttons = show_pin_buttons
+        self._show_numbers = show_numbers
         self._on_pin_toggle_cb = on_pin_toggle
         self._pin_buttons: list[tk.Button | None] = []
         self._close_buttons: list[tk.Button] = []
@@ -213,6 +217,62 @@ class CardGridManager:
                 continue
 
     # ------------------------------------------------------------------
+    # Registry numbers (--list parity)
+    # ------------------------------------------------------------------
+
+    def refresh_card_numbers(self) -> None:
+        """Show every card's ``playlistmanager --list`` number, or hide them.
+
+        The number is the card's 1-based position in the REGISTRY
+        (``services.playlist_store.registry_numbers``), not its slot in the
+        grid: the grid sorts and pins, ``--list`` does not, so numbers stay
+        stable identifiers across re-sorts and skip cards hidden for a
+        missing platform plugin.  Callers: after card identity is assigned
+        (populate / add), after a close shifts the registry, and from the
+        Settings toggle.
+
+        Never touches ``name_label``'s text - that string is the card's
+        identity lookup key across the codebase; the number is its own
+        widget for exactly that reason.
+        """
+        if not self._show_numbers:
+            for card in self.cards:
+                if card.number_label is not None:
+                    try:
+                        card.number_label.grid_remove()
+                    except tk.TclError:
+                        pass
+            return
+
+        numbers = registry_numbers()
+        for card in self.cards:
+            label = card.number_label
+            if label is None:
+                continue
+            try:
+                # Same key identity cli.resolve_targets resolves "-a 3" by.
+                key = (
+                    card.platform,
+                    card.playlist_id or card.name_label.cget("text"),
+                )
+                n = numbers.get(key)
+                if n is None:
+                    # Identity not in the registry (transient mid-close, or
+                    # a card built from a non-registry source): hide rather
+                    # than show a stale number.
+                    label.grid_remove()
+                else:
+                    label.configure(text=f"{n}.")
+                    label.grid()
+            except tk.TclError:
+                continue
+
+    def set_show_numbers(self, enabled: bool) -> None:
+        """Apply the Settings > show_playlist_numbers toggle live."""
+        self._show_numbers = bool(enabled)
+        self.refresh_card_numbers()
+
+    # ------------------------------------------------------------------
     # Card index helper
     # ------------------------------------------------------------------
 
@@ -303,6 +363,19 @@ class CardGridManager:
                 font=ui_font(12),
                 background=label_playlist_name_bg,
                 foreground=label_playlist_name_fg,
+            )
+
+            # Registry number ("3." - the value `--list` prints) in its own
+            # header column, immediately left of the name.  Gridded empty
+            # (zero width); refresh_card_numbers fills it in once the card
+            # has an identity, or hides it while the setting is off.
+            playlist_number = tk.Label(
+                main_header_frame,
+                text="",
+                font=ui_font(12),
+                background=label_playlist_name_bg,
+                foreground=label_playlist_name_fg,
+                anchor="w",
             )
 
             # Header action cluster (pin | close) - the buttons are real
@@ -401,6 +474,7 @@ class CardGridManager:
                 frame=main_frame,
                 header_frame=main_header_frame,
                 name_label=playlist_name,
+                number_label=playlist_number,
                 cover_label=playlist_cover,
                 keybind_entry=playlist_keybind,
                 reload_btn=reload_database,
@@ -428,6 +502,9 @@ class CardGridManager:
 
             playlist_name.bind("<Button-1>", _open_card_playlist)
             playlist_name.configure(cursor="hand2")
+            # The number reads as part of the title: same click-to-open.
+            playlist_number.bind("<Button-1>", _open_card_playlist)
+            playlist_number.configure(cursor="hand2")
 
             close_playlist["command"] = lambda c=card: self._confirm_close_playlist(c)
             if pin_btn is not None:
@@ -444,7 +521,7 @@ class CardGridManager:
                 self._card_index(c)
             )
 
-            main_header_frame.grid_columnconfigure(1, weight=1)
+            main_header_frame.grid_columnconfigure(2, weight=1)
             main_log_frame.grid_columnconfigure(2, weight=1)
 
             main_frame.grid(
@@ -455,15 +532,16 @@ class CardGridManager:
             main_log_frame.grid(row=2, column=0, sticky="nsew")
 
             playlist_cover.grid(row=0, column=0, sticky="ne", rowspan=2)
-            playlist_name.grid(row=0, column=1, sticky="nswe")
+            playlist_number.grid(row=0, column=1, sticky="w")
+            playlist_name.grid(row=0, column=2, sticky="nswe")
             # Close always lives in the actions frame; the pin joins it on
             # the left when enabled.  One code path, no None branches.
             if pin_btn is not None:
                 pin_btn.pack(side="left")
             close_playlist.pack(side="left")
-            header_actions.grid(row=0, column=2, sticky="ne")
-            playlist_keybind.grid(row=1, column=1, sticky="nswe")
-            reload_database.grid(row=1, column=2, sticky="ne")
+            header_actions.grid(row=0, column=3, sticky="ne")
+            playlist_keybind.grid(row=1, column=2, sticky="nswe")
+            reload_database.grid(row=1, column=3, sticky="ne")
 
             stats_songs.grid(row=0, column=0, padx=4, sticky="nswe")
             stats_duration.grid(row=0, column=1, padx=4, sticky="nswe")
@@ -582,6 +660,9 @@ class CardGridManager:
             logger.error("close_main_frame: frame destroy failed: %s", e)
 
         self._reorder_frames()
+        # The registry entry is gone: every surviving card's --list number
+        # may have shifted, and the closed card's label died with its frame.
+        self.refresh_card_numbers()
         self._sync_empty_state()
         if failures:
             logger.error(
@@ -817,6 +898,14 @@ class CardGridManager:
                 background=C["label_playlist_name_bg"],
                 foreground=C["label_playlist_name_fg"],
             )
+            if card.number_label is not None:
+                # Same palette as the name it sits next to - deliberately
+                # NOT the log-label fallback the generic walk below applies
+                # to unknown labels.
+                card.number_label.configure(
+                    background=C["label_playlist_name_bg"],
+                    foreground=C["label_playlist_name_fg"],
+                )
             card.cover_label.configure(background=C["label_playlist_bg"])
 
             for lbl in (card.log_artist, card.log_name):
@@ -844,6 +933,7 @@ class CardGridManager:
                 card.log_artist,
                 card.log_name,
                 card.name_label,
+                card.number_label,
                 card.stats_songs,
                 card.stats_duration,
                 card.stats_followers,

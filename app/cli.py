@@ -158,12 +158,12 @@ def resolve_targets(
     seen = set()
 
     def add(entry: dict, number: int) -> None:
-        # Legacy entries may lack playlist_id (and even the platform field -
-        # the store defaults those to YouTube Music).  Key on
+        # Legacy entries may lack playlist_id (the platform field is always
+        # present - the store stamps pre-platform rows at load).  Key on
         # (platform, playlist_id or name) so distinct legacy playlists are
         # not collapsed into a single dedup key.
         key = (
-            entry.get("platform") or "youtube_music",
+            entry.get("platform", ""),
             entry.get("playlist_id") or entry.get("name"),
         )
         if key in seen:
@@ -369,7 +369,7 @@ def run_list() -> int:
         print(tr("cli.no_playlists"), file=sys.stderr)
         return 2
     for i, playlist in enumerate(playlists, 1):
-        print(tr("cli.list_item", i=i, name=playlist.get("name"), platform=playlist.get("platform") or "youtube_music"))
+        print(tr("cli.list_item", i=i, name=playlist.get("name"), platform=playlist.get("platform", "")))
     return 0
 
 
@@ -409,7 +409,7 @@ def run_add(spec: str) -> int:
     # integrations the add never uses, and a stale unrelated integration
     # could delay or fail a perfectly healthy add.
     target_platforms = {
-        entry.get("platform") or "youtube_music" for _, entry in targets
+        entry.get("platform", "") for _, entry in targets
     }
     registry = _build_integrations(auth_platforms=target_platforms)
     scrobble_integ = []
@@ -432,11 +432,11 @@ def run_add(spec: str) -> int:
                     continue
             scrobble_integ.append(backend)
 
-    # Legacy registry entries predate the "platform" field - default them
-    # to YouTube Music, matching PlaylistStore.
+    # Every store row carries a platform (PlaylistStore stamps legacy rows
+    # on load), so targets group by the field directly.
     targets_by_platform: dict[str, list] = {}
     for number, entry in targets:
-        platform = entry.get("platform") or "youtube_music"
+        platform = entry.get("platform", "")
         targets_by_platform.setdefault(platform, []).append((number, entry))
 
     # Per platform: authenticate once, build its flow via the plugin
@@ -476,7 +476,7 @@ def run_add(spec: str) -> int:
 
     failures = 0
     for number, entry in targets:
-        platform = entry.get("platform") or "youtube_music"
+        platform = entry.get("platform", "")
         name = entry.get("name")
         ctx = contexts[platform]
         if ctx["flow"] is None:
@@ -617,9 +617,7 @@ def run_del(spec: str) -> int:
 
     for number, entry in targets:
         name = entry.get("name")
-        # Legacy entries may lack the platform field - default to YT like
-        # PlaylistStore does, so delete_playlist_db never sees None.
-        platform = entry.get("platform") or "youtube_music"
+        platform = entry.get("platform", "")
         playlist_id = entry.get("playlist_id", "")
         PlaylistStore.delete_playlist(
             name, platform=platform, playlist_id=playlist_id
@@ -655,7 +653,7 @@ def run_refresh(spec: str) -> int:
 
     integrations = _build_integrations(
         auth_platforms={
-            entry.get("platform") or "youtube_music" for _, entry in targets
+            entry.get("platform", "") for _, entry in targets
         }
     )
     sync = PlaylistSyncService(integrations)
@@ -663,7 +661,7 @@ def run_refresh(spec: str) -> int:
     failures = 0
     for number, entry in targets:
         name = entry.get("name")
-        platform = entry.get("platform") or "youtube_music"
+        platform = entry.get("platform", "")
         playlist_id = entry.get("playlist_id", "")
         if not playlist_id:
             print(

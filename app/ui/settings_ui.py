@@ -103,6 +103,7 @@ def show_settings_dialog(
     on_check_duplicates_now=None,
     on_like_button_change=None,
     on_pin_buttons_change=None,
+    on_numbers_change=None,
     on_sort_change=None,
     on_scrobble_keybind_change=None,
     on_notif_enabled_change=None,
@@ -145,6 +146,11 @@ def show_settings_dialog(
             ``(found_count, error_or_None)`` on the UI thread.
         on_like_button_change: optional callback applied live with the new
             like-button state (bool) when the checkbox changes.
+        on_numbers_change: optional callback applied live with the new
+            show-playlist-numbers state (bool) when the checkbox changes -
+            the registry number ("3.", the ``--list`` value) before each
+            card's name.  Without it the toggle only takes effect after a
+            restart.
         on_scrobble_keybind_change: optional callback fired after the
             scrobble keybind is recorded or cleared (no args); the caller
             re-registers/unregisters the live action keybind so the change
@@ -746,6 +752,30 @@ def show_settings_dialog(
                 logger.error("Failed to apply show_pin_buttons change: %s", e)
 
     pin_buttons_check.config(command=_on_pin_buttons_toggle)
+
+    numbers_var = tk.BooleanVar(
+        value=get_setting("show_playlist_numbers", fallback=False)
+    )
+    numbers_check = tk.Checkbutton(
+        appearance_section,
+        text=tr("settings.show_playlist_numbers"),
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        variable=numbers_var,
+    )
+    numbers_check.pack(fill="both", pady=(0, 5), padx=16)
+
+    def _on_numbers_toggle():
+        _toggle_setting("show_playlist_numbers", numbers_var)
+        if on_numbers_change:
+            try:
+                on_numbers_change(bool(numbers_var.get()))
+            except Exception as e:
+                logger.error("Failed to apply show_playlist_numbers change: %s", e)
+
+    numbers_check.config(command=_on_numbers_toggle)
 
     showcase_row = tk.Frame(appearance_section, background=theme_check_bg)
     showcase_row.pack(fill="both", pady=(0,5), padx=16)

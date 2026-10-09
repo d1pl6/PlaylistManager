@@ -1,11 +1,7 @@
 """
 OS-keyring mirror for platform credentials (credentials at rest).
 
-The credential FILES under the profile-aware auth dir remain the
-plugin-facing contract: platform plugins read - and some flows write -
-those JSON files directly, and the ``ytmusicapi`` terminal flow writes
-``browser.json`` itself outside the app.  The OS keyring holds an
-encrypted MIRROR of each auth-dir credential file:
+The OS keyring holds an encrypted MIRROR of each auth-dir credential file:
 
 * core-originated writes mirror the payload into the keyring when a
   usable backend exists (``mirror()``);
@@ -20,32 +16,8 @@ encrypted MIRROR of each auth-dir credential file:
   live credentials stranded in the keyring after the profile's auth
   dir is gone or moved.
 
-Machines without a usable backend (headless Linux without a
-secret-service daemon, CI) degrade to file-only storage - the same
-0600-files behavior as before - and log the degradation once.  The
-mirror never blocks a login and never raises into a caller.
-
-``keyring`` itself is an OPTIONAL dependency (the ``keyring`` extra):
-it is the only one of the declared packages with a heavy, platform-
-conditional transitive chain (``SecretStorage`` -> ``cryptography`` +
-``jeepney`` on Linux) and it is useless without a running daemon, so
-it is not worth forcing on every install.  The import therefore stays
-lazy (inside :func:`_backend`) and the probe classifies its absence
-separately (:func:`_probe_backend` returns a reason) so the log tells
-the user to install the package rather than to chase a daemon they may
-already have.
-
-The ``[security] credential_keyring`` setting (default ``on``, see
-utils/config.py) is the documented toggle: ``off`` stops mirroring and
-restoring without touching existing keyring entries.
-
-Only *usable* backends are trusted.  ``keyring``'s own ``fail`` backend
-and the entire ``keyrings.alt`` package (plaintext reimplementations -
-strictly weaker than the 0600 files they would mirror) count as
-unavailable, and a functional write/read/delete probe must succeed for
-the keyring to be considered available.  Availability is sampled once
-per process and cached; a desktop keyring daemon that starts after the
-app will be picked up on the next launch.
+Platform-conditional transitive chain (``SecretStorage`` ->
+``cryptography`` + ``jeepney`` on Linux)
 """
 
 import logging
@@ -61,10 +33,7 @@ logger = logging.getLogger(__name__)
 KEYRING_SERVICE = "playlistmanager"
 _PROBE_ACCOUNT = "credential_store_probe"
 
-# Probe result cache (None = not sampled yet).  Guarded by _lock.
 _available: bool | None = None
-# Why the probe failed ("", "missing", "unusable"); only meaningful while
-# _available is False, and recomputed with it.
 _reason: str = ""
 _lock = threading.Lock()
 
@@ -75,16 +44,8 @@ _lock = threading.Lock()
 
 
 def _backend():
-    """Return the active keyring backend (may raise).
-
-    Kept behind a function so tests can swap in a deterministic fake
-    (``monkeypatch.setattr(credential_store, "_backend", lambda: fake)``)
-    instead of mutating the global ``keyring`` backend.
-
-    The import is lazy because ``keyring`` is an optional dependency -
-    its absence surfaces as ``ImportError`` here, which
-    :func:`_probe_backend` classifies as "not installed" rather than
-    crashing the app at import time.
+    """
+    Return the active keyring backend (may raise).
     """
     import keyring
 
@@ -92,12 +53,8 @@ def _backend():
 
 
 def _is_usable_backend(kr) -> bool:
-    """True when *kr* is an OS-backed keyring, not a placeholder.
-
-    Vetoes the library's own fail backend (raises on every op) and
-    every ``keyrings.alt`` backend (plaintext/unencrypted
-    reimplementations - mirroring credentials into them would store a
-    second plaintext copy, strictly worse than the 0600 files alone).
+    """
+    True when *kr* is an OS-backed keyring, not a placeholder.
     """
     try:
         module = type(kr).__module__
@@ -111,14 +68,8 @@ def _is_usable_backend(kr) -> bool:
 
 
 def _probe_backend() -> tuple[bool, str]:
-    """Functional write/read/delete round trip against the keyring.
-
-    Returns ``(available, reason)``.  *reason* is ``""`` when available,
-    ``"missing"`` when the optional ``keyring`` package is not installed,
-    and ``"unusable"`` for every other failure (no backend, the library's
-    fail backend, a ``keyrings.alt`` reimplementation, a daemon that
-    refuses the write).  The two failure kinds need different advice -
-    starting a secret-service daemon does nothing for a missing package.
+    """
+    Functional write/read/delete round trip against the keyring.
     """
     try:
         kr = _backend()
@@ -141,7 +92,7 @@ def _probe_backend() -> tuple[bool, str]:
     return (True, "") if ok else (False, "unusable")
 
 
-# Log text per probe failure reason (see _probe_backend).
+# Log text per probe failure reason.
 _PROBE_HINTS = {
     "missing": (
         "The optional 'keyring' package is not installed - credentials stay "
@@ -160,7 +111,8 @@ _PROBE_HINTS = {
 
 
 def keyring_available() -> bool:
-    """Whether a usable OS keyring backend is present (cached probe).
+    """
+    Whether a usable OS keyring backend is present (cached probe).
 
     Sampled once per process: a desktop daemon that appears after the
     first probe is picked up on the next launch.
@@ -178,7 +130,6 @@ def keyring_available() -> bool:
 
 
 def mirroring_enabled() -> bool:
-    """True when the ``[security] credential_keyring`` toggle is on."""
     from utils.config import get_setting_value
 
     return (
@@ -193,7 +144,8 @@ def mirroring_enabled() -> bool:
 
 
 def auth_file(name: str) -> Path:
-    """Full path of *name* inside the profile-aware auth dir.
+    """
+    Full path of *name* inside the profile-aware auth dir.
 
     *name* must be a bare filename - same traversal rejection as
     ``PluginInfo.auth_path``: slashes or ``..`` segments are refused.
@@ -204,12 +156,8 @@ def auth_file(name: str) -> Path:
 
 
 def _account(name: str, profile: str | None = None) -> str:
-    """OS-keyring account name: isolates profiles from each other.
-
-    *profile* defaults to the active profile.  Pass it explicitly when
-    operating on a profile that is NOT active - the profile delete /
-    rename sweeps must never touch the active profile's entries (or
-    resolve their own name into it).
+    """
+    OS-keyring account name: isolates profiles from each other.
     """
     if profile is None:
         profile = _profile_store.active_profile()
@@ -246,13 +194,8 @@ def _keyring_delete(name: str, profile: str | None = None) -> bool:
 
 
 def _known_credential_names() -> list[str]:
-    """Basenames of every auth-dir credential file the app declares.
-
-    ``keyring`` exposes no portable entry-enumeration API, so a
-    profile-wide sweep (delete / rename) can only name the files the app
-    itself knows about.  Same source of truth as :func:`restore_all`:
-    ``auth_setup.PLATFORM_CREDENTIAL_FILES``, which also carries the
-    hardcoded-map fallback used when a manifest cannot be read.
+    """
+    Basenames of every auth-dir credential file the app declares.
     """
     try:
         from services.auth_setup import PLATFORM_CREDENTIAL_FILES
@@ -272,17 +215,8 @@ def _known_credential_names() -> list[str]:
 
 
 def mirror(name: str, payload: str | None = None) -> bool:
-    """Copy a credential file's payload into the OS keyring.
-
-    *name* is the bare filename inside the auth dir; *payload* overrides
-    reading the file back (only used when the caller holds the exact
-    bytes the plugin just wrote - the default read-back keeps the mirror
-    in lockstep with what is actually on disk).
-
-    No-op when mirroring is off or no usable backend exists; a payload
-    identical to the stored one is skipped (polls re-observe the same
-    terminal-flow file without spamming the daemon).  Returns True when
-    the keyring now holds *payload*.
+    """
+    Copy a credential file's payload into the OS keyring.
     """
     if not mirroring_enabled() or not keyring_available():
         return False
@@ -297,12 +231,8 @@ def mirror(name: str, payload: str | None = None) -> bool:
 
 
 def restore(name: str) -> bool:
-    """Re-materialize a MISSING credential file from the OS keyring.
-
-    Only writes when the file does not exist - an on-disk file always
-    wins (plugins may have refreshed it since the last mirror, and the
-    keyring copy could be stale).  Atomic 0600 write, auth dir ensured
-    0700.  Returns True when the file was written.
+    """
+    Re-materialize a MISSING credential file from the OS keyring.
     """
     if not mirroring_enabled() or not keyring_available():
         return False
@@ -319,18 +249,11 @@ def restore(name: str) -> bool:
             auth_dir.chmod(0o700)
         except OSError:
             pass
-        # mkstemp, NOT a predictable "<name>.tmp" opened with O_CREAT:
-        # O_CREAT applies 0600 only when it CREATES the file, so a stale
-        # loose tmp (crash remnant, another tool) would be written
-        # through with its old mode - and os.replace carries that mode
-        # onto the final credential file.  mkstemp always creates a
-        # fresh 0600 file (umask can only clear bits) and cannot collide
-        # with or clobber anything already in the auth dir.
         fd, tmp = tempfile.mkstemp(dir=str(auth_dir), prefix=name + ".", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(payload)
-            os.replace(tmp, path)  # tmp keeps its 0600 mode through rename
+            os.replace(tmp, path)
         except BaseException:
             try:
                 os.unlink(tmp)
@@ -345,20 +268,8 @@ def restore(name: str) -> bool:
 
 
 def restore_all() -> None:
-    """Restore every missing auth-dir credential file from the keyring.
-
-    Best-effort startup hook: called before integrations build their
-    auth managers (GUI) and before headless CLI flows touch platforms.
-    Missing files are re-materialized; everything else is a no-op.
-    Never raises.
-
-    Each name comes from :func:`_known_credential_names` but the FILE is
-    resolved through :func:`auth_file` (the profile-aware resolver).
-    That split matters: ``auth_setup.PLATFORM_CREDENTIAL_FILES`` is bound
-    at import time and therefore points at the auth dir of whatever
-    profile was active then, so filtering on ``p.parent == auth_dir()``
-    would silently skip every file once the active profile captures the
-    Logins bucket into its own ``auth/<profile>/`` slot.
+    """
+    Restore every missing auth-dir credential file from the keyring.
     """
     for name in _known_credential_names():
         try:
@@ -368,11 +279,8 @@ def restore_all() -> None:
 
 
 def delete(name: str) -> None:
-    """Remove the keyring mirror for *name* (never raises).
-
-    Runs regardless of the ``credential_keyring`` toggle: logout /
-    uninstall must clear a mirror that a previously-enabled session may
-    have written.
+    """
+    Remove the keyring mirror for *name* (never raises).
     """
     if not keyring_available():
         return
@@ -380,18 +288,8 @@ def delete(name: str) -> None:
 
 
 def delete_profile(profile: str) -> None:
-    """Clear every mirrored credential entry owned by *profile*.
-
-    Deleting a profile purges its auth dir, but the keyring copy lives
-    in the platform credential store, not on disk - without this sweep
-    the dead profile's live credentials (Spotify refresh tokens, Deezer
-    ARL cookies, YT Music cookies) survive in the OS keyring forever.
-    Entry names come from :func:`_known_credential_names`: ``keyring``
-    cannot enumerate entries, so only app-declared credential files can
-    be swept.
-
-    Never raises; runs regardless of the ``credential_keyring`` toggle,
-    exactly like :func:`delete`.
+    """
+    Clear every mirrored credential entry owned by *profile*.
     """
     if not keyring_available():
         return
@@ -403,15 +301,8 @@ def delete_profile(profile: str) -> None:
 
 
 def rename_profile(old: str, new: str) -> None:
-    """Move *old*'s mirrored entries to the *new* profile prefix.
-
-    Accounts are ``"<profile>:<file>"``, so a renamed profile resolves a
-    different prefix: a mirror left under the old name is unreachable
-    (the renamed profile can never restore from it) while still holding
-    a live credential.  Copy-then-delete per entry - a failed write
-    leaves the old entry in place rather than losing the only copy.
-
-    Never raises.  A no-op when *old* == *new*.
+    """
+    Move *old*'s mirrored entries to the *new* profile prefix.
     """
     if old == new or not keyring_available():
         return

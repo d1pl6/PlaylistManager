@@ -34,8 +34,8 @@ def should_confirm_quit(
 class AppController:
     def __init__(self, app):
         self.app = app
-        # Guards against re-entrant quit requests.  There are two quit
-        # sources (WM_DELETE_WINDOW and the tray "Quit" item)
+        # Guards against re-entrant quit requests (WM_DELETE_WINDOW and the
+        # tray "Quit" item are two independent sources).
         self._quitting = False
 
     def quit_app(self):
@@ -68,9 +68,8 @@ class AppController:
             self.app.quit_app()
         except Exception as e:
             logger.exception("Failed to close the app: %s", e)
-            # By this point cleanup() has already run (or the user chose
-            # Force-quit over its failure), so there is nothing left to
-            # cancel.
+            # cleanup() already ran (or the user chose Force-quit), so there
+            # is nothing left to cancel.
             try:
                 self.app.root.destroy()
             except Exception:
@@ -138,7 +137,8 @@ class AppController:
             # Fall back to the user-installed global command.
             cmd = ["playlistmanager"]
 
-        # Spawn the child first.
+        # Spawn the child before destroying the root, so a failed spawn
+        # leaves the app running.
         try:
             subprocess.Popen(
                 cmd,
@@ -147,7 +147,7 @@ class AppController:
             )
         except OSError as e:
             logger.error("Failed to restart the app: %s", e)
-            return  # window still exists — leave the app running
+            return
 
         try:
             self.app.root.destroy()
