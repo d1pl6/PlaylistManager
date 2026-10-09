@@ -501,6 +501,13 @@ DEFAULT_STRINGS: dict[str, str] = {
     "notif.duplicate_prompt": "Similar song already in playlist",
     "notif.scan_found.one": "Duplicate scan: {count} pending",
     "notif.scan_found.other": "Duplicate scan: {count} pending",
+    # --- desktop notifications (app/services/desktop_notify.py) -----------------------
+    # {song} is the "Artist - Song" identity (the flow's own fields).
+    "desktop_notify.added": "{song} was added to {playlist}",
+    "desktop_notify.exists": "{song} already is in {playlist}",
+    "desktop_notify.extra": "{song} - similar song already in {playlist}",
+    "desktop_notify.error": "{song}: {error}",
+    "desktop_notify.generic_error": "Error",
     # --- playlist picker (app/ui/playlist_dialog.py) ---------------------------------
     "playlist_picker.select_hint": "Select a Playlist below",
     # --- theme picker (app/ui/settings_theme_ui.py) ----------------------------------
@@ -597,6 +604,17 @@ DEFAULT_STRINGS: dict[str, str] = {
     "settings.notif_position_below_header": "Below header",
     "settings.notif_position_bottom": "Bottom (fixed)",
     "settings.notif_show_duplicates": "Show duplicate prompts in the notification bar",
+    # --- desktop notifications section (app/ui/settings_ui.py) -------------------------
+    "settings.desktop_notify": "Desktop notifications",
+    "settings.desktop_notify_add": "Add",
+    "settings.desktop_notify_success": "Success",
+    "settings.desktop_notify_duplicate": "Duplicate",
+    "settings.desktop_notify_errors": "Errors",
+    "settings.desktop_notify_extra": "Extra notify",
+    "settings.desktop_notify_hint": (
+        "\"Add\" ticks all four; ticking it again clears them. "
+        "Every option is off by default."
+    ),
 }
 
 #: Known card-status codes (:func:`tr_status` translates only these).

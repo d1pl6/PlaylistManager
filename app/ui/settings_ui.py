@@ -20,6 +20,7 @@ from services.scrobble import (
 )
 
 from utils.config import (
+    DESKTOP_NOTIFY_KINDS,
     GRID_SORT_DEFAULT_DIRECTION,
     GRID_SORT_DEFAULT_KEY,
     GRID_SORT_KEY_LABELS,
@@ -34,6 +35,7 @@ from utils.config import (
     UPDATE_CHECK_DEFAULT_INTERVAL,
     UPDATE_CHECK_INTERVALS,
     UPDATE_CHECK_INTERVAL_LABELS,
+    desktop_notify_enabled,
     get_setting,
     get_setting_value,
     resolve_notification_align,
@@ -681,6 +683,79 @@ def show_settings_dialog(
         "<<ComboboxSelected>>",
         lambda e: _on_playlist_remove_default_change(playlist_remove_var.get()),
     )
+
+    # --- Desktop notifications (OS-native toasts) ----------------------
+    desktop_section = tk.Frame(behavior_content, background=theme_win_bg)
+    desktop_section.pack(fill="both", padx=8, pady=(0, 8))
+    _section_header(desktop_section, tr("settings.desktop_notify"))
+
+    desk_vars = {
+        kind: tk.IntVar(value=1 if desktop_notify_enabled(kind) else 0)
+        for kind in DESKTOP_NOTIFY_KINDS
+    }
+
+    def _write_desktop(kind: str) -> None:
+        try:
+            set_setting_value(
+                "desktop_notify", kind, "yes" if desk_vars[kind].get() else "no"
+            )
+        except Exception as e:
+            logger.error("Failed to write desktop_notify %s: %s", kind, e)
+
+    def _all_desktop_on() -> bool:
+        return all(var.get() == 1 for var in desk_vars.values())
+
+    def _sync_add_var() -> None:
+        add_var.set(1 if _all_desktop_on() else 0)
+
+    def _toggle_add() -> None:
+        # The "Add" control stores nothing of its own: it ticks all four,
+        # or clears them when they are all already on.  Its variable only
+        # mirrors their state.
+        target = 0 if _all_desktop_on() else 1
+        for kind, var in desk_vars.items():
+            var.set(target)
+            _write_desktop(kind)
+        _sync_add_var()
+
+    def _toggle_desktop(kind: str) -> None:
+        _write_desktop(kind)
+        _sync_add_var()
+
+    add_var = tk.IntVar(value=1 if _all_desktop_on() else 0)
+
+    tk.Checkbutton(
+        desktop_section,
+        text=tr("settings.desktop_notify_add"),
+        cursor="hand2",
+        selectcolor=theme_check_select,
+        **checkbutton_style,
+        font=ui_font(12),
+        command=_toggle_add,
+        variable=add_var,
+    ).pack(fill="both", pady=(0, 5), padx=16)
+
+    for kind in DESKTOP_NOTIFY_KINDS:
+        tk.Checkbutton(
+            desktop_section,
+            text=tr(f"settings.desktop_notify_{kind}"),
+            cursor="hand2",
+            selectcolor=theme_check_select,
+            **checkbutton_style,
+            font=ui_font(11),
+            command=lambda k=kind: _toggle_desktop(k),
+            variable=desk_vars[kind],
+        ).pack(fill="both", pady=(0, 2), padx=(32, 16))
+
+    tk.Label(
+        desktop_section,
+        text=tr("settings.desktop_notify_hint"),
+        background=theme_win_bg,
+        foreground=theme_label_fg,
+        font=ui_font(9),
+        anchor="w",
+        justify="left",
+    ).pack(fill="x", padx=16, pady=(4, 0))
 
     appearance_section = tk.Frame(appearance_content, background=theme_win_bg)
     appearance_section.pack(fill="both", padx=8, pady=(0, 8))

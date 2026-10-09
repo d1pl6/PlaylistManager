@@ -13,7 +13,7 @@ from tkinter import ttk, messagebox
 
 from controllers.keybind_registry import KeybindCallbacks
 from controllers.playlist_controller import PlaylistController
-from services import duplicate_queue
+from services import desktop_notify, duplicate_queue
 from services import health_check
 from services.database import DatabaseManager
 from services.duplicate_check import find_duplicate_pairs, read_settings
@@ -55,6 +55,8 @@ from utils.platform import is_wayland_session, x11_root_desktop_state
 logger = logging.getLogger(__name__)
 
 assets_dir = Path(__file__).resolve().parents[2] / "assets"
+# Icon for desktop notifications (the same artwork the tray uses).
+app_image_path = assets_dir / "app_image.png"
 playlist_cover_img_path = assets_dir / "playlist_image.png"
 close_playlist_img_path = assets_dir / "close_playlist.png"
 pin_img_path = assets_dir / "pin.png"
@@ -115,6 +117,9 @@ class MainWindow:
         # Set by App._start_tray() once the window exists; None when no
         # tray backend is available.
         self.tray_service = None
+        # Newest near-duplicate record already desktop-notified; keeps the
+        # 2 s activity poll from re-firing the same toast.
+        self._notified_extra_id: str | None = None
         # Pending hide-to-tray after() id (cancelled if the window is
         # mapped again before the WM settles the minimize).
         self._hide_after_id: str | None = None
@@ -330,6 +335,66 @@ class MainWindow:
         except Exception:
             pending = []
         self.notification_bar.on_store_changed(pending, enabled)
+
+    # ------------------------------------------------------------------
+    # Notification sinks (in-window bar + OS desktop toasts)
+    # ------------------------------------------------------------------
+
+    def _emit(
+        self,
+        kind: str,
+        *,
+        playlist: str = "",
+        artist: str = "",
+        song: str = "",
+        status: str = "",
+        bg=None,
+    ) -> None:
+        """Render one event on the bar and, when enabled, on the desktop.
+
+        The single choke point both sinks share, so a new event kind has
+        to be added in one place.  ``kind`` is a notification-bar event
+        kind; ``services.desktop_notify.notify_event`` maps it to its
+        ``[desktop_notify]`` category and no-ops for kinds it does not
+        carry (``status``, ``scan``).
+        """
+        self.notification_bar.show_event(
+            kind, playlist=playlist, artist=artist, song=song, status=status, bg=bg
+        )
+        desktop_notify.notify_event(
+            kind,
+            playlist=playlist,
+            artist=artist,
+            song=song,
+            status=status,
+            tray=self.tray_service,
+            icon_path=str(app_image_path),
+        )
+
+    def _notify_queued_extra(self, pending: list) -> None:
+        """Desktop-notify a newly queued near-duplicate, once per record.
+
+        The bar prompt is poll-driven, so the toast is too - and it must
+        be deduped, or a stamp change from an unrelated error would
+        re-fire the same toast.  A handled record leaves the queue, so
+        "the newest record id changed" is enough.
+        """
+        record = pending[0] if pending else None
+        record_id = record.get("id") if record else None
+        if record_id == self._notified_extra_id:
+            return
+        self._notified_extra_id = record_id
+        if not record_id:
+            return
+        desktop_notify.notify_event(
+            "duplicate",
+            playlist=record.get("playlist_name", ""),
+            artist=", ".join(record.get("artists") or []),
+            song=record.get("title", ""),
+            status="duplicate",
+            tray=self.tray_service,
+            icon_path=str(app_image_path),
+        )
 
     # ------------------------------------------------------------------
     # CardGridManager callbacks
@@ -870,7 +935,7 @@ class MainWindow:
                 kind = "duplicate"
             elif text in ("exists", "error"):
                 kind = text
-            self.notification_bar.show_event(
+            self._emit(
                 kind,
                 playlist=playlist, artist=artist, song=song,
                 status=text, bg=background,
@@ -901,7 +966,7 @@ class MainWindow:
             except tk.TclError:
                 playlist_name = ""
             artist, song = self._notif_song
-            self.notification_bar.show_event(
+            self._emit(
                 "added",
                 playlist=playlist_name, artist=artist, song=song,
                 status="added", bg=C["label_playlist_good_bg"],
@@ -979,6 +1044,7 @@ class MainWindow:
             self.notification_bar.on_store_changed(
                 pending, notification_duplicates_enabled()
             )
+            self._notify_queued_extra(pending)
         try:
             self._activity_poll_after_id = self.root.after(
                 2000, self._poll_activity_stamp
@@ -1126,7 +1192,7 @@ class MainWindow:
                     else:
                         # "exists" and opaque flow outcomes: informational.
                         kind, bg = "status", C["label_playlist_warn_bg"]
-                    self.notification_bar.show_event(
+                    self._emit(
                         kind,
                         playlist=rec.get("playlist_name", ""),
                         artist=", ".join(rec.get("artists") or []),
@@ -1320,7 +1386,7 @@ class MainWindow:
                         pass
                 if found and not error:
                     self._open_activity_window()
-                    self.notification_bar.show_event(
+                    self._emit(
                         "scan",
                         status=trn("notif.scan_found", found, count=found),
                         bg=C["label_playlist_warn_bg"],

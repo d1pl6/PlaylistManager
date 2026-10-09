@@ -402,7 +402,19 @@ cards (`utils.config.compute_notification_rows`; the search bar follows
 via `SearchManager.set_row`), `duplicates` gates the inline prompts
 (checkbox also exposed in the Settings Duplicate Check section).
 
-**Desktop Notification (future)**: `show_event(kind, ...)` is the single
-choke point every notification funnels through, so a later desktop sink
-plugs in here without re-plumbing - it needs a new `desktop` setting key
-and a `show_event` branch, nothing else.
+**Desktop notifications (OS toasts)**: the same choke point feeds a
+second, OS-native sink: `main_window._emit(kind, ...)` renders the bar
+event and additionally calls `services.desktop_notify.notify_event`, which
+maps the event kind to a `[desktop_notify]` category (`added` -> success,
+`exists` -> duplicate, `duplicate` -> extra, `error` -> errors; `status`
+and `scan` are unmapped and stay in-window), skips unmapped or
+switched-off categories, builds the body from the i18n catalog (see
+config.md) and delivers.  A queued near-duplicate additionally toasts
+through `_notify_queued_extra` at poll time, deduped by record id so the
+2 s poll cannot re-fire the same toast.  All four categories default off;
+the Settings "Add" checkbox is a pure select-all.  Backends per OS:
+`notify-send`/`gdbus` (Linux, D-Bus — works on X11 and Wayland),
+`osascript` (macOS, built in, no signing needed), and on Windows the
+running tray icon's balloon when the backend can notify, else a
+PowerShell/WinRT toast.  Delivery is a fire-and-forget subprocess; when
+the machine has no usable backend the module logs once and stays quiet.

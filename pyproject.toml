@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=64"]
+# >=77 for the PEP 639 SPDX license
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,11 +13,10 @@ requires-python = ">=3.10"
 authors = [
     { name = "d1pl" },
 ]
-keywords = ["music", "playlist", "spotify", "youtube-music"]
+keywords = ["music", "playlist", "spotify", "youtube-music", "tidal", "keybindings"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Sound/Audio",
@@ -48,6 +48,21 @@ testpaths = ["tests"]
 [project.urls]
 Homepage = "https://github.com/d1pl6/PlaylistManager"
 Repository = "https://github.com/d1pl6/PlaylistManager"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["app*", "integrations*"]
+
+[tool.setuptools.package-data]
+"*" = [
+    "i18n/*.ini",       # translation catalogs (app/i18n/)
+    "plugin.json",      # the plugin manifest (integrations/<dir>/)
+    "*.png",            # plugin logo
+    "*-extension/*",    # browser extension, e.g. integrations/<dir>/yt-extension/
+    "*-extension/*/*",  # ... and its icons/ subfolder
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "app._version.__version__" }

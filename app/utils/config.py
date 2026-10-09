@@ -144,6 +144,22 @@ DEFAULT_SETTINGS = {
         "position": "below_header",
         "duplicates": "yes",
     },
+    # Desktop notifications: OS-native toasts shown *in addition to* the
+    # in-window notification bar.  Read by services/desktop_notify.py via
+    # desktop_notify_enabled().  All four default OFF - a toast is an
+    # interruption, so the user opts in.
+    #   success   - the song was added to the playlist
+    #   duplicate - the song was already in the playlist
+    #   errors    - an add/flow error occurred
+    #   extra     - a near-duplicate was queued by the extra duplicate check
+    # There is deliberately NO master key: the Settings "Add" checkbox is a
+    # pure select-all that ticks/untickets these four and writes nothing.
+    "desktop_notify": {
+        "success": "no",
+        "duplicate": "no",
+        "errors": "no",
+        "extra": "no",
+    },
     # Plugin download authenticity (see services/plugin_signing.py and
     # docs/plugins.md "Release signing"):
     #   "on"  - refuse catalog installs whose release asset fails minisign
@@ -271,6 +287,25 @@ def notification_bar_enabled() -> bool:
 def notification_duplicates_enabled() -> bool:
     """Whether near-duplicate prompts appear in the bar (default yes)."""
     return get_setting_value("notification_bar", "duplicates", "yes") == "yes"
+
+
+# [desktop_notify] categories - one Settings checkbox each, in the
+# Behavior tab.  The keys are the event categories, not the bar's event
+# kinds (see services/desktop_notify.KIND_TO_CATEGORY); "extra" is a
+# near-duplicate queued by the extra duplicate check.
+DESKTOP_NOTIFY_KINDS = ("success", "duplicate", "errors", "extra")
+
+
+def desktop_notify_enabled(kind: str) -> bool:
+    """Whether a desktop notification should be shown for *kind*.
+
+    *kind* is one of :data:`DESKTOP_NOTIFY_KINDS`; an unknown kind is
+    never notified (fail closed - a typo must not open a toast lane).
+    Every value defaults to ``"no"``.
+    """
+    if kind not in DESKTOP_NOTIFY_KINDS:
+        return False
+    return get_setting_value("desktop_notify", kind, "no") == "yes"
 
 
 def compute_notification_rows(position: str) -> dict:

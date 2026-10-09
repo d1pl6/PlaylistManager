@@ -49,6 +49,18 @@ def _has_default_action() -> bool:
     return False
 
 
+def _has_notification() -> bool:
+    """Whether the active backend can display balloon notifications.
+
+    ``HAS_NOTIFICATION`` is False on backends that cannot notify (the
+    Xorg fallback, and any build without the capability); read at call
+    time so a fallback never raises.
+    """
+    if not _PYSTRAY_OK:
+        return False
+    return bool(getattr(pystray.Icon, "HAS_NOTIFICATION", False))
+
+
 def _is_gtk_backend() -> bool:
     """Whether the active backend is the Gtk family (appindicator/gtk).
 
@@ -123,6 +135,25 @@ class TrayService:
     @property
     def available(self) -> bool:
         return self._icon is not None
+
+    @property
+    def can_notify(self) -> bool:
+        """Whether the live icon can show a balloon notification."""
+        return self._icon is not None and _has_notification()
+
+    def notify(self, message: str, title: str | None = None) -> None:
+        """Show a balloon notification through the tray icon (best effort).
+
+        Used by the Windows path of ``services.desktop_notify``; backends
+        that cannot notify report ``HAS_NOTIFICATION`` False and are never
+        called.  Never raises.
+        """
+        if not self.can_notify:
+            return
+        try:
+            self._icon.notify(message, title)
+        except Exception as e:
+            logger.debug("Tray notification failed: %s", e)
 
     def start(self, on_open, on_quit):
         """Build the menu and start the icon on a background thread.

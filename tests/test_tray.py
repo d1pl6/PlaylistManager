@@ -225,3 +225,54 @@ class TestStartBackendSelection:
         service, icon = self._start(monkeypatch, "pystray._gtk", icon)
         assert service.available is False
         assert service._started is False
+
+
+class TestTrayNotify:
+    """``TrayService.notify`` forwards to the pystray icon only when the
+    backend advertises ``HAS_NOTIFICATION`` (the Xorg fallback does not),
+    and never lets a backend error escape - it is the Windows path of
+    ``services.desktop_notify``."""
+
+    def _service(self, monkeypatch, has_notification, notify_impl=None):
+        class _Icon:
+            __module__ = "pystray._win32"
+            HAS_NOTIFICATION = has_notification
+
+            def __init__(self, *args, **kwargs):
+                self.calls = []
+
+            def notify(self, message, title=None):
+                if notify_impl is not None:
+                    notify_impl(message, title)
+                else:
+                    self.calls.append((message, title))
+
+        monkeypatch.setattr(tray, "_PYSTRAY_OK", True)
+        monkeypatch.setattr(tray, "pystray", SimpleNamespace(Icon=_Icon))
+        monkeypatch.setattr(tray, "is_wayland_session", lambda: False)
+        return tray.TrayService(image=object())
+
+    def test_can_notify_tracks_backend_capability(self, monkeypatch):
+        assert self._service(monkeypatch, True).can_notify is True
+        assert self._service(monkeypatch, False).can_notify is False
+
+    def test_can_notify_false_without_icon(self, monkeypatch):
+        _missing_pystray(monkeypatch)
+        assert tray.TrayService(image=object()).can_notify is False
+
+    def test_notify_forwards_to_icon(self, monkeypatch):
+        service = self._service(monkeypatch, True)
+        service.notify("body", "title")
+        assert service._icon.calls == [("body", "title")]
+
+    def test_notify_no_op_without_capability(self, monkeypatch):
+        service = self._service(monkeypatch, False)
+        service.notify("body", "title")
+        assert service._icon.calls == []
+
+    def test_notify_swallows_backend_errors(self, monkeypatch):
+        def _boom(message, title=None):
+            raise RuntimeError("backend gone")
+
+        service = self._service(monkeypatch, True, notify_impl=_boom)
+        service.notify("body", "title")  # must not raise
