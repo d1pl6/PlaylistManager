@@ -5,7 +5,24 @@ Separated from the keybind controller so the mapping functions can be
 tested and reused independently of the pynput listener loop.
 """
 
-from pynput import keyboard
+from __future__ import annotations
+
+try:
+    from pynput import keyboard
+
+    PYNPUT_AVAILABLE = True
+except ImportError:
+    PYNPUT_AVAILABLE = False
+    keyboard = None
+
+__all__ = [
+    "MODIFIER_NAMES",
+    "PYNPUT_AVAILABLE",
+    "keyboard",
+    "normalize_key",
+    "normalize_tk_key",
+    "parse_keybind",
+]
 
 # -- pynput key → normalised name -------------------------------------------------
 # Names are kept identical to the Tk keysym normalisation (_TK_KEY_MAP):
@@ -15,24 +32,26 @@ from pynput import keyboard
 # matches the other, and the recording-state machine's "escape cancels"
 # branch (keybind_controller._handle_press) silently fails under the
 # global listener.
-_KEY_MAP = {
-    keyboard.Key.ctrl_l: "ctrl",
-    keyboard.Key.ctrl_r: "ctrl",
-    keyboard.Key.alt_l: "alt",
-    keyboard.Key.alt_r: "alt",
-    # Note: AltGr deliberately omitted - it is a distinct modifier on European
-    # layouts and should NOT be conflated with Alt.
-    keyboard.Key.shift: "shift",
-    keyboard.Key.shift_l: "shift",
-    keyboard.Key.shift_r: "shift",
-    keyboard.Key.cmd: "cmd",
-    keyboard.Key.cmd_l: "cmd",
-    keyboard.Key.cmd_r: "cmd",
-    keyboard.Key.esc: "escape",
-    keyboard.Key.enter: "return",
-    keyboard.Key.page_up: "prior",
-    keyboard.Key.page_down: "next",
-}
+_KEY_MAP: dict = {}
+if PYNPUT_AVAILABLE:
+    _KEY_MAP = {
+        keyboard.Key.ctrl_l: "ctrl",
+        keyboard.Key.ctrl_r: "ctrl",
+        keyboard.Key.alt_l: "alt",
+        keyboard.Key.alt_r: "alt",
+        # Note: AltGr deliberately omitted - it is a distinct modifier on European
+        # layouts and should NOT be conflated with Alt.
+        keyboard.Key.shift: "shift",
+        keyboard.Key.shift_l: "shift",
+        keyboard.Key.shift_r: "shift",
+        keyboard.Key.cmd: "cmd",
+        keyboard.Key.cmd_l: "cmd",
+        keyboard.Key.cmd_r: "cmd",
+        keyboard.Key.esc: "escape",
+        keyboard.Key.enter: "return",
+        keyboard.Key.page_up: "prior",
+        keyboard.Key.page_down: "next",
+    }
 
 # -- tkinter keysym → normalised name ---------------------------------------------
 _TK_KEY_MAP: dict[str, str] = {
@@ -96,6 +115,14 @@ MODIFIER_NAMES: set[str] = {"ctrl", "alt", "shift", "cmd"}
 
 
 def normalize_key(key) -> str | None:
+    """Normalise a pynput key object to its canonical name.
+
+    Returns ``None`` for anything unrecognised, and always when pynput is
+    unavailable - without pynput there are no key objects to normalise, and
+    no listener to hand them in from.
+    """
+    if not PYNPUT_AVAILABLE:
+        return None
     if key in _KEY_MAP:
         return _KEY_MAP[key]
     if isinstance(key, keyboard.KeyCode) and key.char:

@@ -624,3 +624,63 @@ class TestGateAcquireTimeout:
         assert playlist_sync.gate_acquire_timeout(integ) == (
             playlist_sync.GATE_ACQUIRE_MIN_TIMEOUT
         )
+
+
+class TestLazyAnnotations:
+    """Annotations must not be evaluated at import time.
+
+    ``threading.Lock`` is a builtin *function* before Python 3.13 and a class
+    from 3.13 on, so ``threading.Lock | None`` - the annotation on
+    ``PlaylistSyncService.reload_database``'s ``gate`` argument - raised
+    ``TypeError: unsupported operand type(s) for |`` at import time on every
+    interpreter this project supports except 3.13+.  CI runs 3.10/3.11/3.12, so
+    this broke all three; it never reproduced on the dev machine, whose 3.14
+    happens to have ``threading.Lock`` as a class.
+
+    ``from __future__ import annotations`` (PEP 563) fixes it by never
+    evaluating *any* annotation: ``__annotations__`` entries become plain
+    strings.  This walks the whole module so the next runtime-evaluated
+    annotation cannot sneak back in unnoticed.
+    """
+
+    @staticmethod
+    def _runtime_annotations(scope, prefix=""):
+        """Yield ``(qualname, annotation)`` for every callable in *scope*."""
+        import inspect
+
+        for name, obj in sorted(vars(scope).items()):
+            if not (inspect.isclass(obj) or inspect.isfunction(obj)):
+                continue
+            if getattr(obj, "__module__", None) != playlist_sync.__name__:
+                continue  # imported in, not defined here
+            qualname = f"{prefix}{name}"
+            if inspect.isclass(obj):
+                yield from TestLazyAnnotations._runtime_annotations(obj, f"{qualname}.")
+                for attr, value in vars(obj).items():
+                    ann = getattr(value, "__annotations__", None)
+                    if ann:
+                        for key, annotation in ann.items():
+                            yield f"{qualname}.{attr}({key})", annotation
+            else:
+                for key, annotation in getattr(obj, "__annotations__", {}).items():
+                    yield f"{qualname}({key})", annotation
+
+    def test_every_annotation_in_the_module_is_an_unevaluated_string(self):
+        evaluated = [
+            (qualname, annotation)
+            for qualname, annotation in self._runtime_annotations(playlist_sync)
+            if not isinstance(annotation, str)
+        ]
+        assert evaluated == [], (
+            "runtime-evaluated annotations in services/playlist_sync.py: "
+            f"{evaluated} - add `from __future__ import annotations`"
+        )
+
+    def test_the_module_actually_has_annotations(self):
+        # Guards the walk above: if a refactor emptied the module's
+        # annotations, the guard would pass vacuously.
+        assert len(list(self._runtime_annotations(playlist_sync))) >= 20
+
+    def test_the_gate_annotation_names_the_lock(self):
+        gate = playlist_sync.PlaylistSyncService.reload_database.__annotations__["gate"]
+        assert gate == "threading.Lock | None"

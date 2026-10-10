@@ -367,7 +367,7 @@ def run_list() -> int:
     playlists = PlaylistStore.load_playlists()
     if not playlists:
         print(tr("cli.no_playlists"), file=sys.stderr)
-        return 2
+        return 0
     for i, playlist in enumerate(playlists, 1):
         print(tr("cli.list_item", i=i, name=playlist.get("name"), platform=playlist.get("platform", "")))
     return 0

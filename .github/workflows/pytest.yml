@@ -51,8 +51,13 @@ jobs:
       - name: Byte-compile app
         run: python -m compileall -q app/
 
+      - name: Install Xvfb
+        # pynput and pystray both resolve an X backend at *import* time and
+        # raise without a usable DISPLAY
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
       - name: Run test suite
-        run: python -m pytest
+        run: xvfb-run -a python -m pytest
 
       - name: Headless CLI smoke test
         # Documented smoke test (AGENTS.md): the CLI shares the GUI's

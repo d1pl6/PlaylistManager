@@ -276,3 +276,76 @@ class TestTrayNotify:
 
         service = self._service(monkeypatch, True, notify_impl=_boom)
         service.notify("body", "title")  # must not raise
+
+class TestImportDegradation:
+    """``import services.tray`` must survive a failing pystray backend.
+
+    pystray resolves its backend at import time: a missing package raises
+    ImportError, but a broken or absent X connection raises Xlib's
+    DisplayNameError, which is **not** an ImportError.  Before the fix that
+    escaped the ``except ImportError`` guard and killed the whole module - on a
+    headless machine, and for every test that imports it - while the module
+    docstring promised ``available`` is False for exactly that case.
+
+    The module is re-executed from source under a throwaway module name, so the
+    real module object every other test monkeypatches is left untouched.
+    """
+
+    @staticmethod
+    def _load_with_pystray_failing(monkeypatch, exc):
+        import builtins
+        import importlib.util
+
+        real_import = builtins.__import__
+
+        def _explode(name, *args, **kwargs):
+            if name == "pystray":
+                raise exc
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _explode)
+        spec = importlib.util.spec_from_file_location(
+            "tray_with_failing_pystray", tray.__file__
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    class _DisplayNameError(Exception):
+        """Stands in for Xlib.error.DisplayNameError - not an ImportError."""
+
+    def test_display_error_degrades_instead_of_propagating(self, monkeypatch):
+        module = self._load_with_pystray_failing(
+            monkeypatch, self._DisplayNameError('Bad display name ""')
+        )
+        assert module._PYSTRAY_OK is False
+        assert module.pystray is None
+        assert module._Menu is None
+        assert module._MenuItem is None
+
+    def test_missing_package_still_degrades(self, monkeypatch):
+        module = self._load_with_pystray_failing(
+            monkeypatch, ImportError("No module named 'pystray'")
+        )
+        assert module._PYSTRAY_OK is False
+        assert module.pystray is None
+
+    def test_service_reports_unavailable_not_available(self, monkeypatch):
+        module = self._load_with_pystray_failing(
+            monkeypatch, self._DisplayNameError('Bad display name ""')
+        )
+        service = module.TrayService()
+        assert service.available is False
+        assert service.can_notify is False
+
+    def test_unavailable_service_is_inert_not_raising(self, monkeypatch):
+        module = self._load_with_pystray_failing(
+            monkeypatch, self._DisplayNameError('Bad display name ""')
+        )
+        service = module.TrayService()
+        # Every entry point a caller reaches for must be a safe no-op on a
+        # headless box - none of them may raise past the degraded import.
+        service.start(on_open=lambda: None, on_quit=lambda: None)
+        service.notify("body", "title")
+        service.stop()
+        assert service.available is False

@@ -622,8 +622,13 @@ def _use_fake_store(monkeypatch, items):
 
 class TestRunCommands:
     def test_run_list_empty(self, monkeypatch, capsys):
+        # Exit 0: an empty registry is a successful answer to a read-only
+        # query, not bad input.  CLI.MD reserves 2 for malformed/out-of-range
+        # input, and CI's smoke step (`python -m app --list`) runs against a
+        # fresh config that has no playlists - a 2 there failed the job.
+        # The hint still goes to stderr.
         _use_fake_store(monkeypatch, [])
-        assert cli.run_list() == 2
+        assert cli.run_list() == 0
         assert capsys.readouterr().err
 
     def test_run_list_prints_numbered_entries(self, monkeypatch, capsys):

@@ -3,6 +3,8 @@
 Pure string/enum functions - no listener needed, no display required.
 """
 
+import pytest
+
 from pynput.keyboard import Key, KeyCode
 
 from utils import key_mapping
@@ -125,3 +127,80 @@ class TestParseKeybind:
 class TestModifierSet:
     def test_exact_set(self):
         assert key_mapping.MODIFIER_NAMES == {"ctrl", "alt", "shift", "cmd"}
+
+class TestPynputUnavailable:
+    """``utils.key_mapping`` must import and degrade without a usable X display.
+
+    pynput resolves its backend at *import* time and raises ImportError when it
+    cannot reach an X server.  That is a real session, not an exotic one:
+    native Wayland without XWayland has no DISPLAY at all.  The global listener
+    cannot run there either way (docs/environment.md - global hotkeys are
+    impossible on native Wayland by design), so this module has to import, keep
+    the Tk-side helpers working and report "no pynput" rather than taking the
+    whole app down at import.
+
+    The module is re-executed from source under a throwaway module name, so the
+    real module object every other test imports is left untouched.
+    """
+
+    @staticmethod
+    def _load_without_pynput(monkeypatch):
+        import builtins
+        import importlib.util
+
+        real_import = builtins.__import__
+
+        def _no_pynput(name, *args, **kwargs):
+            if name == "pynput" or name.startswith("pynput."):
+                raise ImportError("this platform is not supported")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _no_pynput)
+        spec = importlib.util.spec_from_file_location(
+            "key_mapping_without_pynput", key_mapping.__file__
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_module_still_imports(self, monkeypatch):
+        module = self._load_without_pynput(monkeypatch)
+        assert module.PYNPUT_AVAILABLE is False
+        assert module.keyboard is None
+        assert module._KEY_MAP == {}
+
+    def test_normalize_key_is_inert_not_crashing(self, monkeypatch):
+        module = self._load_without_pynput(monkeypatch)
+        # Without pynput there are no key objects to normalise; the one
+        # existing "unknown key" contract already returns None, so this must
+        # too - and must not reach for the None `keyboard` module.
+        assert module.normalize_key("a") is None
+        assert module.normalize_key(None) is None
+        assert module.normalize_key(object()) is None
+
+    def test_tk_side_normalisation_still_works(self, monkeypatch):
+        module = self._load_without_pynput(monkeypatch)
+        # Local/Tk keybinds are the supported path on a headless session -
+        # they must be completely unaffected by pynput being unavailable.
+        assert module.normalize_tk_key("Control_L") == "ctrl"
+        assert module.normalize_tk_key("Escape") == "escape"
+        assert module.normalize_tk_key("comma") == ","
+        assert module.normalize_tk_key("F5") == "f5"
+        assert module.normalize_tk_key("nonsense") is None
+
+    def test_parse_keybind_still_works(self, monkeypatch):
+        module = self._load_without_pynput(monkeypatch)
+        assert module.parse_keybind("ctrl+shift+a") == {"ctrl", "shift", "a"}
+        assert module.parse_keybind("ctrl+plus") == {"ctrl", "+"}
+        assert module.parse_keybind("ctrl+esc") == {"ctrl", "escape"}
+        assert module.MODIFIER_NAMES == {"ctrl", "alt", "shift", "cmd"}
+
+    def test_real_module_still_reports_pynput_when_it_is_there(self):
+        # The guard above is only meaningful if the flag still tracks reality.
+        try:
+            import pynput  # noqa: F401
+        except ImportError:
+            pytest.skip("pynput is not importable in this environment")
+        assert key_mapping.PYNPUT_AVAILABLE is True
+        assert key_mapping.keyboard is not None
+        assert key_mapping._KEY_MAP  # populated

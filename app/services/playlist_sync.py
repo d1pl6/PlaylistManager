@@ -5,6 +5,8 @@ Handles the threading and integration-API calls so the UI only needs to
 provide thin callbacks for status updates.
 """
 
+from __future__ import annotations
+
 import logging
 import threading
 import time

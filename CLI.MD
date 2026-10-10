@@ -117,7 +117,7 @@ playlistmanager -p refresh all                # refresh every playlist
   playlist URL for those.
 - Exit codes: `0` if every requested operation succeeded, `1` on runtime failures (bad
   auth, playlist not found on the platform, import/refresh errors), `2` on bad input
-  (malformed/out-of-range/unknown targets, unrecognized URLs or verbs).
+  (malformed/out-of-range/unknown targets, unrecognized URLs or verbs). `--list` exits `0` even with an empty registry
 - `-p` consumes the rest of the command line: put it after any other options.
 
 ### Song add:

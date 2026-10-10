@@ -144,6 +144,20 @@ python -m pytest -q         # quiet
 python -m pytest tests/test_database.py   # one file
 ```
 
+**The suite needs an X display.** `tests/test_key_mapping.py` imports
+pynput directly and `tests/test_tray.py` imports `services/tray`; both
+libraries resolve their backend at import time and raise without one, so on
+a headless machine those two modules fail at *collection*. CI runs the suite
+under `xvfb-run -a`; run it the same way locally:
+
+```bash
+xvfb-run -a python -m pytest   # or: export DISPLAY=:99 with an Xvfb running
+```
+
+The app itself is headless-safe (it guards both imports and degrades — see
+`docs/environment.md`); the tests deliberately are not, so the pynput-backed
+coverage can't silently vanish from CI.
+
 The automatic sanity checks are:
 
 ```bash

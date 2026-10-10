@@ -24,7 +24,8 @@ try:
     from pystray import Menu as _Menu
     from pystray import MenuItem as _MenuItem
     _PYSTRAY_OK = True
-except ImportError:
+except Exception:
+    logger.debug("pystray unavailable - tray disabled", exc_info=True)
     _PYSTRAY_OK = False
     pystray = None
     _Menu = None

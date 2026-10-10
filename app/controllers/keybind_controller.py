@@ -15,9 +15,10 @@ import logging
 import threading
 from typing import Callable, Optional
 
-from pynput import keyboard
 from utils.key_mapping import (
     MODIFIER_NAMES,
+    PYNPUT_AVAILABLE,
+    keyboard,
     normalize_key,
     normalize_tk_key,
 )
@@ -69,7 +70,9 @@ class KeybindController:
         # Listener / key state
         self._pressed_keys: Set[str] = set()
         self._pressed_keys_lock = threading.Lock()
-        self._listener: Optional[keyboard.Listener] = None
+        # Quoted: this annotation is evaluated at runtime (PEP 526 complex
+        # target), and `keyboard` is None when pynput failed to import.
+        self._listener: Optional["keyboard.Listener"] = None
         self._listener_lock = threading.Lock()
         self._root = None
 
@@ -163,12 +166,26 @@ class KeybindController:
             logger.info("Switched to local key listener")
 
     def _start_global_listener(self):
+        if not PYNPUT_AVAILABLE:
+            # pynput could not reach an X server at import time - typically a
+            # native Wayland session without XWayland, where DISPLAY is unset.
+            # Checked before the Wayland branch because that is the more
+            # specific cause and gives the more actionable message.
+            logger.warning(
+                "pynput is unavailable (no usable X display) - not starting "
+                "the global keybinds listener. Bind compositor shortcuts to "
+                "`playlistmanager -a <playlist number> or <'URL' or 'name'>` "
+                "for reliable global keybinds (see CLI.MD)."
+            )
+            self._global_mode = False
+            self._bind_local_keys()
+            return
         if is_wayland_session():
             # Never start the pynput listener on a native Wayland session
             logger.warning(
                 "Wayland session detected - not starting the global "
                 "keybinds listener. Bind compositor shortcuts to "
-                "`playlistmanager -a <playlist number> or <'URL' or 'name'>`"
+                "`playlistmanager -a <playlist number> or <'URL' or 'name'>` "
                 "for reliable global keybinds (see CLI.MD)."
                 )
             self._global_mode = False

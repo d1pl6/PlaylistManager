@@ -44,7 +44,7 @@ Optional: `ytmusicapi` (for YouTube Music integration), `pystray` (for the syste
 There is no linter or type checker configured, but `tools/invariants.py` machine-checks the rules this repo states in prose. Tier A: `C["..."]` keys against `THEME_MAP`, `tr()` keys against `DEFAULT_STRINGS`, settings sections against `DEFAULT_SETTINGS`, the `plugin.json` schema (and the class names it references), `receiver_port` against the extension's `host_permissions`, and the plugin classes against the `BaseIntegration`/`ScrobbleCapable`/`BaseFlowController` signatures. Tier B: no `app/` module imports from a layer above it (static or lazy), `docs/modules.md` documents every app module and every module it imports, and a `Thread(target=...)` function never calls `.after()` outside a `try`/`except`. Tier C: no import binds a name nothing reads (a deliberate re-export takes `# noqa`). It imports no app module (the catalogs are read with `ast.literal_eval`), so it is headless, dependency-free and safe to run anywhere. Run it before a PR, next to the suite (service layer, headless — see `tests/` and CONTRIBUTING.md "Testing"):
 
 ```bash
-python -m pytest                 # full suite (fast, ~4 s)
+python -m pytest                 # full suite (fast, ~4 s) — NEEDS AN X DISPLAY, run as `xvfb-run -a python -m pytest`
 python -m pytest -q              # quiet
 python tools/invariants.py       # invariant checker (exit 1 on findings)
 python tools/invariants.py --list-rules   # what it enforces
@@ -121,6 +121,7 @@ Platform plugins are separate repos under `integrations/`, declared by `plugin.j
 ## Wayland and the system tray
 
 - **Global hotkeys are impossible on native Wayland by design** — the supported path is compositor shortcuts bound to `playlistmanager -a N` (see CLI.MD "Global install (for compositor shortcuts)"). pynput's global listener is X11-only.
+- **pynput and pystray are optional at *import* time** — both resolve an X backend on import and raise without a usable `DISPLAY` (a headless box, or native Wayland with no XWayland). `utils/key_mapping.py` owns the single guarded pynput import and re-exports `PYNPUT_AVAILABLE`/`keyboard`; `keybind_controller` takes both from there and never imports pynput itself. `services/tray.py` catches `Exception` around `import pystray`, not just `ImportError` (the `_xorg` backend raises Xlib's `DisplayNameError`) — narrowing it back breaks the `available`-is-False promise in its own docstring. Details: docs/environment.md.
 - Tray: `pystray` is optional and `TrayService.available` degrades gracefully. Gtk-family backends must run via `Icon.run()` in a daemon thread; `win32`/`xorg`/`darwin` use `run_detached()`. Tray callbacks fire on the backend thread — marshal them to the tkinter main thread via `root.after(0, ...)`.
 - `start_in_tray` withdraws the window **before any setup work, so it never maps even once** (no flash); fullscreen wins over start-in-tray when both are requested.
 - Details, the Wayland tray-backend guard, `is_wayland_session()`, and restore-from-tray limits: docs/environment.md.
